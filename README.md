@@ -2,6 +2,14 @@
 
 เว็บกระดาน D&D สำหรับกลุ่มเพื่อน ใช้กติกาพื้นฐานฉบับปรับปรุงปี 2024 และแนวทางจาก [SRD 5.2.1](https://www.dndbeyond.com/srd)
 
+ร่วมพัฒนาด้วยการ fork แล้วส่ง Pull Request ตาม [คู่มือร่วมพัฒนา](CONTRIBUTING.md)
+
+## สัญญาอนุญาตและที่มา
+
+โค้ดของ Beholder ใช้ [MIT License](LICENSE) เนื้อหาที่มาจาก SRD อยู่ภายใต้ CC BY 4.0 ตามข้อความเครดิตด้านล่าง
+
+This work includes material from the System Reference Document 5.2.1 (“SRD 5.2.1”) by Wizards of the Coast LLC, available at [D&D Beyond](https://www.dndbeyond.com/srd). The SRD 5.2.1 is licensed under the Creative Commons Attribution 4.0 International License, available at [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode).
+
 ## เปิดโต๊ะ
 
 เปิด Docker Desktop แล้วรันคำสั่งจากโฟลเดอร์นี้
