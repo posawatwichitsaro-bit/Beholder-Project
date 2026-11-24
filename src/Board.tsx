@@ -3,6 +3,7 @@ import type { PointerEvent } from 'react'
 import { damageKinds, sizes } from '../shared/model.ts'
 import { areaContains, areaOutline, validArea } from '../shared/area.ts'
 import type { Area, AreaKind, AreaOutline } from '../shared/area.ts'
+import { tokenColor, tokenInitials } from './tokenAppearance.ts'
 import type { Scene, SceneObject, Snapshot, Token } from '../shared/model.ts'
 
 type Point = { x: number; y: number }
@@ -10,10 +11,11 @@ type Action = { label: string; run: () => void; disabled?: boolean }
 type Props = {
   room: Snapshot; scene: Scene; selected: string; targetId?: string; select: (id: string) => void
   move: (tokenIds: string[], delta: Point) => void; place?: (position: Point) => void
+  placementLabel?: string
+  mainTokenId?: string
   actions: (token: Token | undefined, position: Point, object?: SceneObject) => Action[]
   focus?: { actorId: string; sequence: number }; areaKind?: AreaKind; preview?: Area; onArea?: (area: Area) => void
 }
-const palette = ['#d2a557', '#83b6aa', '#bba3d4', '#d68878']
 const objectColors = { container: '#775c31', prop: '#4b6661', structure: '#636978', item: '#74658e' }
 type Gesture = { from: Point; camera: Point; mode: 'pan' | 'measure' | 'select' | 'move' | 'area'; tokens: Token[]; delta?: Point }
 const bounds = (from: Point, to: Point) => ({
@@ -34,7 +36,7 @@ function hpBar(ctx: CanvasRenderingContext2D, x: number, y: number, width: numbe
   }
 }
 
-export function Board({ room, scene, selected, targetId, select, move, place, actions, focus, areaKind, preview, onArea }: Props) {
+export function Board({ room, scene, selected, targetId, select, move, place, placementLabel, mainTokenId, actions, focus, areaKind, preview, onArea }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ x: 640, y: 480 })
   const [camera, setCamera] = useState({ x: 36, y: 36 })
@@ -258,14 +260,21 @@ export function Board({ room, scene, selected, targetId, select, move, place, ac
         ctx.restore()
       }
       const affected = outline && areaContains(outline, { x: token.x + span(token) / 2, y: token.y + span(token) / 2 })
-      ctx.strokeStyle = affected || targetId === token.actorId ? '#ff9e88' : group.includes(token.id) ? '#91d3f2' : current === token.actorId ? '#ffdda1' : palette[index % palette.length]
+      ctx.strokeStyle = affected || targetId === token.actorId ? '#ff9e88' : group.includes(token.id) ? '#91d3f2' : current === token.actorId ? '#ffdda1' : tokenColor(index)
       ctx.lineWidth = affected || targetId === token.actorId || group.includes(token.id) || selected === token.actorId ? 4 : 2
       ctx.stroke()
+      if (mainTokenId === token.id) {
+        ctx.beginPath()
+        ctx.arc(x, y, radius + 3, 0, Math.PI * 2)
+        ctx.strokeStyle = '#ffda8f'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+      }
       ctx.fillStyle = '#f4ead3'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.font = '600 ' + Math.max(7, Math.min(width / 3, 25)) + 'px system-ui'
-      if (!portrait || !portrait.complete || !portrait.naturalWidth) ctx.fillText(actor?.name.slice(0, 2).toUpperCase() ?? '?', x, y)
+      if (!portrait || !portrait.complete || !portrait.naturalWidth) ctx.fillText(actor ? tokenInitials(actor.name) : '?', x, y)
       if (actor && width >= 16) hpBar(ctx, x - radius, y + radius - 4, 2 * radius, actor.hp, actor.maxHp, actor.tempHp)
     }
     if (ruler) {
@@ -294,7 +303,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, ac
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
       ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
     }
-  }, [size, map, camera, zoom, grid, scene, room.publicActors, selected, targetId, draft, ruler, group, selection, imageRevision, outline, effectTime])
+  }, [size, map, camera, zoom, grid, scene, room.publicActors, selected, targetId, mainTokenId, draft, ruler, group, selection, imageRevision, outline, effectTime])
 
   function pointer(event: PointerEvent<HTMLCanvasElement>) {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -429,7 +438,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, ac
       }}>{action.label}</button>)}
       <button onClick={closeMenu}>ปิดเมนูคลิกขวา</button>
     </div>}
-    {place && <div className="placing">คลิกช่องเพื่อวาง Token</div>}
+    {place && <div className="placing">{placementLabel ?? 'คลิกช่องเพื่อวาง Token'}</div>}
     {group.length > 1 && <div className="selection-count" role="status">เลือก {group.length} Token</div>}
     <div className="scale">1 ช่อง · 5 ฟุต</div>
   </section>

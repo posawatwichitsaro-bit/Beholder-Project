@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { damageKinds, sizes } from '../shared/model.ts'
 import type { DamageKind, Scene, Snapshot } from '../shared/model.ts'
 import { areaContains, areaLabels, areaOutline } from '../shared/area.ts'
 import type { Area, AreaKind } from '../shared/area.ts'
+import { tokenColor, tokenInitials } from './tokenAppearance.ts'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
 
@@ -17,17 +19,21 @@ export function TurnRail({ scene, room, focus }: { scene: Scene; room: Snapshot;
   const current = useRef<HTMLButtonElement>(null)
   const fight = scene.combat!
   useEffect(() => { current.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }, [fight.turn, fight.round])
-  return <aside className="turn-rail" aria-label="ลำดับ Initiative">
-    <h2>รอบ {fight.round}</h2>
+  return <aside className="turn-rail" aria-labelledby="turn-initiative-title">
+    <header className="rail-header"><h2 id="turn-initiative-title">Turn Initiative</h2><p>รอบ {fight.round}</p></header>
     <ol>{fight.order.map(({ actorId, initiative }, index) => {
       const actor = room.publicActors.find(item => item.id === actorId)
       const active = index === fight.turn
       if (!actor) return null
+      const tokenIndex = scene.tokens.findIndex(token => token.actorId === actorId)
       return <li key={actorId}><button ref={active ? current : undefined} aria-current={active ? 'step' : undefined}
-        className={actor.hp === 0 ? 'turn-down' : undefined} onClick={() => focus(actorId)}
-        aria-label={'ไปที่ Token ' + actor.name} title={actor.name + ' · Initiative ' + initiative}>
-        <span className="rail-portrait">{actor.portrait ? <img src={actor.portrait} alt="" /> : actor.name.slice(0, 2)}</span>
-        <span className="rail-name">{actor.name}</span><b>{initiative}</b>
+        className={actor.hp === 0 ? 'turn-down' : undefined} disabled={tokenIndex < 0} onClick={() => focus(actorId)}
+        style={{ '--token-color': tokenColor(tokenIndex) } as CSSProperties}
+        aria-label={tokenIndex < 0 ? actor.name + ' · ไม่มี Token ในฉาก' : 'ไปที่ Token ' + actor.name}
+        title={actor.name + ' · Initiative ' + initiative}>
+        <span className="rail-portrait" aria-hidden="true">{actor.portrait ? <img src={actor.portrait} alt="" /> : tokenInitials(actor.name)}</span>
+        <span className="rail-caption"><span className="rail-name">{actor.name}</span>{active && <small>กำลังเล่น</small>}</span>
+        <b className="rail-score">{initiative}</b>
       </button></li>
     })}</ol>
   </aside>

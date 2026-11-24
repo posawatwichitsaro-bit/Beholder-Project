@@ -23,6 +23,8 @@ button:disabled { cursor: default; opacity: .45 }
 :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px }
 .primary { background: var(--gold); color: #231c13; border-color: var(--gold); font-weight: 700 }
 .primary:hover { background: #f0ca91; border-color: #f0ca91 }
+.danger { color: #ffc9be; border-color: #805046 }
+.danger:hover { background: #563930; border-color: #b07465 }
 input, select, textarea { min-width: 0; width: 100% }
 input[type=checkbox] { width: auto; accent-color: var(--gold) }
 label { display: grid; gap: 5px; font-size: .88rem }
@@ -30,16 +32,25 @@ h1, h2, p { margin: 0 }
 h2 { font-size: 1rem }
 .muted, small { color: var(--muted) }
 .entry {
-  max-width: 460px;
+  max-width: 820px;
   margin: 9vh auto 0;
   padding: 24px;
 }
 .entry-mark { color: var(--gold); font-size: 2.7rem }
 .entry h1 { font-family: Georgia, serif; font-weight: 400; font-size: clamp(3rem, 11vw, 5rem); margin-bottom: 18px }
 .entry form { display: grid; gap: 17px; background: var(--panel); border: 1px solid var(--line); padding: 26px; border-radius: 10px }
+.entry-panels { display: grid; align-items: start; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)) }
+.account-form { display: grid; gap: 12px }
+.account-email { overflow-wrap: anywhere }
+.account-settings { padding-top: 16px }
+@media (max-width: 620px) {
+  .entry { margin-top: 2vh; padding: 16px }
+  .entry-panels { grid-template-columns: minmax(0, 1fr) }
+}
 .table { --header-height: 58px; position: relative; height: 100dvh; overflow: hidden; isolation: isolate }
-.table-header { position: absolute; z-index: 3; inset: 0 0 auto; height: var(--header-height); display: flex; align-items: center; gap: 12px; padding: 0 14px; background: #171d1cf5; border-bottom: 1px solid #3b4741 }
-.hamburger { font-size: 1.15rem; width: 39px; height: 38px; padding: 0; flex: none }
+.table-header { position: absolute; z-index: 3; inset: 0 0 auto; height: var(--header-height); display: flex; align-items: center; gap: 12px; padding: 0 14px; background: linear-gradient(110deg, #30231e, #1d1a1a 55%); border-bottom: 1px solid #6c4e35 }
+.hamburger { font-size: 1.15rem; width: 39px; height: 38px; padding: 0; flex: none; color: #f1cf95; background: #382824; border-color: #8e6746 }
+.hamburger:hover, .hamburger[aria-expanded=true] { background: #503329; border-color: #bb8b57 }
 .table-location { flex: 1; min-width: 0 }
 .table-location h1, .table-location > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .table-location h1 { font-size: 1.08rem; line-height: 1.3 }
@@ -51,16 +62,29 @@ h2 { font-size: 1rem }
 .panel { background: var(--panel); min-height: 0 }
 .drawer-backdrop { position: absolute; z-index: 2; inset: var(--header-height) 0 0; border: 0; border-radius: 0; background: #11161565 }
 .drawer-backdrop:hover { background: #11161565 }
-.table-drawer { position: absolute; z-index: 3; inset: var(--header-height) auto 0 0; width: min(390px, 100%); display: flex; flex-direction: column; border-right: 1px solid #536057 }
+.table-drawer { position: absolute; z-index: 3; inset: var(--header-height) auto 0 0; width: min(390px, 100%); display: flex; flex-direction: column; border-right: 1px solid #8e6746; box-shadow: 14px 0 36px #0e0a0990; background: #201a19; --line: #534039; --muted: #c2afa1 }
 .table-drawer[hidden], .drawer-content[hidden] { display: none }
-.drawer-nav { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px 12px; border-bottom: 1px solid var(--line) }
-.drawer-nav button { font-size: .82rem }
-.drawer-nav button[aria-pressed=true] { color: var(--gold); border-color: #987b52 }
-.drawer-content { padding: 8px 14px 20px; overflow: auto; overscroll-behavior: contain }
+.drawer-nav { display: grid; gap: 7px; padding: 10px 12px 12px; border-bottom: 1px solid #735141; background: radial-gradient(ellipse at 10% 0%, #432b26, #251c1c 78%); max-height: 50%; overflow: auto }
+.drawer-group { display: grid; gap: 3px }
+.drawer-group-title { color: #e0bd92; font-size: .73rem }
+.drawer-group-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px }
+.drawer-nav button { display: flex; align-items: center; justify-content: flex-start; min-height: 36px; gap: 6px; padding: 4px 7px; font-size: .79rem; text-align: start; background: #352623 }
+.drawer-nav button span { color: #ddad76; width: 14px; flex: none; text-align: center }
+.drawer-nav button:hover, .drawer-nav button[aria-pressed=true] { color: #ffe1ae; background: #573629; border-color: #a87a51 }
+.drawer-content { flex: 1; padding: 8px 14px 20px; overflow: auto; overscroll-behavior: contain }
+.table-drawer .section-head h2 { color: #f4d7a6 }
+.table-drawer .scene-item, .table-drawer .actor-item button { background: #302624 }
+.table-drawer .scene-item.selected, .table-drawer .actor-item button.selected { background: #55372b; border-color: #ab7950 }
+.actor-token-role { display: block; margin-top: 2px; font-size: .72rem; color: #deb993 }
 .section-head { display: flex; justify-content: space-between; align-items: center; min-height: 36px; gap: 10px; margin: 8px 0 }
 .section-head button { font-size: .78rem }
 .scene-item, .actor-item { display: flex; justify-content: space-between; align-items: center; gap: 5px; width: 100%; margin-bottom: 5px }
 .scene-item span, .actor-item button:first-child { overflow: hidden; text-overflow: ellipsis; min-width: 0 }
+.scene-list { list-style: none; padding: 0; margin: 8px 0 }
+.scene-row { display: flex; align-items: stretch; gap: 5px; margin-bottom: 5px }
+.scene-row .scene-item { flex: 1; min-width: 0; margin: 0 }
+.scene-row .scene-item span { white-space: nowrap }
+.scene-row > button:not(.scene-item) { flex: none; min-width: 32px; padding-inline: 5px }
 .actor-item button:first-child { flex: 1; text-align: left }
 .scene-item small { white-space: nowrap }
 .invite { margin: 14px 0; font-size: .85rem }
@@ -107,15 +131,23 @@ h2 { font-size: 1rem }
 .with-turn-rail .workspace { left: var(--turn-gutter) }
 .with-turn-rail .drawer-backdrop, .with-turn-rail .table-drawer { left: var(--turn-gutter) }
 .with-turn-rail .table-drawer { width: min(390px, calc(100% - var(--turn-gutter))) }
-.turn-rail { position: absolute; z-index: 1; top: var(--header-height); left: 0; width: var(--turn-gutter); height: calc(100% - var(--header-height)); display: flex; flex-direction: column; gap: 5px; padding: 7px; background: #18211f; border-right: 1px solid #556459 }
-.turn-rail h2 { margin: 1px 4px; color: var(--gold); font-size: .83rem }
-.turn-rail ol { overflow: auto; list-style: none; margin: 0; padding: 1px 2px 3px; display: grid; gap: 4px }
-.turn-rail button { width: 100%; padding: 3px 4px; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 4px; align-items: center; font-size: .73rem; text-align: start }
-.turn-rail button[aria-current=step] { border-color: #ffd097; color: #ffe0ac; background: #453428; animation: active-turn-glow 1.7s ease-in-out infinite alternate }
+.turn-rail { position: absolute; z-index: 1; top: var(--header-height); left: 0; width: var(--turn-gutter); height: calc(100% - var(--header-height)); display: flex; flex-direction: column; gap: 9px; padding: 9px 6px; background: linear-gradient(155deg, #28352f 0, #192421 110px, #141d1b 280px); border-right: 1px solid #657366 }
+.rail-header { position: relative; padding: 5px 4px 8px; border-bottom: 1px solid #8c774f; text-align: center }
+.rail-header::after { content: ''; position: absolute; left: calc(50% - 3px); bottom: -4px; width: 6px; height: 6px; background: #ddb47a; transform: rotate(45deg) }
+.turn-rail h2 { color: #f8ddb1; font: 600 clamp(.85rem, 1.4vw, 1.15rem)/1.15 Georgia, serif }
+.rail-header p { margin-top: 5px; color: #c7c7b4; font-size: .69rem }
+.turn-rail ol { overflow: auto; scrollbar-width: thin; list-style: none; margin: 0; padding: 4px 3px 8px; display: grid; gap: 6px }
+.turn-rail button { position: relative; width: 100%; min-height: 48px; padding: 4px; display: grid; grid-template-columns: clamp(27px, 3.1vw, 44px) minmax(0, 1fr) auto; gap: 5px; align-items: center; font-size: .74rem; text-align: start; border: 1px solid #536458; border-radius: 20px 5px 5px 20px; background: linear-gradient(110deg, #344338, #202b25 72%); }
+.turn-rail button:hover:not(:disabled):not([aria-current=step]) { border-color: #a6b19b; background: #344238 }
+.turn-rail button[aria-current=step] { border-color: #dfbb7d; color: #ffe8bd; background: linear-gradient(95deg, #59452d, #33281d 78%); animation: active-turn-glow 1.7s ease-in-out infinite alternate }
 .turn-rail .turn-down { opacity: .65 }
-.rail-portrait { width: 28px; height: 28px; display: grid; place-items: center; overflow: hidden; border-radius: 4px; background: #3a453e; color: #f5e6cf }
-.rail-portrait img { width: 100%; height: 100%; object-fit: cover }
+.rail-portrait { aspect-ratio: 1; width: 100%; display: grid; place-items: center; overflow: hidden; border-radius: 50%; border: 2px solid var(--token-color); background: radial-gradient(circle at 40% 25%, #344941, #182725 70%); color: #fff3d9; font: 700 .92rem Georgia, serif }
+.turn-rail button[aria-current=step] .rail-portrait { border-color: #ffd995 }
+.rail-portrait img { display: block; width: 100%; height: 100%; object-fit: cover }
+.rail-caption { min-width: 0; display: grid; gap: 2px }
 .rail-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.rail-caption small { color: #f2c98b; font-size: .62rem }
+.rail-score { align-self: start; margin-top: 2px; color: #e7cf9f; font-size: .69rem; font-variant-numeric: tabular-nums }
 .area-shapes { display: flex; flex-wrap: wrap; gap: 4px }
 .area-shapes button, .clear-area { font-size: .81rem }
 .area-target { display: grid; grid-template-columns: minmax(0, 1fr) 104px; gap: 6px; align-items: center }
@@ -137,8 +169,9 @@ h2 { font-size: 1rem }
   .with-turn-rail { --turn-gutter: 92px }
   .turn-rail { padding: 4px }
   .with-combat .turn-rail { height: calc(47% - var(--header-height)) }
-  .turn-rail button { grid-template-columns: 22px minmax(0, 1fr) auto; font-size: .64rem }
-  .rail-portrait { width: 22px; height: 22px }
+  .turn-rail button { grid-template-columns: 25px minmax(0, 1fr) auto; gap: 2px; min-height: 37px; font-size: .64rem }
+  .rail-portrait { font-size: .71rem }
+  .rail-score, .rail-caption small { font-size: .57rem }
 }
 .scene-settings { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-block: 10px }
 .scene-settings select { width: auto; max-width: 100% }
@@ -157,6 +190,9 @@ h2 { font-size: 1rem }
 .cancel-placement { position: absolute; left: 12px; bottom: 44px }
 .board-status { position: absolute; left: 14px; bottom: 12px; right: 120px; display: flex; flex-wrap: wrap; gap: 5px; pointer-events: none }
 .board-status button { pointer-events: auto; background: #19211eee; font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(340px, 100%) }
+.board-status .main-token-control { display: inline-flex; align-items: center; gap: 7px; color: #f4d4a1; background: #30241eee; border-color: #956d44 }
+.main-token-control kbd { padding: 1px 5px; border: 1px solid #926e4d; border-radius: 3px; font: inherit }
+.main-token-control span { overflow: hidden; text-overflow: ellipsis }
 .context-popover { position: absolute; z-index: 2; display: grid; gap: 4px; min-width: 170px; max-width: calc(100% - 16px); max-height: calc(100% - 16px); overflow: auto; padding: 7px; border: 1px solid #66766a; border-radius: 8px; background: #1d2521 }
 .selection-count { position: absolute; top: 12px; left: 12px; background: #18272d; color: #a9e0fa; border: 1px solid #537886; border-radius: 5px; padding: 5px 8px; pointer-events: none }
 .dice-tray { position: absolute; z-index: 1; right: 12px; bottom: 12px; width: min(278px, calc(100% - 24px)); padding: 7px 9px; color: #f5ead6; background: #161e1dec; border: 1px solid #506158; border-radius: 8px }
@@ -221,6 +257,9 @@ h2 { font-size: 1rem }
 .scrim { position: fixed; z-index: 5; inset: 0; background: #0d1011c7; display: grid; place-items: center; padding: 10px }
 .dialog { width: min(690px, 100%); max-height: 92vh; overflow: auto; padding: 20px; background: var(--panel); border: 1px solid #68726a; border-radius: 9px; display: grid; gap: 15px }
 .dialog.compact { max-width: 390px }
+.token-role-dialog { border-color: #9e744b; background: #2b201e }
+.token-role-option { display: grid; gap: 4px; padding: 11px 12px; text-align: start; color: #ffe0ac; background: #382a25; border-color: #6f5142 }
+.token-role-option:hover { background: #52382d; border-color: #b28659 }
 .dialog header, .dialog footer { display: flex; gap: 8px; align-items: center; justify-content: space-between }
 .dialog footer { justify-content: end }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 9px }
@@ -231,6 +270,10 @@ h2 { font-size: 1rem }
 .library-draft p, .library-item small, .save-to-library { margin-bottom: 7px }
 .library-item h3 { margin: 0 0 3px; font-size: 1rem }
 .library-item small { display: block }
+.library-shortcut { margin-bottom: 10px }
+.library-object-name { display: flex; align-items: center; gap: 8px }
+.library-object-name h3 { overflow-wrap: anywhere }
+.library-object-name img { flex: none; width: 42px; height: 42px; object-fit: contain; margin-bottom: 6px }
 @media (max-width: 580px) {
   .table-header { gap: 7px; padding: 0 8px }
   .identity { gap: 5px }
@@ -241,4 +284,52 @@ h2 { font-size: 1rem }
   .dice-tray ol { max-height: 92px }
   .selection-count { top: 52px }
   .board-status { right: min(232px, 63%) }
+}
+
+/* Campaign journal surfaces shared by the lobby, table and character tools. */
+:root { --panel: #222124; --line: #4c4544; --gold: #edbe81; --muted: #bcb1a5; background: #161619 }
+.entry { max-width: 980px; margin: clamp(12px,5vh,58px) auto; }
+.entry-hero { display: flex; flex-direction: column; justify-content: end; min-height: clamp(180px,28vw,270px); padding: clamp(18px,4vw,42px); border: 1px solid #78604a; border-radius: 14px; background: linear-gradient(0deg,#121117b8,transparent 75%),url('/art/watchtower.jpg') center 56%/cover; }
+.entry .entry-hero h1 { font: 500 clamp(3.3rem,8vw,6.2rem)/1 Georgia,serif; margin: 0 0 6px; letter-spacing: -.045em; color: #ffebc9 }
+.entry-hero span { color: #ebd3ae; font-size: .86rem; letter-spacing: .07em }
+.entry-panels { margin-top: 18px }
+.entry form, .dialog { background: linear-gradient(145deg,#302a29,#201f23 75%); border-color: #665447; box-shadow: 0 6px 28px #08070a42 }
+.entry h2, .dialog h2, .section-head h2 { color: #f5dabb }
+.table-header { background: linear-gradient(105deg,#392925,#202025 55%,#242126); box-shadow: 0 2px 10px #0005 }
+.table-drawer { background: #211f22; border-color: #726052 }
+.drawer-nav { background: linear-gradient(130deg,#392b2b,#252329); gap: 8px }
+.drawer-group-title { font-weight: 650; letter-spacing: .035em }
+.drawer-content { padding: 14px }
+.dialog, .library-item, .combat-block, .dice-tray, .sheet-summary, .account-form { accent-color: #eaba78 }
+.dialog input, .dialog select, .dialog textarea, .entry input, .entry select { background: #1b191b; border-color: #584b45 }
+.combat-panel, .dice-tray { background: #242126; border-color: #73604c }
+.combat-panel > header, .combat-panel > footer, .dice-tray header { background: #312829 }
+.library-item, .library-draft { background: #2e2829; border-color: #574840 }
+.manual { display: grid; gap: 13px }
+.manual > header { padding: 14px 16px; border-left: 3px solid #d5a36d; background: linear-gradient(105deg,#42302a,#282427) }
+.manual h2 { font: 500 1.75rem Georgia,serif; margin: 4px 0; color: #fae0bf }
+.manual-filters { display: grid; grid-template-columns: 1fr 80px; gap: 8px }
+.manual-list { display: grid; gap: 4px }
+.manual-list button { display: flex; justify-content: space-between; align-items: center; gap: 8px; text-align: left; background: #2d282a; padding: 8px 10px }
+.manual-list button:hover { background: #43342e }
+.manual-list small { display: block }
+.manual-list button > span:last-child { flex: none; color: #ddb989; font-size: .78rem }
+.manual-stats, .manual-abilities { display: grid; grid-template-columns: repeat(3,1fr); gap: 5px }
+.manual-stats > div, .manual-abilities > span { padding: 7px; background: #302a2a; text-align: center; border: 1px solid #54463d; border-radius: 4px }
+.manual-stats b { display:block; color:#ffdaa7; font-size:1.15rem }
+.stat-block { white-space: pre-line; line-height: 1.65; overflow-wrap:anywhere }
+.manual a { color: #e9c693 }
+.manual footer { padding-top: 12px; border-top: 1px solid var(--line); font-size: .78rem }
+.empty { color: #fff0d2; background: linear-gradient(#17161bc9,#121217c7),url('/art/watchtower.jpg') center/cover; }
+.empty p { font-size: clamp(1.05rem,2vw,1.45rem); text-shadow: 0 2px 4px #000 }
+.board-tools { padding: 3px; background: #231e20ef; border: 1px solid #775d48; border-radius: 9px; box-shadow: 0 4px 16px #0005 }
+.board-tools button, .scale, .placing, .context-popover, .board-status button { background: #292527f5; border-color: #685445 }
+.context-popover button { background: transparent; color: #f1e5d8; text-align: start }
+.context-popover button:hover { background: #48362d }
+.dialog details, .sheet-summary > details { border-block-start: 1px solid var(--line); padding-block: 8px }
+.inventory-form, .loot-result, .lock-state, .pdf-import, .calculation-block, .combat-result, .combat-target { background: #312b2c; border-color: #5f4b41 }
+.turn-actions, .combat-block { padding-block: 5px }
+@media (max-width: 650px) {
+  .entry-hero { min-height: 150px; background-position: 68% center }
+  .board-tools { gap: 2px; padding: 2px }
 }

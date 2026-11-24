@@ -1,59 +1,78 @@
 import { useState } from 'react'
 import { objectLabels } from '../shared/model.ts'
-import type { Actor, ObjectKind, SceneObject } from '../shared/model.ts'
+import type { Actor, ObjectDefinition, ObjectKind, SceneObject } from '../shared/model.ts'
 import { PictureInput } from './PictureInput.tsx'
 import { ItemName } from './Inventory.tsx'
 
 type Point = { x: number; y: number }
 type Send = (command: Record<string, unknown>) => Promise<boolean>
 
-export function ImportObject({ point, send, close }: { point: Point; send: Send; close: () => void }) {
-  const [kind, setKind] = useState<ObjectKind>('prop')
-  const [image, setImage] = useState<string>()
+export function ObjectEditor({ initial, point, save, close, error }: {
+  initial?: ObjectDefinition; point?: Point; save: (value: ObjectDefinition, position?: Point) => Promise<boolean>; close: () => void; error?: string
+}) {
+  const [kind, setKind] = useState<ObjectKind>(initial?.kind ?? 'prop')
+  const [image, setImage] = useState(initial?.image)
   const [loading, setLoading] = useState(false)
-  const [locked, setLocked] = useState(false)
-  return <div className="scrim"><form className="dialog compact" role="dialog" aria-label="นำเข้า Object" onSubmit={async event => {
+  const [saving, setSaving] = useState(false)
+  const container = initial?.kind === 'container' ? initial : undefined
+  const structure = initial?.kind === 'structure' ? initial : undefined
+  const [locked, setLocked] = useState(container?.lockDc !== undefined)
+  const title = point ? 'นำเข้า Object' : initial ? 'รายละเอียด Object ในคลัง' : 'เพิ่ม Object เข้าคลัง'
+  return <div className="scrim"><form className="dialog compact" role="dialog" aria-label={title} onSubmit={async event => {
     event.preventDefault()
-    if (loading) return
+    if (loading || saving) return
     const form = new FormData(event.currentTarget)
     const value = (name: string) => Number(form.get(name))
-    if (await send({
-      type: 'importObject', kind, name: form.get('name'), description: form.get('description'), image,
-      x: value('x'), y: value('y'), width: value('width'), height: value('height'),
-      hp: value('hp'), ac: value('ac'), cover: value('cover'),
-      items: String(form.get('items') ?? '').split('\n').map(item => item.trim()).filter(Boolean),
-      locked: kind === 'container' && locked, lockDc: value('lockDc')
-    })) close()
+    const fields = { name: String(form.get('name')), description: String(form.get('description')), image,
+      width: value('width'), height: value('height') }
+    let definition: ObjectDefinition
+    if (kind === 'container') {
+      const originalItems = [...(container?.items ?? [])]
+      const names = String(form.get('items')).split('\n').map(item => item.trim()).filter(Boolean)
+      const items = names.map(name => {
+        const index = originalItems.findIndex(item => item.name === name)
+        return index < 0 ? { name, description: '' } : originalItems.splice(index, 1)[0]
+      })
+      definition = { ...fields, kind, items, lockDc: locked ? value('lockDc') : undefined }
+    } else if (kind === 'structure') {
+      definition = { ...fields, kind, hp: value('hp'), ac: value('ac'), cover: value('cover') as 0 | 2 | 5 | 99 }
+    } else definition = { ...fields, kind }
+    setSaving(true)
+    try {
+      if (await save(definition, point && { x: value('x'), y: value('y') })) close()
+    } finally { setSaving(false) }
   }}>
-    <header><h2>นำเข้า Object</h2><button type="button" onClick={close} aria-label="ปิด">×</button></header>
+    <header><h2>{title}</h2><button type="button" onClick={close} aria-label="ปิด">×</button></header>
     <label>ประเภท<select value={kind} onChange={event => setKind(event.target.value as ObjectKind)}>
       {Object.entries(objectLabels).map(([type, label]) => <option key={type} value={type}>{label}</option>)}
     </select></label>
-    <label>ชื่อ Object<input name="name" required maxLength={120} /></label>
-    <label>รายละเอียด<textarea name="description" maxLength={2000} rows={2} /></label>
+    <label>ชื่อ Object<input name="name" required maxLength={120} defaultValue={initial?.name} /></label>
+    <label>รายละเอียด<textarea name="description" maxLength={2000} rows={2} defaultValue={initial?.description} /></label>
     <PictureInput label="รูป Object" value={image} change={setImage} pending={setLoading} />
     <div className="form-grid">
-      {([['x', 'ช่อง X', point.x], ['y', 'ช่อง Y', point.y], ['width', 'กว้าง (ช่อง)', 1], ['height', 'สูง (ช่อง)', 1]] as const).map(([name, label, value]) =>
-        <label key={name}>{label}<input required name={name} type="number" step=".5" min={name.length === 1 ? -1000 : .5}
-          max={name.length === 1 ? 1000 : 50} defaultValue={value} /></label>)}
+      {point && <><label>ช่อง X<input required name="x" type="number" step=".5" min={-1000} max={1000} defaultValue={point.x} /></label>
+        <label>ช่อง Y<input required name="y" type="number" step=".5" min={-1000} max={1000} defaultValue={point.y} /></label></>}
+      <label>กว้าง (ช่อง)<input required name="width" type="number" step=".5" min={.5} max={50} defaultValue={initial?.width ?? 1} /></label>
+      <label>สูง (ช่อง)<input required name="height" type="number" step=".5" min={.5} max={50} defaultValue={initial?.height ?? 1} /></label>
     </div>
     {kind === 'container' && <>
-      <label>ของเริ่มต้นในกล่อง (บรรทัดละหนึ่งชิ้น)<textarea name="items" rows={3} /></label>
+      <label>ของเริ่มต้นในกล่อง (บรรทัดละหนึ่งชิ้น)<textarea name="items" rows={3} defaultValue={container?.items.map(item => item.name).join('\n')} /></label>
       <label className="inline"><input type="checkbox" checked={locked} onChange={event => setLocked(event.target.checked)} />ล็อกกล่อง</label>
-      {locked && <label>DC สะเดาะล็อก<input type="number" name="lockDc" min={1} max={30} defaultValue={15} required /></label>}
+      {locked && <label>DC สะเดาะล็อก<input type="number" name="lockDc" min={1} max={30} defaultValue={container?.lockDc ?? 15} required /></label>}
     </>}
     {kind === 'structure' && <div className="form-grid">
-      <label>HP<input name="hp" type="number" min={1} max={9999} defaultValue={12} required /></label>
-      <label>AC<input name="ac" type="number" min={1} max={99} defaultValue={12} required /></label>
-      <label>ที่กำบัง<select name="cover" defaultValue="2"><option value="0">ไม่มี</option><option value="2">ครึ่งหนึ่ง (+2)</option>
+      <label>HP<input name="hp" type="number" min={1} max={9999} defaultValue={structure?.hp ?? 12} required /></label>
+      <label>AC<input name="ac" type="number" min={1} max={99} defaultValue={structure?.ac ?? 12} required /></label>
+      <label>ที่กำบัง<select name="cover" defaultValue={structure?.cover ?? 2}><option value="0">ไม่มี</option><option value="2">ครึ่งหนึ่ง (+2)</option>
         <option value="5">สามในสี่ (+5)</option><option value="99">เต็ม</option></select></label>
     </div>}
-    <footer><button type="button" onClick={close}>ยกเลิก</button><button className="primary" disabled={loading}>วาง Object</button></footer>
+    {error && <p className="feedback" role="alert">{error}</p>}
+    <footer><button type="button" onClick={close}>ยกเลิก</button><button className="primary" disabled={loading || saving}>{point ? 'วาง Object' : 'บันทึก Object'}</button></footer>
   </form></div>
 }
 
-export function ObjectActions({ item, actors, selected, dm, send, close }: {
-  item: SceneObject; actors: Actor[]; selected: string; dm: boolean; send: Send; close: () => void
+export function ObjectActions({ item, actors, selected, dm, send, close, copy }: {
+  item: SceneObject; actors: Actor[]; selected: string; dm: boolean; send: Send; close: () => void; copy?: () => void
 }) {
   const [chosen, setChosen] = useState(selected)
   const [amount, setAmount] = useState(1)
@@ -113,6 +132,7 @@ export function ObjectActions({ item, actors, selected, dm, send, close }: {
       <label>ช่อง Y<input name="y" type="number" step=".5" defaultValue={item.y} required /></label>
       <button>ย้าย</button>
     </form>}
+    {copy && <button onClick={copy}>คัดลอก Object เข้าคลังส่วนตัว</button>}
     {dm && (confirmRemove ? <div className="inline"><button onClick={() => void perform('removeObject')}>ยืนยันนำออก</button>
       <button onClick={() => setConfirmRemove(false)}>ยกเลิก</button></div> : <button onClick={() => setConfirmRemove(true)}>นำ Object ออกจากฉาก</button>)}
   </section></div>

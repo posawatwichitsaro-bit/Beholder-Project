@@ -1,10 +1,73 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { chromium } from 'playwright-core'
 import type { Page } from 'playwright-core'
+import { blankSheet } from '../shared/model.ts'
+import type { Snapshot } from '../shared/model.ts'
 
 const base = process.env.BEHOLDER_TEST_URL ?? 'http://127.0.0.1:3000'
 const exact = (name: string) => ({ name, exact: true })
+
+test('sign up with a character name, rename in the room and return with a fresh session', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
+    ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await browser.newPage()
+  const guest = await browser.newPage()
+  const returning = await browser.newPage()
+  const email = 'test-' + randomUUID() + '@example.com'
+  const password = 'test-account-pass'
+
+  await dm.goto(base)
+  await dm.getByRole('button', exact('สร้างบัญชี')).click()
+  await dm.getByLabel('อีเมล').fill(email.toUpperCase())
+  await dm.getByLabel('รหัสผ่าน', { exact: true }).fill(password)
+  await dm.getByLabel('ชื่อตัวละครที่ใช้บนโต๊ะ').fill('Mira')
+  await dm.getByRole('button', exact('สมัครบัญชี')).click()
+  await dm.getByText('ชื่อที่ใช้บนโต๊ะ · Mira', { exact: true }).waitFor()
+  await dm.getByLabel('ชื่อห้อง').fill('Account verification')
+  await dm.getByRole('button', exact('สร้างห้อง DM')).click()
+  await openPanel(dm, 'ฉากและแผนที่')
+
+  const bookmark = dm.url()
+  const roomPath = base + '/api/rooms/' + new URL(bookmark).searchParams.get('room')
+  const original = await (await dm.request.get(roomPath)).json()
+  assert.equal(original.me.name, 'Mira')
+  assert.equal(original.me.role, 'dm')
+  assert.deepEqual(Object.keys(original.me).sort(), ['id', 'name', 'role'])
+
+  await guest.goto(`${base}/?invite=${original.invite}&room=${original.id}`)
+  await guest.getByLabel('ชื่อที่ใช้บนโต๊ะ').fill('Guest')
+  await guest.getByRole('button', exact('เข้าร่วม')).click()
+  await openPanel(guest, 'ฉากและแผนที่')
+  await guest.getByText('2 คน · Mira, Guest', { exact: true }).waitFor()
+
+  await openPanel(dm, 'ตั้งค่าบัญชี')
+  await dm.getByLabel('ชื่อตัวละครที่ใช้บนโต๊ะ').fill('Mira Ash')
+  await dm.getByRole('button', exact('บันทึกชื่อ')).click()
+  await dm.getByText('บันทึกชื่อตัวละครแล้ว', { exact: true }).waitFor()
+  await guest.getByText('2 คน · Mira Ash, Guest', { exact: true }).waitFor()
+  await openPanel(dm, 'คลังส่วนตัว')
+  await dm.getByRole('heading', exact('Mira Ash')).waitFor()
+
+  await openPanel(dm, 'ตั้งค่าบัญชี')
+  await dm.getByRole('button', exact('ออกจากระบบ')).click()
+  await dm.getByRole('button', exact('เข้าสู่ระบบ')).waitFor()
+  assert.equal((await dm.request.get(roomPath)).status(), 403)
+
+  await returning.goto(bookmark)
+  await returning.getByLabel('อีเมล').fill(email)
+  await returning.getByLabel('รหัสผ่าน', { exact: true }).fill('wrong-password')
+  await returning.getByRole('button', exact('เข้าสู่ระบบ')).click()
+  await returning.getByText('อีเมลหรือรหัสผ่านไม่ถูกต้อง', { exact: true }).waitFor()
+  await returning.getByLabel('รหัสผ่าน', { exact: true }).fill(password)
+  await returning.getByRole('button', exact('เข้าสู่ระบบ')).click()
+  await openPanel(returning, 'ฉากและแผนที่')
+  const rejoined = await (await returning.request.get(roomPath)).json()
+  assert.deepEqual(rejoined.me, { ...original.me, name: 'Mira Ash' })
+  assert.equal(rejoined.members.length, 2)
+})
 
 test('import a supplied D&D Beyond PDF and save a playable sheet', {
   skip: !process.env.BEHOLDER_TEST_PDF, timeout: 60000
@@ -39,12 +102,139 @@ test('import a supplied D&D Beyond PDF and save a playable sheet', {
   await page.getByText(/Investigation check/).first().waitFor()
 })
 
+test('manage scenes and reuse an account Object in another room', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
+    ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  page.setDefaultTimeout(10000)
+  await page.goto(base)
+  const account = await page.request.post(base + '/api/account/session', { data: {
+    mode: 'register', email: randomUUID() + '@example.com', password: 'scene-library-test', name: 'Scene DM'
+  } })
+  assert.equal(account.status(), 201)
+  await page.reload()
+
+  async function openRoom(name: string, scene: string) {
+    await page.getByLabel('ชื่อห้อง').fill(name)
+    await page.getByRole('button', exact('สร้างห้อง DM')).click()
+    await openPanel(page, 'ฉากและแผนที่')
+    await createScene(page, scene)
+    return base + '/api/rooms/' + new URL(page.url()).searchParams.get('room')
+  }
+  async function placeTent() {
+    await page.getByRole('button', exact('วางในฉาก')).click()
+    await page.getByText('คลิกช่องเพื่อวาง Camp Tent', { exact: true }).waitFor()
+    await page.locator('canvas').click({ position: { x: 180, y: 135 } })
+    await page.getByText('คลิกช่องเพื่อวาง Camp Tent', { exact: true }).waitFor({ state: 'hidden' })
+  }
+
+  const firstRoom = await openRoom('First campsite', 'Camp')
+  await openPanel(page, 'คลังส่วนตัว')
+  await page.locator('.personal-library').getByRole('button', exact('Object')).click()
+  await page.getByRole('button', exact('+ Object')).click()
+  await page.getByLabel('ชื่อ Object').fill('Camp Tent')
+  await page.getByLabel('กว้าง (ช่อง)').fill('2')
+  await page.getByRole('button', exact('บันทึก Object')).click()
+  await page.getByRole('heading', exact('Camp Tent')).waitFor()
+  await placeTent()
+  const initial = await (await page.request.get(firstRoom)).json()
+  const tent = initial.scenes[0].objects[0]
+
+  await openPanel(page, 'ฉากและแผนที่')
+  await page.getByRole('button', exact('คัดลอกฉาก')).click()
+  await page.getByLabel('ชื่อฉากสำเนา').fill('Camp Copy')
+  await page.getByRole('button', exact('สร้างสำเนา')).click()
+  await page.getByRole('heading', exact('Camp Copy')).waitFor()
+  await page.getByRole('button', exact('ย้ายฉาก Camp Copy ขึ้น')).click()
+  await page.locator('.scene-row').first().getByText('Camp Copy', { exact: true }).waitFor()
+  await page.locator('.scene-item').getByText('Camp', { exact: true }).click()
+  await page.getByRole('button', exact('ลบฉาก')).click()
+  await page.getByRole('button', exact('ยืนยันลบฉาก')).click()
+  await page.getByRole('heading', exact('Camp Copy')).waitFor()
+  const modified = await (await page.request.get(firstRoom)).json()
+  assert.equal(modified.scenes.length, 1)
+  assert.equal(modified.activeSceneId, modified.scenes[0].id)
+  assert.notEqual(modified.scenes[0].objects[0].id, tent.id)
+
+  await page.goto(base)
+  const secondRoom = await openRoom('Second campsite', 'Forest')
+  await openPanel(page, 'คลังส่วนตัว')
+  await page.locator('.personal-library').getByRole('button', exact('Object')).click()
+  await placeTent()
+  const reused = (await (await page.request.get(secondRoom)).json()).scenes[0].objects[0]
+  assert.equal(reused.name, tent.name)
+  assert.equal(reused.width, 2)
+  assert.notEqual(reused.id, tent.id)
+
+  await openPanel(page, 'คลังส่วนตัว')
+  await page.getByRole('button', exact('ลบ')).click()
+  await page.getByRole('button', exact('ยืนยันลบ Object')).click()
+  await page.getByText('ยังไม่มี Object ในคลัง', { exact: true }).waitFor()
+  const placed = (await (await page.request.get(secondRoom)).json()).scenes[0].objects[0]
+  assert.deepEqual(placed, reused)
+})
+
 async function openPanel(page: Page, name: string) {
   const menu = page.getByRole('button', exact('เมนูโต๊ะ'))
   if (await menu.getAttribute('aria-expanded') === 'false') await menu.click()
   const tab = page.getByRole('navigation', { name: 'ระบบในห้อง' }).getByRole('button', exact(name))
   if (await tab.getAttribute('aria-pressed') === 'false') await tab.click()
 }
+
+test('a player places an owned main and a library companion, then drives the main with arrow keys', { timeout: 45000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
+    ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await browser.newPage()
+  const player = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  const opened = await dm.request.post(base + '/api/rooms', { data: { name: 'Arrow verification', member: 'DM' } })
+  assert.equal(opened.status(), 201)
+  const initial: Snapshot = await opened.json()
+  const path = base + '/api/rooms/' + initial.id
+  const sceneResult = await dm.request.post(path + '/commands', { data: {
+    type: 'scene', name: 'Clearing', cell: 48, originX: 0, originY: 0, commandId: randomUUID(), revision: initial.revision
+  } })
+  assert.equal(sceneResult.status(), 200)
+  await player.goto(base)
+  const registered = await player.request.post(base + '/api/account/session', { data: {
+    email: randomUUID() + '@example.com', name: 'Player', password: 'arrow-test-password', mode: 'register'
+  } })
+  assert.equal(registered.status(), 201)
+  const sheet = { ...blankSheet(), name: 'Hawk' }
+  assert.equal((await player.request.put(base + '/api/library/sheets/' + randomUUID(), { data: sheet })).status(), 200)
+  await player.goto(base + '/?invite=' + initial.invite + '&room=' + initial.id)
+  await player.getByRole('button', exact('เข้าร่วม')).click()
+  await player.getByRole('heading', exact('Clearing')).waitFor()
+  const state = async (): Promise<Snapshot> => (await player.request.get(path)).json()
+  const joined = await state()
+  assert.equal((await player.request.post(path + '/commands', { data: {
+    type: 'sheet', sheet: { ...blankSheet(), name: 'Warden' }, revision: joined.revision, commandId: randomUUID()
+  } })).status(), 200)
+  await player.reload()
+  await openPanel(player, 'ชีตในห้อง')
+  await player.getByRole('button', exact('วาง Warden')).click()
+  await player.getByRole('button', exact('Character Token')).click()
+  const board = player.locator('canvas')
+  await board.click({ position: { x: 155, y: 120 } })
+  await player.getByRole('button', { name: /↑ ↓ ← → Warden/ }).waitFor()
+  await openPanel(player, 'คลังส่วนตัว')
+  await player.getByRole('button', exact('วาง Token')).click()
+  assert.equal(await player.getByRole('button', exact('Character Token')).isDisabled(), true)
+  await player.getByRole('button', exact('Companion Token')).click()
+  await board.click({ position: { x: 270, y: 120 } })
+  await player.getByText('คลิกช่องเพื่อวาง Token', { exact: true }).waitFor({ state: 'hidden' })
+  const before = (await state()).scenes[0].tokens
+  assert.deepEqual(before.map(token => token.role), ['character', 'companion'])
+
+  await board.click({ position: { x: 260, y: 110 } })
+  const step = player.waitForResponse(response => response.url() === path + '/commands' && response.request().postDataJSON()?.type === 'stepCharacter')
+  await player.keyboard.press('ArrowRight')
+  assert.equal((await step).status(), 200)
+  const after = (await state()).scenes[0].tokens
+  assert.equal(after[0].x, before[0].x + 1)
+  assert.deepEqual(after[1], before[1])
+})
 
 async function createScene(page: Page, name: string) {
   await page.getByRole('button', exact('สร้างฉาก')).first().click()
@@ -132,6 +322,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   for (const [name, position] of [['Scout', { x: 165, y: 115 }], ['Mage', { x: 210, y: 115 }]] as const) {
     await openPanel(dm, 'ชีตในห้อง')
     await dm.getByRole('button', exact('วาง ' + name)).click()
+    await dm.getByRole('button', exact('Character Token')).click()
     await canvas.click({ position })
     await dm.getByText('คลิกช่องเพื่อวาง Token', { exact: true }).waitFor({ state: 'hidden' })
   }
@@ -214,7 +405,10 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   const combat = dm.getByRole('complementary', { name: 'แผงต่อสู้ DM' })
   await combat.getByRole('button', exact('ทอย Initiative')).click()
   await two.locator('.board-status').getByText(/รอบ 1 · /).waitFor()
-  const playerRail = one.getByRole('complementary', { name: 'ลำดับ Initiative' })
+  const playerRail = one.getByRole('complementary', { name: 'Turn Initiative' })
+  await playerRail.getByRole('heading', exact('Turn Initiative')).waitFor()
+  assert.match(await playerRail.getByRole('button', exact('ไปที่ Token Scout')).locator('img').getAttribute('src') ?? '', /^data:image\//)
+  await playerRail.getByRole('button', exact('ไปที่ Token Rat 1')).getByText('RA', { exact: true }).waitFor()
   await playerRail.locator('[aria-current=step]').waitFor()
   await playerRail.getByRole('button', exact('ไปที่ Token Scout')).click()
   await one.waitForFunction(() => {
@@ -320,4 +514,37 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await two.getByRole('button', exact('วัดระยะ')).last().waitFor()
   await two.keyboard.press('Escape')
   await two.getByRole('group', { name: 'คำสั่งตามตำแหน่ง' }).waitFor({ state: 'hidden' })
+})
+
+test('DM searches the SRD, saves a monster template and places the creature with its reference', { timeout: 45000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+  const response = await page.request.post(base + '/api/rooms', { data: { name: 'Bestiary test', member: 'DM' } })
+  assert.equal(response.status(), 201)
+  const room: Snapshot = await response.json()
+  const path = base + '/api/rooms/' + room.id
+  const create = await page.request.post(path + '/commands', { data: { commandId: randomUUID(), revision: room.revision, type: 'scene', name: 'Woods', cell: 48, originX: 0, originY: 0 } })
+  assert.equal(create.status(), 200)
+  await page.goto(base + '/?room=' + room.id)
+  await openPanel(page, 'Monster Manual')
+  await page.getByLabel('ค้นหาชื่อหรือประเภท').fill('Goblin Warrior')
+  await page.locator('.manual-filters').getByRole('combobox').selectOption('1/4')
+  await page.locator('.manual-list button').click()
+  await page.getByRole('button', exact('เพิ่มเป็นต้นแบบในห้อง')).click()
+  await page.getByRole('button', exact('เพิ่มต้นแบบแล้ว')).waitFor()
+  await page.getByRole('button', exact('วางมอนสเตอร์ในฉาก')).click()
+  const placed = page.waitForResponse(r => r.url() === path + '/commands' && r.request().postDataJSON()?.type === 'place')
+  await page.locator('canvas').click({ position: { x: 210, y: 160 } })
+  assert.equal((await placed).status(), 200)
+  const result: Snapshot = await (await page.request.get(path)).json()
+  const monster = result.actors[0]
+  assert.equal(monster.kind, 'monster')
+  assert.equal(monster.ac, 15)
+  assert.equal(monster.hp, 10)
+  assert.equal(monster.attack, 4)
+  assert.equal(monster.damage, '1d6+2')
+  assert.match(monster.monsterReference!.statBlock, /Nimble Escape/)
+  assert.equal(result.templates[0].sheet.monsterReference?.page, monster.monsterReference!.page)
+  assert.equal(result.scenes[0].tokens[0].actorId, monster.id)
 })

@@ -15,6 +15,7 @@ export const sizes = { Tiny: 0.5, Small: 1, Medium: 1, Large: 2, Huge: 3, Gargan
 export type Ability = typeof abilities[number]
 export type Size = keyof typeof sizes
 export type Member = { id: string; name: string; role: 'dm' | 'player' }
+export type Account = { email: string; name: string }
 export type Sheet = {
   name: string; kind: 'pc' | 'monster'; size: Size; speed: number
   classLevel: string; abilities: Record<Ability, number>; proficiency: number
@@ -23,6 +24,7 @@ export type Sheet = {
   attacks?: { name: string; bonus: number; damage: string; damageKind?: DamageKind; notes?: string }[]
   spells: string; slots: string; conditions: string
   portrait?: string
+  monsterReference?: { statBlock: string; page?: number }
   inventory?: InventoryItem[]
   itemProficiency?: ItemProficiency
   lootDc?: number
@@ -35,9 +37,11 @@ export type Sheet = {
 }
 export type Actor = Sheet & { id: string; ownerId: string; templateId?: string; lootResult?: LootResult }
 export type Template = { id: string; sheet: Sheet }
-export type Library = { name: string; sheets: Template[] }
+export type Library = { name: string; sheets: Template[]; objects: SavedObject[] }
 export type MapAsset = { id: string; mime: string }
-export type Token = { id: string; actorId: string; x: number; y: number }
+export const tokenRoleLabels = { character: 'Character Token', companion: 'Companion Token' } as const
+export type TokenRole = keyof typeof tokenRoleLabels
+export type Token = { id: string; actorId: string; x: number; y: number; role?: TokenRole }
 export type ItemProficiency = { thievesTools: boolean; sleight: boolean; investigation: boolean; perception: boolean }
 export type LootSkill = 'investigation' | 'perception'
 export type LootResult = { passed: boolean; total: number; searcher: string; found: { name: string; quantity: number }[] }
@@ -57,6 +61,23 @@ export type SceneObject = {
   | { kind: 'structure'; hp: number; maxHp: number; ac: number; cover: 0 | 2 | 5 | 99 }
   | { kind: 'item' | 'prop' }
 )
+export type ObjectDefinition = Pick<SceneObject, 'name' | 'description' | 'image' | 'width' | 'height'> & (
+  { kind: 'container'; items: Omit<InventoryItem, 'id'>[]; lockDc?: number }
+  | { kind: 'structure'; hp: number; ac: number; cover: 0 | 2 | 5 | 99 }
+  | { kind: 'item' | 'prop' }
+)
+export type SavedObject = { id: string; definition: ObjectDefinition }
+
+export function objectDefinition(object: SceneObject): ObjectDefinition {
+  const { kind, name, description, image, width, height } = object
+  const fields = { name, description, image, width, height }
+  if (kind === 'container') return {
+    ...fields, kind, items: object.items.map(({ id: _id, ...item }) => item), lockDc: object.lock?.locked ? object.lock.dc : undefined
+  }
+  if (kind === 'structure') return { ...fields, kind, hp: object.maxHp, ac: object.ac, cover: object.cover }
+  return { ...fields, kind }
+}
+
 export type Combat = {
   order: { actorId: string; initiative: number }[]; turn: number; round: number
   deathSaveAt?: string
@@ -80,11 +101,11 @@ export type Roll = {
   critical?: boolean; privateTo?: string; sceneId?: string; sourceId?: string; damageKind?: DamageKind
 }
 export type Room = {
-  id: string; name: string; invite: string; dmInvite?: string; revision: number; members: Member[]
+  id: string; name: string; invite: string; dmInvite?: string; revision: number; members: (Member & { profileId?: string })[]
   activeSceneId?: string; scenes: Scene[]; actors: Actor[]; templates: Template[]; rolls: Roll[]
 }
-export type Snapshot = Omit<Room, 'invite' | 'dmInvite' | 'actors'> & {
-  me: Member; invite?: string; dmInvite?: string; actors: Actor[]
+export type Snapshot = Omit<Room, 'invite' | 'dmInvite' | 'actors' | 'members'> & {
+  me: Member; members: Member[]; invite?: string; dmInvite?: string; actors: Actor[]
   publicActors: (Pick<Actor, 'id' | 'name' | 'kind' | 'size' | 'portrait' | 'hp' | 'maxHp' | 'tempHp' | 'lootResult'> & { lootable?: boolean })[]
   combatQueue?: Roll[]
 }

@@ -24,6 +24,43 @@ function table() {
   return { dm, player, actor, scene, room }
 }
 
+test('scene copies preserve the layout with independent monsters and objects and deleting the live scene advances the table', () => {
+  const { dm, player, scene, room } = table()
+  scene.map = { id: 'map', mime: 'image/png' }
+  scene.combat = { round: 2, turn: 0, order: [{ actorId: 'goblin', initiative: 12 }] }
+  applyCommand(room, dm, { type: 'importObject', sceneId: scene.id, x: 3, y: 4, kind: 'container',
+    name: 'Chest', locked: true, lockDc: 12, items: ['Gem'] })
+  assert.throws(() => applyCommand(room, player, { type: 'copyScene', sceneId: scene.id, name: 'Copy' }), /DM/)
+  const receipt = applyCommand(room, dm, { type: 'copyScene', sceneId: scene.id, name: 'Copy' })
+  assert('sceneId' in receipt && receipt.sceneId)
+  const sceneId = receipt.sceneId
+  const copy = room.scenes[1]
+  assert.equal(copy.id, sceneId)
+  assert.equal(room.activeSceneId, scene.id)
+  assert.deepEqual(copy.map, scene.map)
+  assert.equal(copy.combat, undefined)
+  assert.equal(copy.tokens[0].actorId, scene.tokens[0].actorId)
+  assert.notEqual(copy.tokens[2].actorId, scene.tokens[2].actorId)
+  const original = scene.objects![0]
+  const duplicate = copy.objects![0]
+  assert(original.kind === 'container' && duplicate.kind === 'container')
+  assert.notEqual(duplicate.id, original.id)
+  assert.notEqual(duplicate.items[0].id, original.items[0].id)
+  duplicate.items.pop()
+  assert.equal(original.items.length, 1)
+
+  assert.throws(() => applyCommand(room, player, { type: 'moveScene', sceneId, offset: -1 }), /DM/)
+  assert.throws(() => applyCommand(room, player, { type: 'deleteScene', sceneId }), /DM/)
+  applyCommand(room, dm, { type: 'moveScene', sceneId, offset: -1 })
+  assert.deepEqual(room.scenes.map(scene => scene.id), [sceneId, scene.id])
+  assert.equal(snapshot(room, player).scenes[0].id, scene.id)
+  applyCommand(room, dm, { type: 'deleteScene', sceneId: scene.id })
+  assert.equal(snapshot(room, player).scenes[0].id, sceneId)
+  applyCommand(room, dm, { type: 'deleteScene', sceneId })
+  assert.equal(room.activeSceneId, undefined)
+  assert.equal(room.actors.length, 4)
+})
+
 test('group movement keeps relative positions and authorization is all-or-nothing', () => {
   const { player, scene, room } = table()
   const move = { type: 'moveTokens', sceneId: scene.id, dx: 1, dy: 0 }
@@ -31,6 +68,40 @@ test('group movement keeps relative positions and authorization is all-or-nothin
   assert.deepEqual(scene.tokens.map(token => token.x), [0, 0, 2])
   applyCommand(room, player, { ...move, tokenIds: ['t1', 't2'] })
   assert.deepEqual(scene.tokens.map(token => [token.x, token.y]), [[1, 0], [1, 1], [2, 0]])
+})
+
+test('players place one main and multiple companions and arrow steps target only the main token', () => {
+  const { dm, player, scene, room } = table()
+  const { tokens } = snapshot(room, player).scenes[0]
+  assert.deepEqual(tokens.map(token => token.role), ['character', 'companion', undefined])
+  const place = { type: 'place', sceneId: scene.id, x: 4, y: 5, sheet: { ...blankSheet(), name: 'Hawk' } }
+  assert.throws(() => applyCommand(room, player, { ...place, sheet: undefined, actorId: 'goblin' }), /ไม่ได้ควบคุม/)
+  assert.throws(() => applyCommand(room, player, { ...place, role: 'character' }), /มี Character Token/)
+  assert.equal(room.actors.length, 3)
+  applyCommand(room, player, { ...place, role: 'companion' })
+  applyCommand(room, player, { ...place, y: 6, role: 'companion' })
+  assert.equal(scene.tokens.filter(token => token.role === 'companion').length, 3)
+  assert.equal(new Set(scene.tokens.map(token => token.actorId)).size, 5)
+  assert.equal(room.actors.at(-1)?.ownerId, player.id)
+
+  scene.combat = { turn: 0, round: 1, order: [{ actorId: 'goblin', initiative: 20 }, { actorId: 'scout', initiative: 10 }] }
+  const step = { type: 'stepCharacter', sceneId: scene.id, dx: 1, dy: 0 }
+  assert.throws(() => applyCommand(room, player, { ...step, tokenId: 't2' }), /Character Token/)
+  assert.throws(() => applyCommand(room, player, { ...step, tokenId: 't1', dy: 1 }), /หนึ่งช่อง/)
+  applyCommand(room, player, { ...step, tokenId: 't1' })
+  assert.equal(scene.tokens[0].x, 1)
+  applyCommand(room, player, { type: 'tokenRole', sceneId: scene.id, tokenId: 't2', role: 'character' })
+  assert.deepEqual(scene.tokens.slice(0, 2).map(token => token.role), ['companion', 'character'])
+  assert.throws(() => applyCommand(room, player, { ...step, tokenId: 't1' }), /Character Token/)
+  applyCommand(room, player, { ...step, tokenId: 't2' })
+  assert.equal(scene.tokens[1].x, 1)
+
+  applyCommand(room, dm, { type: 'scene', name: 'Next', cell: 48, originX: 0, originY: 0 })
+  const next = room.scenes.at(-1)!
+  assert.throws(() => applyCommand(room, player, { ...place, sceneId: next.id }), /ฉากเปลี่ยน/)
+  applyCommand(room, dm, { type: 'activate', sceneId: next.id })
+  applyCommand(room, player, { ...place, sceneId: next.id, role: 'character' })
+  assert.equal(next.tokens[0].role, 'character')
 })
 
 test('containers conceal closed contents and transfer items without duplication', () => {
