@@ -44,6 +44,35 @@ test('DM and two players share scenes, dice, combat and reconnect state', { time
   const dm = opened.headers.get('set-cookie')!.split(';')[0]
   const initial: Snapshot = await opened.json()
   const path = base + '/api/rooms/' + initial.id
+  const library = base + '/api/library'
+  const name = 'Test-' + randomUUID().slice(0, 12)
+  const credentials = { name, password: 'integration-test-pass' }
+  const registered = await fetch(library + '/session', post({ ...credentials, mode: 'register' }))
+  assert.equal(registered.status, 204)
+  const profile = registered.headers.get('set-cookie')!.split(';')[0]
+  const savedSheet = library + '/sheets/' + randomUUID()
+  const custom = { ...blankSheet('monster'), name: 'Private rat' }
+  const save = (cookie: string) => fetch(savedSheet, { ...post(custom, cookie), method: 'PUT' })
+  assert.equal((await save(profile)).status, 200)
+  const wrongPassword = await fetch(library + '/session', post({ ...credentials, password: 'wrong-password', mode: 'login' }))
+  assert.equal(wrongPassword.status, 403)
+  const duplicate = await fetch(library + '/session', post({ ...credentials, name: name.toUpperCase(), mode: 'register' }))
+  assert.equal(duplicate.status, 409)
+  const another = await fetch(library + '/session', post({ ...credentials, name: name + '-other', mode: 'register' }))
+  const anotherProfile = another.headers.get('set-cookie')!.split(';')[0]
+  assert.equal((await save(anotherProfile)).status, 403)
+  const privateContents = await fetch(library, { headers: { Cookie: anotherProfile } })
+  assert.deepEqual((await privateContents.json()).sheets, [])
+  assert.equal((await fetch(library, { headers: { Cookie: dm } })).status, 403)
+  const signIn = await fetch(library + '/session', post({ ...credentials, name: name.toUpperCase(), mode: 'login' }))
+  assert.equal(signIn.status, 204)
+  const profileAfterLogin = signIn.headers.get('set-cookie')!.split(';')[0]
+  async function checkLibrary() {
+    const response = await fetch(library, { headers: { Cookie: profileAfterLogin } })
+    assert.equal(response.status, 200)
+    assert.deepEqual((await response.json()).sheets.map((entry: { sheet: { name: string } }) => entry.sheet.name), ['Private rat'])
+  }
+  await checkLibrary()
   async function joinRoom(name: string) {
     const response = await fetch(base + '/api/join', post({ invite: initial.invite, name }))
     assert.equal(response.status, 200)
@@ -62,6 +91,16 @@ test('DM and two players share scenes, dice, combat and reconnect state', { time
     assert.equal(response.status, status, JSON.stringify(result))
     return result
   }
+  const privileged = (invite: string) => fetch(base + '/api/join', post({ invite, name: 'Co-DM', role: 'dm', roomId: initial.id }))
+  assert.equal((await privileged(initial.invite!)).status, 403)
+  await command({ type: 'dmInvite' }, player, 403)
+  await command({ type: 'dmInvite' })
+  const dmInvite = (await state()).dmInvite!
+  assert.equal((await state(player)).dmInvite, undefined)
+  const coDM = await privileged(dmInvite)
+  assert.equal(coDM.status, 200)
+  assert.equal((await coDM.json()).me.role, 'dm')
+  assert.equal((await privileged(dmInvite)).status, 403)
   for (const name of ['Gate', 'Vault']) await command({ type: 'scene', name, cell: 48, originX: 0, originY: 0 })
   const [gate, vault] = (await state()).scenes
   const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP9sAAAAASUVORK5CYII=', 'base64')
@@ -89,7 +128,7 @@ test('DM and two players share scenes, dice, combat and reconnect state', { time
   const closed = once(socket, 'close')
   try {
     const [first] = await once(socket, 'message')
-    assert.equal((JSON.parse(first.toString()) as Snapshot).members.length, 3)
+    assert.equal((JSON.parse(first.toString()) as Snapshot).members.length, 4)
     const pushed = once(socket, 'message')
     await command({ type: 'move', sceneId: gate.id, tokenId: scoutToken.id, x: 1, y: 1 }, player)
     const [message] = await pushed
@@ -148,5 +187,6 @@ test('DM and two players share scenes, dice, combat and reconnect state', { time
     const savedImage = await fetch(path + '/maps/' + mapId, { headers: { Cookie: player } })
     assert.equal(savedImage.status, 200)
     assert.deepEqual(Buffer.from(await savedImage.arrayBuffer()), image)
+    await checkLibrary()
   }
 })
