@@ -5,7 +5,9 @@ export class Invalid extends Error {}
 export const die = (sides: number) => randomInt(1, sides + 1)
 
 export function parseDice(formula: string) {
-  const match = /^(\d{0,3})d(100|20|12|10|8|6|4)([+-]\d{1,3})?$/i.exec(formula.replace(/\s/g, ''))
+  const normalized = formula.replace(/\s/g, '')
+  if (/^\d{1,4}$/.test(normalized)) return { count: 0, sides: 0, modifier: Number(normalized) }
+  const match = /^(\d{0,3})d(100|20|12|10|8|6|4)([+-]\d{1,3})?$/i.exec(normalized)
   if (!match) throw new Invalid('สูตรเต๋าไม่ถูกต้อง เช่น 2d6+3')
   const count = Number(match[1] || 1)
   if (count < 1 || count > 100) throw new Invalid('ทอยได้ 1 ถึง 100 ลูก')

@@ -10,6 +10,7 @@ import { applyCommand, Conflict, Forbidden, snapshot, text, visibleRolls } from 
 import type { Command } from './commands.ts'
 import { Invalid } from './rules.ts'
 import type { Database, Query } from './store.ts'
+import { libraryRoutes } from './library.ts'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const hash = (secret: string) => createHash('sha256').update(secret).digest('hex')
@@ -73,7 +74,8 @@ export async function createApp(database: Database, assetDirectory: string) {
     if (!sameOrigin(req.headers.origin, req.headers.host)) return next(new Forbidden('Origin ไม่ถูกต้อง'))
     next()
   })
-  app.use(express.json({ limit: '64kb' }))
+  app.use(express.json({ limit: '128kb' }))
+  app.use('/api/library', libraryRoutes(database))
   app.get('/api/health', async (_req, res) => {
     await database.query('SELECT 1')
     res.json({ status: 'ok' })
@@ -94,11 +96,19 @@ export async function createApp(database: Database, assetDirectory: string) {
   app.post('/api/join', async (req, res) => {
     const invite = text(req.body?.invite)
     if (!uuid.test(invite)) throw new Invalid('ลิงก์เชิญไม่ถูกต้อง')
-    const member: Member = { id: randomUUID(), name: text(req.body?.name), role: 'player' }
+    const role = req.body?.role ?? 'player'
+    if (role !== 'dm' && role !== 'player') throw new Invalid('เลือก DM หรือ Player')
+    const roomId = req.body?.roomId
+    if (role === 'dm' && (typeof roomId !== 'string' || !uuid.test(roomId))) throw new Forbidden('ต้องใช้ลิงก์เชิญ DM ของห้องนี้')
+    const member: Member = { id: randomUUID(), name: text(req.body?.name), role }
     const { room, secret } = await database.transaction(async query => {
-      const { rows } = await query<{ state: Room }>('SELECT state FROM rooms WHERE invite = $1 FOR UPDATE', [invite])
-      if (!rows[0]) throw new Invalid('ลิงก์เชิญไม่ถูกต้อง')
+      const { rows } = await query<{ state: Room }>(role === 'dm'
+        ? 'SELECT state FROM rooms WHERE id = $1 AND state->>\'dmInvite\' = $2 FOR UPDATE'
+        : 'SELECT state FROM rooms WHERE invite = $1 FOR UPDATE',
+      role === 'dm' ? [roomId, invite] : [invite])
+      if (!rows[0]) throw new Forbidden('ลิงก์เชิญใช้กับบทบาทนี้ไม่ได้หรือหมดอายุแล้ว')
       const room = rows[0].state
+      if (role === 'dm') delete room.dmInvite
       room.members.push(member)
       const secret = await issue(query, room, member)
       await save(query, room)

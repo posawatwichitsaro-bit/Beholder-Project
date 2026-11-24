@@ -5,9 +5,11 @@ export type Query = <T extends object = Record<string, unknown>>(sql: string, va
 export type Database = { query: Query; transaction<T>(work: (query: Query) => Promise<T>): Promise<T> }
 
 export async function migrate(database: Database) {
-  const source = await readFile(new URL('./migrations/001.sql', import.meta.url), 'utf8')
   await database.transaction(async query => {
-    for (const statement of source.split(';').filter(part => part.trim())) await query(statement)
+    for (const name of ['001', '002']) {
+      const source = await readFile(new URL('./migrations/' + name + '.sql', import.meta.url), 'utf8')
+      for (const statement of source.split(';').filter(part => part.trim())) await query(statement)
+    }
   })
 }
 
