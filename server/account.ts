@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
 import { Conflict, Forbidden, text } from './commands.ts'
-import { accountCookie, activeProfile, endProfileSession, passwordMatches, passwordRecord, profileSecret, startProfileSession } from './profiles.ts'
+import { accountCookie, activeProfile, endProfileSession, passwordRecord, validPassword, verifyPassword, profileSecret, startProfileSession } from './profiles.ts'
+import type { AuthThrottle } from './authThrottle.ts'
 import { Invalid } from './rules.ts'
 import type { Database, Query } from './store.ts'
 
 const cookiePath = '/api'
 
-export function accountRoutes(database: Database, rename: (query: Query, id: string, name: string) => Promise<() => void>, revokeSocket: (secret?: string) => void) {
+export function accountRoutes(database: Database, rename: (query: Query, id: string, name: string) => Promise<() => void>, revokeSocket: (secret?: string) => void, allowAttempt: AuthThrottle) {
   const router = Router()
-  const attempts = new Map<string, { count: number; expires: number }>()
 
   router.get('/', async (req, res) => {
     const account = await activeProfile(database.query, accountCookie, req.headers.cookie)
@@ -20,19 +20,10 @@ export function accountRoutes(database: Database, rename: (query: Query, id: str
     const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
     const { password, mode } = req.body ?? {}
     if (email.length > 254 || !/^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/.test(email) ||
-      typeof password !== 'string' || password.length < 8 || password.length > 128 ||
-      (mode !== 'register' && mode !== 'login')) throw new Invalid('กรอกอีเมลและรหัสผ่าน 8–128 ตัวอักษร')
-
-    const ip = req.ip ?? ''
-    const now = Date.now()
-    for (const [key, value] of attempts) if (value.expires <= now) attempts.delete(key)
-    const attempt = attempts.get(ip) ?? { count: 0, expires: now + 60_000 }
-    if (attempt.count >= 20 || (!attempts.has(ip) && attempts.size >= 5000)) {
-      res.status(429).json({ error: 'ลองหลายครั้งเกินไป กรุณารอสักครู่' })
-      return
+      (mode !== 'register' && mode !== 'login') || !validPassword(password, mode === 'register')) {
+      throw new Invalid(mode === 'register' ? 'กรอกอีเมลและรหัสผ่าน 15–128 ตัวอักษร' : 'กรอกอีเมลและรหัสผ่านให้ถูกต้อง')
     }
-    attempt.count++
-    attempts.set(ip, attempt)
+    if (!allowAttempt(req, res, 'account', email, mode)) return
 
     let account: { id: string; name: string }
     if (mode === 'register') {
@@ -50,7 +41,7 @@ export function accountRoutes(database: Database, rename: (query: Query, id: str
         'SELECT id,name,salt,password_hash FROM profiles WHERE email=$1', [email]
       )
       account = rows[0]
-      if (!await passwordMatches(password, rows[0])) throw new Forbidden('อีเมลหรือรหัสผ่านไม่ถูกต้อง')
+      if (!await verifyPassword(database.query, password, rows[0])) throw new Forbidden('อีเมลหรือรหัสผ่านไม่ถูกต้อง')
     }
     await startProfileSession(database, req, res, accountCookie, cookiePath, account.id)
     revokeSocket(profileSecret(accountCookie, req.headers.cookie))

@@ -37,8 +37,9 @@ export function AccountPanel({ account, change }: { account: Account | null; cha
     <h2>{account ? 'ตั้งค่าบัญชี' : mode === 'login' ? 'เข้าสู่ระบบ' : 'สร้างบัญชี'}</h2>
     {account ? <p className="muted account-email">{account.email}</p> : <>
       <label>อีเมล<input name="email" type="email" required maxLength={254} autoComplete="username" /></label>
-      <label>รหัสผ่าน<input key={mode} name="password" type="password" required minLength={8} maxLength={128}
+      <label>รหัสผ่าน<input key={mode} name="password" type="password" required minLength={mode === 'register' ? 15 : 8} maxLength={256}
         autoComplete={mode === 'register' ? 'new-password' : 'current-password'} /></label>
+      {mode === 'register' && <small>ใช้รหัสผ่าน 15–128 ตัวอักษร</small>}
     </>}
     {(account || mode === 'register') && <label>ชื่อตัวละครที่ใช้บนโต๊ะ<input key={account?.name} name="name" required maxLength={40}
       autoComplete="nickname" defaultValue={account?.name} /></label>}

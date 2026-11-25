@@ -3,20 +3,21 @@ import { randomUUID } from 'node:crypto'
 import type { Request } from 'express'
 import type { SavedObject, Template } from '../shared/model.ts'
 import { Conflict, Forbidden, parseObjectDefinition, parseSheet, text } from './commands.ts'
+import type { AuthThrottle } from './authThrottle.ts'
 import { Invalid } from './rules.ts'
 import type { Database, Query } from './store.ts'
-import { accountCookie, activeProfile, endProfileSession, libraryCookie, passwordMatches, passwordRecord, startProfileSession } from './profiles.ts'
+import { accountCookie, activeProfile, endProfileSession, libraryCookie, passwordRecord, validPassword, verifyPassword, startProfileSession } from './profiles.ts'
 
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i
 const cookiePath = '/api/library'
 
 async function libraryOwner(query: Query, cookie?: string) {
-  const owner = await activeProfile(query, accountCookie, cookie) ?? await activeProfile(query, libraryCookie, cookie)
+  const owner = await activeProfile(query, accountCookie, cookie, false, true) ?? await activeProfile(query, libraryCookie, cookie, false, true)
   if (!owner) throw new Forbidden('กรุณาเข้าคลังส่วนตัวก่อน')
   return owner
 }
 
-export function libraryRoutes(database: Database) {
+export function libraryRoutes(database: Database, allowAttempt: AuthThrottle) {
   const router = Router()
   const profile = (req: Request) => libraryOwner(database.query, req.headers.cookie)
   router.post('/session', async (req, res) => {
@@ -24,8 +25,10 @@ export function libraryRoutes(database: Database) {
     const key = name.toLowerCase()
     const password = req.body?.password
     const mode = req.body?.mode
-    if (!key || key.length > 40 || typeof password !== 'string' || password.length < 8 || password.length > 128 ||
-      (mode !== 'register' && mode !== 'login')) throw new Invalid('กรอกชื่อโปรไฟล์และรหัสผ่าน 8–128 ตัวอักษร')
+    if (!key || key.length > 40 || (mode !== 'register' && mode !== 'login') || !validPassword(password, mode === 'register')) {
+      throw new Invalid(mode === 'register' ? 'กรอกชื่อโปรไฟล์และรหัสผ่าน 15–128 ตัวอักษร' : 'กรอกชื่อโปรไฟล์และรหัสผ่านให้ถูกต้อง')
+    }
+    if (!allowAttempt(req, res, 'library', key, mode)) return
     let id: string
     if (mode === 'register') {
       id = randomUUID()
@@ -40,7 +43,7 @@ export function libraryRoutes(database: Database) {
         'SELECT id,salt,password_hash FROM profiles WHERE name_key=$1 AND email IS NULL', [key]
       )
       const entry = rows[0]
-      if (!await passwordMatches(password, entry)) throw new Forbidden('ชื่อโปรไฟล์หรือรหัสผ่านไม่ถูกต้อง')
+      if (!await verifyPassword(database.query, password, entry)) throw new Forbidden('ชื่อโปรไฟล์หรือรหัสผ่านไม่ถูกต้อง')
       id = entry.id
     }
     await startProfileSession(database, req, res, libraryCookie, cookiePath, id)

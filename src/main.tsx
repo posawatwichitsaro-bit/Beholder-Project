@@ -721,14 +721,33 @@ function App() {
   function changeAccount(next: Account | null) {
     setAccount(next)
     if (!roomId || invite || account?.email === next?.email) return
-    if (room && !next) setRoom(undefined)
+    setRoom(undefined)
     void api<Snapshot>('/api/rooms/' + roomId).then(state => {
       setError('')
       enter(state)
     }).catch(error => {
-      if (!room || !next) setError(next ? error.message : '')
+      setError(next ? error.message : '')
     })
   }
+  useEffect(() => {
+    if (!account) return
+    let active = true
+    const checkSession = () => {
+      void api<Account | null>('/api/account').then(current => {
+        if (active && current?.email !== account.email) changeAccount(current)
+      }).catch(() => {})
+    }
+    const checkOnReturn = () => {
+      if (document.visibilityState === 'visible') checkSession()
+    }
+    const timer = setInterval(checkSession, 30_000)
+    document.addEventListener('visibilitychange', checkOnReturn)
+    return () => {
+      active = false
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', checkOnReturn)
+    }
+  }, [account, roomId, invite])
   if (loading) return <main className="entry"><p>กำลังเปิดโต๊ะ…</p></main>
   return room ? <Table key={room.me.id} initial={room} account={account} changeAccount={changeAccount} />
     : <Entry invite={invite} roomId={roomId} dmLink={params.get('role') === 'dm'} enter={enter} initialError={error} account={account} changeAccount={changeAccount} />
