@@ -99,9 +99,53 @@ test('import a supplied D&D Beyond PDF and save a playable sheet', {
   assert.equal(await page.getByLabel('HP สูงสุด', { exact: true }).inputValue(), '80')
   await page.getByRole('button', exact('บันทึกชีต')).click()
   await page.getByRole('button', exact(importedName)).click()
-  await page.getByLabel('เลือกทักษะสำหรับ Check').selectOption('Investigation')
-  await page.getByRole('button', exact('Check')).click()
+  await page.getByRole('button', exact('Investigation check')).click()
   await page.getByText(/Investigation check/).first().waitFor()
+})
+
+test('a new player builds a character step by step and rolls from the sheet', { timeout: 45000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
+    ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  page.setDefaultTimeout(10000)
+  const opened = await page.request.post(base + '/api/rooms', { data: { name: 'Wizard test', member: 'DM' } })
+  const room: Snapshot = await opened.json()
+  const path = base + '/api/rooms/' + room.id
+  assert.equal((await page.request.post(path + '/commands', { data: {
+    type: 'scene', name: 'Hall', cell: 48, originX: 0, originY: 0, commandId: randomUUID(), revision: room.revision
+  } })).status(), 200)
+  await page.goto(base + '/room/' + room.id)
+  await openPanel(page, 'ชีตในห้อง')
+  await page.getByRole('button', exact('+ ตัวละคร')).click()
+  const wizard = page.getByRole('dialog', { name: 'สร้างตัวละคร' })
+  await wizard.getByLabel('ชื่อตัวละคร').fill('Lyra')
+  await wizard.getByRole('button', exact('ถัดไป')).click()
+  await wizard.getByRole('radio', { name: /^Wizard/ }).click()
+  await wizard.getByLabel('เลเวล').fill('3')
+  await wizard.getByRole('button', exact('ถัดไป')).click()
+  await wizard.getByRole('button', exact('ถัดไป')).click()
+  await wizard.getByLabel('ชุดเกราะ').selectOption('Unarmored')
+  await wizard.getByLabel(/^Longsword/).uncheck()
+  await wizard.getByLabel(/^Quarterstaff/).check()
+  await wizard.getByRole('button', exact('ถัดไป')).click()
+  await wizard.getByText('Wizard 3', { exact: true }).waitFor()
+  await wizard.getByRole('button', exact('สร้างตัวละคร')).click()
+  await wizard.waitFor({ state: 'hidden' })
+  const lyra = (await (await page.request.get(path)).json() as Snapshot).actors.find(actor => actor.name === 'Lyra')!
+  assert.deepEqual([lyra.maxHp, lyra.hp, lyra.ac, lyra.attack, lyra.damage, lyra.spellDC], [20, 20, 11, 1, '1d6-1', 12])
+  assert.ok(lyra.calculations?.hp, 'the D&D calculator stays on for later edits')
+
+  // The sheet opens on its overview; clicking a score rolls it, and results stack under the sheet.
+  await page.getByRole('button', exact('Lyra')).click()
+  const sheet = page.getByRole('article', { name: 'ชีต Lyra' })
+  await sheet.getByText('20/20', { exact: true }).waitFor()
+  await sheet.getByRole('button', exact('Advantage')).click()
+  await sheet.getByRole('button', exact('INT check')).click()
+  await page.getByRole('region', exact('ลูกเต๋า')).waitFor()
+  await page.locator('.rolls').getByText(/INT check · Lyra/).waitFor()
+  await sheet.getByRole('tab', exact('Actions')).click()
+  await sheet.getByRole('button', exact('Damage การโจมตีหลัก')).waitFor()
 })
 
 test('manage scenes and reuse an account Object in another room', { timeout: 60000 }, async t => {
@@ -271,6 +315,7 @@ async function createScene(page: Page, name: string) {
 
 async function createSheet(page: Page, name: string, monster = false, picture = false) {
   await page.getByRole('button', exact(monster ? '+ ต้นแบบ' : '+ ตัวละคร')).click()
+  if (!monster) await page.getByRole('button', exact('กรอกชีตเองแบบเต็ม')).click()
   await page.locator('.dialog').getByLabel('ชื่อ', { exact: true }).fill(name)
   await page.getByLabel('Attack bonus').fill('50')
   await page.getByLabel('สูตร Damage', { exact: true }).fill('1d4')
@@ -379,7 +424,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await one.locator('canvas').click({ position: { x: 165, y: 115 }, button: 'right' })
   assert.equal(await one.getByRole('button', exact('ปรับ HP')).count(), 0)
   await one.getByRole('button', exact('เปิดชีต')).click()
-  await one.getByRole('button', exact('Check')).click()
+  await one.getByRole('button', exact('STR check')).click()
   await openPanel(two, 'ลูกเต๋า')
   await two.locator('.rolls').getByText(/STR check · Scout/).waitFor()
   await dm.getByRole('complementary', { name: 'ถาดผลเต๋า' }).getByText(/STR check · Scout/).waitFor()
@@ -418,7 +463,8 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await one.getByRole('dialog', { name: 'Silver key' }).waitFor({ state: 'hidden' })
   await openPanel(one, 'ชีตในห้อง')
   await one.getByRole('button', exact('Scout')).click()
-  await one.getByText('Inventory (1)', { exact: true }).click()
+  await one.getByRole('tab', exact('Inventory')).click()
+  await one.getByText('Inventory (1)', { exact: true }).waitFor()
   await one.getByText('Silver key', { exact: true }).waitFor()
   await one.getByRole('button', exact('+ ไอเทม')).click()
   await one.getByLabel('ชื่อไอเทม').fill('Lockpick set')
@@ -540,7 +586,8 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await two.getByText('คัดลอกชีตเข้าห้องแล้ว').waitFor()
   await openPanel(two, 'ชีตในห้อง')
   await two.getByRole('button', exact('Mage')).click()
-  await two.getByText('Inventory (1)', { exact: true }).click()
+  await two.getByRole('tab', exact('Inventory')).click()
+  await two.getByText('Inventory (1)', { exact: true }).waitFor()
   await two.getByText('Copper token', { exact: true }).waitFor()
   await two.setViewportSize({ width: 390, height: 780 })
   await openPanel(two, 'ฉากและแผนที่')

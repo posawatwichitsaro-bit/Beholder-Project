@@ -100,6 +100,9 @@
   --bh-ui-scale: 1;
 }
 
+/* Cormorant's default old-style figures make "14" read like "I4"; numbers must read at a glance. */
+body { font-variant-numeric: lining-nums; }
+
 @media (prefers-reduced-motion: reduce) {
   :root { --bh-fast: 0ms; --bh-medium: 0ms; --bh-slow: 0ms; }
 }

@@ -10,9 +10,11 @@ import { CombatPanel } from '../combat/CombatPanel.tsx'
 import { DamageTypeSelect, TurnRail } from '../combat/CombatEffects.tsx'
 import { SheetEditor } from '../sheets/SheetEditor.tsx'
 import { ActorActions } from '../sheets/ActorActions.tsx'
+import { SheetView } from '../sheets/SheetView.tsx'
+import { CharacterWizard } from '../sheets/CharacterWizard.tsx'
 import { PersonalLibrary } from '../library/PersonalLibrary.tsx'
 import { ObjectEditor, ObjectActions } from '../objects/Objects.tsx'
-import { InventoryPanel, LootDialog } from '../objects/Inventory.tsx'
+import { LootDialog } from '../objects/Inventory.tsx'
 import { SceneForm, SceneOperationForm } from '../scenes/SceneForms.tsx'
 import type { SceneOperation } from '../scenes/SceneForms.tsx'
 import { tokenDragProps } from '../board/tokenDrag.ts'
@@ -70,7 +72,8 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [selected, setSelected] = useState('')
   const [modal, setModal] = useState<'createScene' | { sceneId: string }>()
   const [sceneOperation, setSceneOperation] = useState<SceneOperation>()
-  const [sheet, setSheet] = useState<{ initial: Sheet; actor?: Actor; template?: Template; asTemplate?: boolean }>()
+  const [sheet, setSheet] = useState<{ initial: Sheet; actor?: Actor; template?: Template; asTemplate?: boolean; report?: string[] }>()
+  const [wizard, setWizard] = useState(false)
   const [tokenPlacement, setPlacing] = useState<TokenPlacement>()
   const [objectPlacement, setObjectPlacement] = useState<{ sceneId: string; definition: ObjectDefinition }>()
   const [formula, setFormula] = useState('1d20')
@@ -312,7 +315,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       {placementPoint && <p className="feedback">เลือกชีตหรือมอนสเตอร์เพื่อวางที่ช่อง {placementPoint.x}, {placementPoint.y}</p>}
       <div className="section-head"><h2>ชีต</h2><div className="inline">
         <button onClick={() => { setLibrarySection('sheets'); openPanel('library') }}>เปิดคลังชีต</button>
-        <button onClick={() => setSheet({ initial: blankSheet() })}>+ ตัวละคร</button>
+        <button onClick={() => setWizard(true)}>+ ตัวละคร</button>
       </div></div>
       {room.actors.map(item => {
         const token = scene?.tokens.find(token => token.actorId === item.id)
@@ -357,17 +360,13 @@ export function Table({ account, changeAccount }: AccountProps) {
       </div>}
       {!combat && <p className="muted">ยังไม่มีการต่อสู้ในฉากนี้</p>}
     </>,
-    actor: () => actor ? <section className="sheet-summary"><div className="section-head"><h2>{actor.name}</h2>
-      <button onClick={() => setSheet({ initial: actor, actor })}>แก้ชีต</button></div>
-      <button className="save-to-library" onClick={() => saveToLibrary(actor)}>คัดลอกเข้าคลังส่วนตัว</button>
-      <InventoryPanel key={actor.id} actor={actor} send={send} />
-      {actor.monsterReference && <details><summary>Stat block{actor.monsterReference.page && ' · SRD หน้า ' + actor.monsterReference.page}</summary><p className="stat-block">{actor.monsterReference.statBlock}</p></details>}
-      <ActorActions key={actor.id} actor={actor} scene={scene} room={room} send={async value => {
+    actor: () => actor ? <SheetView key={actor.id} actor={actor} scene={scene} room={room}
+      edit={() => setSheet({ initial: actor, actor })} copy={() => saveToLibrary(actor)}
+      send={async value => {
         const ok = await send(value)
         if (ok && (value.type === 'sheetRoll' || value.type === 'castSave')) openPanel('dice', true)
         return ok
-      }} />
-    </section> : <p className="muted">เลือกตัวละครจากชีตในห้องหรือจาก Token บนกระดาน</p>,
+      }} /> : <p className="muted">เลือกตัวละครจากชีตในห้องหรือจาก Token บนกระดาน</p>,
     dice: () => <>
       <div className="section-head"><h2>ผลทอย</h2></div>
       {dm && <div className="dice-settings">
@@ -544,7 +543,14 @@ export function Table({ account, changeAccount }: AccountProps) {
       <label>จำนวน<input type="number" name="amount" min={1} max={9999} defaultValue={1} required /></label>
       <footer><button type="button" onClick={() => setHpTarget(undefined)}>ยกเลิก</button><button className="primary">ยืนยันการปรับ HP</button></footer>
     </form></div>}
-    {sheet && <SheetEditor initial={sheet.initial} editInventory={!sheet.actor} copy={sheet.template ? () => { saveToLibrary(sheet.template!.sheet); setSheet(undefined) } : undefined}
+    {wizard && <CharacterWizard close={() => setWizard(false)}
+      save={async value => {
+        const ok = await send({ type: 'sheet', kind: 'pc', sheet: value })
+        if (ok) { setNotice('สร้าง ' + value.name + ' แล้ว · ลากชื่อจากชีตในห้องลงกระดานเพื่อวาง'); openPanel('sheets') }
+        return ok
+      }}
+      openEditor={(initial, report) => { setWizard(false); setSheet({ initial: initial ?? blankSheet(), report }) }} />}
+    {sheet && <SheetEditor initial={sheet.initial} editInventory={!sheet.actor} report={sheet.report} copy={sheet.template ? () => { saveToLibrary(sheet.template!.sheet); setSheet(undefined) } : undefined}
       cancel={() => setSheet(undefined)} save={value => void send({
       type: sheet.asTemplate ? 'template' : 'sheet', actorId: sheet.actor?.id, templateId: sheet.template?.id, kind: value.kind, sheet: value
     }).then(ok => { if (ok) { setSheet(undefined); openPanel('sheets') } })} />}

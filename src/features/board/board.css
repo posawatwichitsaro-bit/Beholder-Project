@@ -4,7 +4,7 @@
 .board canvas.measuring { cursor: crosshair; }
 
 .table .board-tools {
-  display: flex; align-items: center; gap: 2px; padding: 4px;
+  display: flex; align-items: center; gap: 2px; padding: 4px; flex-wrap: nowrap; max-width: none;
   background: #211814f2; border: 1px solid var(--bh-line-strong); border-radius: var(--bh-radius-pill);
   box-shadow: var(--bh-shadow-1);
 }
@@ -55,7 +55,13 @@
 .table [draggable=true] { cursor: grab; }
 .table [draggable=true]:active { cursor: grabbing; }
 
+/* With the dock open, centre the selection bar in the part of the map still visible, and keep tools compact. */
+.table:has(> .hud-dock:not([hidden])) .selection-bar { left: calc((100% - var(--hud-rail) - var(--hud-dock-width) - 2 * var(--hud-gap)) / 2); max-width: calc(100% - var(--hud-rail) - var(--hud-dock-width) - 4 * var(--hud-gap)); }
+@media (max-width: 1100px) {
+  .table:has(> .hud-dock:not([hidden])) .board-tools .board-tool-label { display: none; }
+}
 @media (max-width: 760px) {
   .table .board-tools .board-tool-label { display: none; }
+  .table:has(> .hud-dock:not([hidden])) .selection-bar { left: 50%; max-width: calc(100% - 32px); }
   .selection-bar { bottom: 52px; border-radius: var(--bh-radius-lg); }
 }

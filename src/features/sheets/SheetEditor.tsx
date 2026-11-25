@@ -7,14 +7,16 @@ import { ItemFields, LootSettingsFields, blankItem } from '../objects/Inventory.
 import { CharacterCalculationFields } from './CharacterCalculations.tsx'
 import { abilityModifier, calculatedSheet } from '../../../shared/characterStats.ts'
 
-export function SheetEditor({ initial, save, cancel, copy, editInventory = true }: {
+export function SheetEditor({ initial, save, cancel, copy, editInventory = true, report }: {
   initial: Sheet; save: (sheet: Sheet) => void; cancel: () => void; copy?: () => void; editInventory?: boolean
+  /** Warnings from a PDF import done before the editor opened (the character wizard). */
+  report?: string[]
 }) {
   const [sheet, set] = useState(initial)
   const [loadingImage, setLoadingImage] = useState(false)
   const [loadingPdf, setLoadingPdf] = useState(false)
   const [importError, setImportError] = useState('')
-  const [importReport, setImportReport] = useState<string[]>()
+  const [importReport, setImportReport] = useState<string[] | undefined>(report)
   const attacks = sheet.attacks ?? []
   const items = sheet.inventory ?? []
   const proficiency = sheet.itemProficiency ?? { thievesTools: false, sleight: false, investigation: false, perception: false }

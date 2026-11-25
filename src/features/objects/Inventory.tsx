@@ -33,12 +33,15 @@ export function ItemName({ item, loot = false }: { item: InventoryItem; loot?: b
   </div>
 }
 
-export function InventoryPanel({ actor, send }: { actor: Actor; send: Send }) {
+/** An actor's items. `expanded` shows the list directly (sheet tab) instead of a folded section. */
+export function InventoryPanel({ actor, send, expanded = false }: { actor: Actor; send: Send; expanded?: boolean }) {
   const [draft, setDraft] = useState<InventoryItem>()
   const [remove, setRemove] = useState<string>()
   const monster = actor.kind === 'monster'
   const items = actor.inventory ?? []
-  return <details className="inventory"><summary>Inventory ({items.length})</summary>
+  const Wrapper = expanded ? 'section' : 'details'
+  const Title = expanded ? 'h3' : 'summary'
+  return <Wrapper className={'inventory' + (expanded ? ' inventory-expanded' : '')}><Title>Inventory ({items.length})</Title>
     {items.length ? <ul>{items.map(item => <li key={item.id}>
       {item.image && <img src={item.image} alt="" />}<ItemName item={item} loot={monster} />
       {remove === item.id ? <><button onClick={() => void send({ type: 'inventoryRemove', actorId: actor.id, itemId: item.id }).then(ok => {
@@ -53,7 +56,7 @@ export function InventoryPanel({ actor, send }: { actor: Actor; send: Send }) {
       <ItemFields item={draft} update={setDraft} monster={monster} />
       <div className="inline"><button className="primary">เก็บใน Inventory</button><button type="button" onClick={() => setDraft(undefined)}>ยกเลิก</button></div>
     </form> : !actor.lootResult && <button onClick={() => setDraft(blankItem(monster && items.length > 0))}>+ ไอเทม</button>}
-  </details>
+  </Wrapper>
 }
 
 export function LootSettingsFields({ dc, skill, changeDc, changeSkill }: {
