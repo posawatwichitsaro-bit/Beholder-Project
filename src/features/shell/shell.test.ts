@@ -43,10 +43,10 @@ test('players never get DM-only panels, and shortcuts follow the role', () => {
   assert.equal(panelForShortcut('t', 'player')?.id, 'sheets')
 })
 
-test('shortcuts are unique and never take the board keys R and V', () => {
+test('shortcuts are unique and never take the board keys R, V and G or the DM storeroom key M', () => {
   const keys = panels.flatMap(panel => panel.shortcut ? [panel.shortcut] : [])
   assert.equal(new Set(keys).size, keys.length)
-  assert.ok(!keys.includes('R') && !keys.includes('V'))
+  for (const reserved of ['R', 'V', 'G', 'M']) assert.ok(!keys.includes(reserved), reserved + ' is taken elsewhere')
 })
 
 test('the command palette matches labels and keywords, ignoring case and order', () => {
