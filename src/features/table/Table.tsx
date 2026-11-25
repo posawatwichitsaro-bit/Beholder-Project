@@ -323,6 +323,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       addTemplate={sheet => send({ type: 'template', sheet })}
       placeMonster={scene ? sheet => chooseToken({ sheet }) : undefined} />,
     library: () => <PersonalLibrary key={account?.email} useAccount={Boolean(account)} roomName={room.me.name} dm={dm} draft={libraryDraft} clearDraft={() => setLibraryDraft(undefined)}
+      accountForm={<AccountPanel account={account} change={changeAccount} initialMode="register" />}
       section={librarySection} selectSection={setLibrarySection} objectDraft={objectDraft} clearObjectDraft={() => setObjectDraft(undefined)}
       placeCharacter={scene ? value => chooseToken({ sheet: value }, value.name) : undefined}
       placeObject={dm && scene ? definition => {

@@ -16,6 +16,17 @@ export type Ability = typeof abilities[number]
 export type Size = keyof typeof sizes
 export type Member = { id: string; name: string; role: 'dm' | 'player' }
 export type Account = { email: string; name: string }
+/** One row of the lobby's "my tables" list (GET /api/account/rooms). */
+export type TableSummary = {
+  id: string; name: string; role: Member['role']
+  /** Scene players currently see, if any. */
+  sceneName?: string
+  /** Thumbnail of the active scene's map; served only to seated members. */
+  mapUrl?: string
+  members: { name: string; role: Member['role']; online: boolean }[]
+  /** ISO time of the last change at the table. */
+  updatedAt: string
+}
 export type Sheet = {
   name: string; kind: 'pc' | 'monster'; size: Size; speed: number
   classLevel: string; abilities: Record<Ability, number>; proficiency: number

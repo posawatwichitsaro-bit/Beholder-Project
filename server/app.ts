@@ -5,7 +5,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { mkdir, writeFile, unlink } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
-import type { Member, Room } from '../shared/model.ts'
+import type { Member, Room, TableSummary } from '../shared/model.ts'
 import { applyCommand, Conflict, Forbidden, snapshot, text, visibleRolls } from './commands.ts'
 import type { Command } from './commands.ts'
 import { Invalid } from './rules.ts'
@@ -77,7 +77,7 @@ export async function createApp(database: Database, assetDirectory: string) {
   }
   async function save(query: Query, room: Room) {
     room.revision++
-    await query('UPDATE rooms SET state = $2 WHERE id = $1', [room.id, JSON.stringify(room)])
+    await query('UPDATE rooms SET state = $2, updated_at = now() WHERE id = $1', [room.id, JSON.stringify(room)])
   }
   async function renameMembers(query: Query, profileId: string, name: string) {
     const { rows } = await query<{ state: Room }>(
@@ -121,6 +121,28 @@ export async function createApp(database: Database, assetDirectory: string) {
   app.use(express.json({ limit: '128kb' }))
   app.use('/api/account', accountRoutes(database, renameMembers, closeAccountSockets, allowAttempt))
   app.use('/api/library', libraryRoutes(database, allowAttempt))
+  // The lobby's "my tables": every room this account holds a seat in, most recently played first.
+  app.get('/api/account/rooms', async (req, res) => {
+    const account = await activeProfile(database.query, accountCookie, req.headers.cookie)
+    if (!account) throw new Forbidden('กรุณาเข้าสู่ระบบก่อน')
+    const { rows } = await database.query<{ state: Room; updated_at: Date }>(
+      `SELECT state, updated_at FROM rooms
+       WHERE state->'members' @> jsonb_build_array(jsonb_build_object('profileId', $1::text))
+       ORDER BY updated_at DESC, id LIMIT 50`, [account.id])
+    const tables: TableSummary[] = rows.map(({ state: room, updated_at }) => {
+      const me = room.members.find(member => member.profileId === account.id)!
+      const scene = room.scenes.find(scene => scene.id === room.activeSceneId)
+      const online = new Set([...subscribers.values()].filter(seat => seat.roomId === room.id).map(seat => seat.memberId))
+      return {
+        id: room.id, name: room.name, role: me.role,
+        sceneName: scene?.name,
+        mapUrl: scene?.map ? '/api/rooms/' + room.id + '/maps/' + scene.map.id : undefined,
+        members: room.members.map(member => ({ name: member.name, role: member.role, online: online.has(member.id) })),
+        updatedAt: new Date(updated_at).toISOString()
+      }
+    })
+    res.json(tables)
+  })
   app.get('/api/health', async (_req, res) => {
     await database.query('SELECT 1')
     res.json({ status: 'ok' })

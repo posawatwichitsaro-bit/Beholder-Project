@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { blankSheet, objectLabels } from '../../../shared/model.ts'
 import type { Library, ObjectDefinition, SavedObject, Sheet, Template } from '../../../shared/model.ts'
 import { ApiError, api, commandId, json } from '../../lib/api.ts'
@@ -8,8 +9,10 @@ import { ObjectEditor } from '../objects/Objects.tsx'
 const base = '/api/library'
 
 export function PersonalLibrary({ roomName, dm, draft, clearDraft, importSheet, useAccount, section, selectSection,
-  objectDraft, clearObjectDraft, placeObject, placeCharacter }: {
+  objectDraft, clearObjectDraft, placeObject, placeCharacter, accountForm }: {
   roomName: string; dm: boolean; draft?: Sheet; clearDraft: () => void; importSheet: (sheet: Sheet) => Promise<boolean>; useAccount: boolean
+  /** Sign-in form shown to guests, since the library belongs to an account. */
+  accountForm?: ReactNode
   section: 'sheets' | 'objects'; selectSection: (section: 'sheets' | 'objects') => void
   objectDraft?: ObjectDefinition; clearObjectDraft: () => void; placeObject?: (value: ObjectDefinition) => void
   placeCharacter?: (sheet: Sheet) => void
@@ -69,22 +72,28 @@ export function PersonalLibrary({ roomName, dm, draft, clearDraft, importSheet, 
   return <section className="personal-library">
     {error && !editingObject && <p className="feedback" role="alert">{error}</p>}
     {message && <p role="status" className="feedback">{message}</p>}
-    {!library ? useAccount ? <p className="muted">เปิดคลังไม่สำเร็จ ตรวจสอบการเข้าสู่ระบบในเมนูตั้งค่าบัญชี</p> : <form className="profile-form" onSubmit={event => {
-      event.preventDefault()
-      const input = new FormData(event.currentTarget)
-      const mode = ((event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null)?.value ?? 'login'
-      void run(async () => {
-        await api(base + '/session', json({ name: input.get('name'), password: input.get('password'), mode }))
-        setLibrary(await api<Library>(base))
-      })
-    }}>
-      {draft && <p>เข้าคลังเพื่อบันทึก <b>{draft.name}</b></p>}
-      {objectDraft && <p>เข้าคลังเพื่อบันทึก <b>{objectDraft.name}</b></p>}
-      <p className="muted">ใช้โปรไฟล์เดียวกันในแต่ละห้องเพื่อเปิดชีตที่บันทึกไว้</p>
-      <label>ชื่อโปรไฟล์<input name="name" autoComplete="username" defaultValue={roomName.slice(0, 40)} required maxLength={40} /></label>
-      <label>รหัสผ่านโปรไฟล์ (สร้างใหม่ 15–128 ตัวอักษร)<input name="password" type="password" required minLength={8} maxLength={256} autoComplete="current-password" /></label>
-      <div className="inline"><button value="login" className="primary" disabled={busy}>เข้าคลัง</button><button value="register" disabled={busy}>สร้างโปรไฟล์</button></div>
-    </form> : <>
+    {!library ? useAccount ? <p className="muted">เปิดคลังไม่สำเร็จ ตรวจสอบการเข้าสู่ระบบในเมนูตั้งค่าบัญชี</p> : <div className="library-sign-in">
+      {draft && <p>เข้าสู่ระบบเพื่อบันทึก <b>{draft.name}</b> ไว้ใช้ทุกโต๊ะ</p>}
+      {objectDraft && <p>เข้าสู่ระบบเพื่อบันทึก <b>{objectDraft.name}</b> ไว้ใช้ทุกโต๊ะ</p>}
+      <p className="muted">คลังส่วนตัวผูกกับบัญชี เข้าสู่ระบบหรือสร้างบัญชีแล้วใช้ชีตและ Object เดิมได้ทุกโต๊ะ ที่นั่งในโต๊ะนี้ยังอยู่เหมือนเดิม</p>
+      {accountForm}
+      {/* Libraries created before accounts existed: kept reachable, folded away. */}
+      <details className="legacy-profile">
+        <summary>มีโปรไฟล์คลังแบบเก่า (ก่อนมีระบบบัญชี)?</summary>
+        <form className="profile-form" onSubmit={event => {
+          event.preventDefault()
+          const input = new FormData(event.currentTarget)
+          void run(async () => {
+            await api(base + '/session', json({ name: input.get('name'), password: input.get('password'), mode: 'login' }))
+            setLibrary(await api<Library>(base))
+          })
+        }}>
+          <label>ชื่อโปรไฟล์<input name="name" autoComplete="username" defaultValue={roomName.slice(0, 40)} required maxLength={40} /></label>
+          <label>รหัสผ่านโปรไฟล์<input name="password" type="password" required minLength={8} maxLength={256} autoComplete="current-password" /></label>
+          <button className="primary" disabled={busy}>เปิดคลังเดิม</button>
+        </form>
+      </details>
+    </div> : <>
       <div className="section-head"><h2>{library.name}</h2>{!useAccount && <button disabled={busy} onClick={() => void run(async () => {
         await api(base + '/session', { method: 'DELETE' })
         setLibrary(undefined)
