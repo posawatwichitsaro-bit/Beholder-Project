@@ -1,33 +1,24 @@
 import { Router } from 'express'
-import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
-import { promisify } from 'node:util'
+import { randomUUID } from 'node:crypto'
 import type { Request } from 'express'
-import type { Template } from '../shared/model.ts'
-import { Conflict, Forbidden, parseSheet, text } from './commands.ts'
+import type { SavedObject, Template } from '../shared/model.ts'
+import { Conflict, Forbidden, parseObjectDefinition, parseSheet, text } from './commands.ts'
 import { Invalid } from './rules.ts'
-import type { Database } from './store.ts'
+import type { Database, Query } from './store.ts'
+import { accountCookie, activeProfile, endProfileSession, libraryCookie, passwordMatches, passwordRecord, startProfileSession } from './profiles.ts'
 
-const derive = promisify(scrypt)
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i
-const cookie = 'beholder_profile'
 const cookiePath = '/api/library'
-const duration = 30 * 86400000
-const digest = (secret: string) => createHash('sha256').update(secret).digest('hex')
+
+async function libraryOwner(query: Query, cookie?: string) {
+  const owner = await activeProfile(query, accountCookie, cookie) ?? await activeProfile(query, libraryCookie, cookie)
+  if (!owner) throw new Forbidden('กรุณาเข้าคลังส่วนตัวก่อน')
+  return owner
+}
 
 export function libraryRoutes(database: Database) {
   const router = Router()
-  const secretFrom = (req: Request) => req.headers.cookie?.split(';').map(value => value.trim())
-    .find(value => value.startsWith(cookie + '='))?.slice(cookie.length + 1)
-  async function profile(req: Request) {
-    const secret = secretFrom(req)
-    if (!secret) throw new Forbidden('กรุณาเข้าคลังส่วนตัวก่อน')
-    const { rows } = await database.query<{ id: string; name: string }>(
-      'SELECT p.id,p.name FROM profiles p JOIN profile_sessions s ON s.profile_id=p.id WHERE s.token_hash=$1 AND s.expires_at > now()',
-      [digest(secret)]
-    )
-    if (!rows[0]) throw new Forbidden('กรุณาเข้าคลังส่วนตัวก่อน')
-    return rows[0]
-  }
+  const profile = (req: Request) => libraryOwner(database.query, req.headers.cookie)
   router.post('/session', async (req, res) => {
     const name = text(req.body?.name, 40).normalize('NFKC').trim()
     const key = name.toLowerCase()
@@ -38,41 +29,52 @@ export function libraryRoutes(database: Database) {
     let id: string
     if (mode === 'register') {
       id = randomUUID()
-      const salt = randomBytes(16).toString('hex')
-      const passwordHash = (await derive(password, salt, 64) as Buffer).toString('hex')
+      const { salt, passwordHash } = await passwordRecord(password)
       const result = await database.query(
-        'INSERT INTO profiles VALUES ($1,$2,$3,$4,$5) ON CONFLICT (name_key) DO NOTHING RETURNING id',
+        'INSERT INTO profiles (id,name,name_key,salt,password_hash) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (name_key) DO NOTHING RETURNING id',
         [id, name, key, salt, passwordHash]
       )
       if (!result.rows.length) throw new Conflict('ชื่อโปรไฟล์นี้มีผู้ใช้แล้ว')
     } else {
       const { rows } = await database.query<{ id: string; salt: string; password_hash: string }>(
-        'SELECT id,salt,password_hash FROM profiles WHERE name_key=$1', [key]
+        'SELECT id,salt,password_hash FROM profiles WHERE name_key=$1 AND email IS NULL', [key]
       )
       const entry = rows[0]
-      const actual = await derive(password, entry?.salt ?? 'beholder-unknown-profile', 64) as Buffer
-      if (!entry || !timingSafeEqual(Buffer.from(entry.password_hash, 'hex'), actual)) throw new Forbidden('ชื่อโปรไฟล์หรือรหัสผ่านไม่ถูกต้อง')
+      if (!await passwordMatches(password, entry)) throw new Forbidden('ชื่อโปรไฟล์หรือรหัสผ่านไม่ถูกต้อง')
       id = entry.id
     }
-    const secret = randomBytes(32).toString('hex')
-    const previous = secretFrom(req)
-    await database.transaction(async query => {
-      if (previous) await query('DELETE FROM profile_sessions WHERE token_hash=$1', [digest(previous)])
-      await query('INSERT INTO profile_sessions VALUES ($1,$2,$3)', [digest(secret), id, new Date(Date.now() + duration)])
-    })
-    res.cookie(cookie, secret, { path: cookiePath, httpOnly: true, sameSite: 'strict', secure: req.secure || process.env.SECURE_COOKIES === '1', maxAge: duration })
+    await startProfileSession(database, req, res, libraryCookie, cookiePath, id)
     res.status(204).end()
   })
   router.delete('/session', async (req, res) => {
-    const secret = secretFrom(req)
-    if (secret) await database.query('DELETE FROM profile_sessions WHERE token_hash=$1', [digest(secret)])
-    res.clearCookie(cookie, { path: cookiePath })
+    await endProfileSession(database, req, res, libraryCookie, cookiePath)
     res.status(204).end()
   })
   router.get('/', async (req, res) => {
     const { id, name } = await profile(req)
-    const { rows } = await database.query<Template>('SELECT id,sheet FROM library_sheets WHERE profile_id=$1 ORDER BY sheet->>\'name\',id', [id])
-    res.json({ name, sheets: rows })
+    const [sheets, objects] = await Promise.all([
+      database.query<Template>("SELECT id,sheet FROM library_sheets WHERE profile_id=$1 ORDER BY sheet->>'name',id", [id]),
+      database.query<SavedObject>("SELECT id,definition FROM library_objects WHERE profile_id=$1 ORDER BY definition->>'name',id", [id])
+    ])
+    res.json({ name, sheets: sheets.rows, objects: objects.rows })
+  })
+  router.put('/objects/:id', async (req, res) => {
+    const owner = await profile(req)
+    const id = req.params.id
+    if (!uuid.test(id)) throw new Invalid('รหัส Object ไม่ถูกต้อง')
+    const definition = parseObjectDefinition(req.body)
+    const { rows } = await database.query(
+      'INSERT INTO library_objects VALUES ($1,$2,$3) ON CONFLICT (id) DO UPDATE SET definition=EXCLUDED.definition WHERE library_objects.profile_id=$2 RETURNING id',
+      [id, owner.id, JSON.stringify(definition)]
+    )
+    if (!rows.length) throw new Forbidden('Object นี้อยู่ในคลังอื่น')
+    res.json({ id, definition })
+  })
+  router.delete('/objects/:id', async (req, res) => {
+    const owner = await profile(req)
+    if (!uuid.test(req.params.id)) throw new Invalid('รหัส Object ไม่ถูกต้อง')
+    await database.query('DELETE FROM library_objects WHERE id=$1 AND profile_id=$2', [req.params.id, owner.id])
+    res.status(204).end()
   })
   router.put('/sheets/:id', async (req, res) => {
     const owner = await profile(req)

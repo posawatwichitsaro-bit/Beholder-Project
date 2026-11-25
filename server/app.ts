@@ -11,6 +11,8 @@ import type { Command } from './commands.ts'
 import { Invalid } from './rules.ts'
 import type { Database, Query } from './store.ts'
 import { libraryRoutes } from './library.ts'
+import { accountRoutes } from './account.ts'
+import { accountCookie, activeProfile, profileSecret } from './profiles.ts'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const hash = (secret: string) => createHash('sha256').update(secret).digest('hex')
@@ -24,7 +26,7 @@ export async function createApp(database: Database, assetDirectory: string) {
   app.disable('x-powered-by')
   const server = createServer(app)
   const sockets = new WebSocketServer({ noServer: true })
-  const subscribers = new Map<WebSocket, { roomId: string; memberId: string }>()
+  const subscribers = new Map<WebSocket, { roomId: string; memberId: string; accountSecret?: string }>()
 
   async function roomBy(query: Query, id: string, lock = false) {
     if (!uuid.test(id)) throw new Invalid('รหัสห้องไม่ถูกต้อง')
@@ -33,8 +35,15 @@ export async function createApp(database: Database, assetDirectory: string) {
     return rows[0].state
   }
   async function memberId(query: Query, roomId: string, cookie?: string) {
+    if (!uuid.test(roomId)) throw new Forbidden('กรุณาเข้าห้องก่อน')
+    const account = await activeProfile(query, accountCookie, cookie)
+    if (account) {
+      const { rows } = await query<{ state: Room }>('SELECT state FROM rooms WHERE id = $1', [roomId])
+      const seat = rows[0]?.state.members.find(member => member.profileId === account.id)
+      if (seat) return seat.id
+    }
     const secret = secretFrom(cookie)
-    if (!secret || !uuid.test(roomId)) throw new Forbidden('กรุณาเข้าห้องก่อน')
+    if (!secret) throw new Forbidden('กรุณาเข้าห้องก่อน')
     const { rows } = await query<{ member_id: string }>('SELECT member_id FROM sessions WHERE room_id = $1 AND token_hash = $2', [roomId, hash(secret)])
     if (!rows[0]) throw new Forbidden('กรุณาเข้าห้องก่อน')
     return rows[0].member_id
@@ -66,6 +75,28 @@ export async function createApp(database: Database, assetDirectory: string) {
     room.revision++
     await query('UPDATE rooms SET state = $2 WHERE id = $1', [room.id, JSON.stringify(room)])
   }
+  async function renameMembers(query: Query, profileId: string, name: string) {
+    const { rows } = await query<{ state: Room }>(
+      `SELECT state FROM rooms WHERE state @> jsonb_build_object('members', jsonb_build_array(jsonb_build_object('profileId', $1::text)))
+       ORDER BY id FOR UPDATE`, [profileId]
+    )
+    const changed: Room[] = []
+    for (const { state: room } of rows) {
+      const member = room.members.find(member => member.profileId === profileId)
+      if (member && member.name !== name) {
+        member.name = name
+        await save(query, room)
+        changed.push(room)
+      }
+    }
+    return () => changed.forEach(publish)
+  }
+  function closeAccountSockets(secret?: string) {
+    if (!secret) return
+    for (const [socket, seat] of subscribers) {
+      if (seat.accountSecret === secret) socket.close(1008)
+    }
+  }
   const sameOrigin = (origin: string | undefined, host: string | undefined) =>
     !origin || origin === 'https://' + host || origin === 'http://' + host
 
@@ -75,22 +106,24 @@ export async function createApp(database: Database, assetDirectory: string) {
     next()
   })
   app.use(express.json({ limit: '128kb' }))
+  app.use('/api/account', accountRoutes(database, renameMembers, closeAccountSockets))
   app.use('/api/library', libraryRoutes(database))
   app.get('/api/health', async (_req, res) => {
     await database.query('SELECT 1')
     res.json({ status: 'ok' })
   })
   app.post('/api/rooms', async (req, res) => {
-    const member: Member = { id: randomUUID(), name: text(req.body?.member), role: 'dm' }
-    const room: Room = {
-      id: randomUUID(), invite: randomUUID(), name: text(req.body?.name), revision: 0,
-      members: [member], scenes: [], actors: [], templates: [], rolls: []
-    }
-    const secret = await database.transaction(async query => {
+    const { room, member, secret } = await database.transaction(async query => {
+      const account = await activeProfile(query, accountCookie, req.headers.cookie, true)
+      const member: Room['members'][number] = { id: randomUUID(), name: account?.name ?? text(req.body?.member), role: 'dm', profileId: account?.id }
+      const room: Room = {
+        id: randomUUID(), invite: randomUUID(), name: text(req.body?.name), revision: 0,
+        members: [member], scenes: [], actors: [], templates: [], rolls: []
+      }
       await query('INSERT INTO rooms VALUES ($1,$2,$3)', [room.id, room.invite, JSON.stringify(room)])
-      return issue(query, room, member)
+      return { room, member, secret: account ? undefined : await issue(query, room, member) }
     })
-    setSeat(req, res, room, secret)
+    if (secret) setSeat(req, res, room, secret)
     res.status(201).json(snapshot(room, member))
   })
   app.post('/api/join', async (req, res) => {
@@ -100,22 +133,30 @@ export async function createApp(database: Database, assetDirectory: string) {
     if (role !== 'dm' && role !== 'player') throw new Invalid('เลือก DM หรือ Player')
     const roomId = req.body?.roomId
     if (role === 'dm' && (typeof roomId !== 'string' || !uuid.test(roomId))) throw new Forbidden('ต้องใช้ลิงก์เชิญ DM ของห้องนี้')
-    const member: Member = { id: randomUUID(), name: text(req.body?.name), role }
-    const { room, secret } = await database.transaction(async query => {
+    const { room, member, secret, changed } = await database.transaction(async query => {
+      const account = await activeProfile(query, accountCookie, req.headers.cookie, true)
       const { rows } = await query<{ state: Room }>(role === 'dm'
         ? 'SELECT state FROM rooms WHERE id = $1 AND state->>\'dmInvite\' = $2 FOR UPDATE'
         : 'SELECT state FROM rooms WHERE invite = $1 FOR UPDATE',
       role === 'dm' ? [roomId, invite] : [invite])
       if (!rows[0]) throw new Forbidden('ลิงก์เชิญใช้กับบทบาทนี้ไม่ได้หรือหมดอายุแล้ว')
       const room = rows[0].state
-      if (role === 'dm') delete room.dmInvite
-      room.members.push(member)
-      const secret = await issue(query, room, member)
+      let member = account && room.members.find(member => member.profileId === account.id)
+      if (member && role === 'player') return { room, member, changed: false }
+      if (!member) {
+        member = { id: randomUUID(), name: account?.name ?? text(req.body?.name), role, profileId: account?.id }
+        room.members.push(member)
+      }
+      if (role === 'dm') {
+        delete room.dmInvite
+        member.role = 'dm'
+      }
+      const secret = account ? undefined : await issue(query, room, member)
       await save(query, room)
-      return { room, secret }
+      return { room, member, secret, changed: true }
     })
-    setSeat(req, res, room, secret)
-    publish(room)
+    if (secret) setSeat(req, res, room, secret)
+    if (changed) publish(room)
     res.json(snapshot(room, member))
   })
   app.get('/api/rooms/:id', async (req, res) => {
@@ -146,7 +187,8 @@ export async function createApp(database: Database, assetDirectory: string) {
         if (!rows[0].matches) throw new Conflict('รหัสคำสั่งนี้ถูกใช้แล้ว')
         return { receipt: rows[0].result }
       }
-      if (command.revision !== room.revision) throw new Conflict('ข้อมูลเปลี่ยนแล้ว กรุณาลองอีกครั้ง')
+      // An arrow step is relative and checks the current scene, owner and role under the room lock.
+      if (command.type !== 'stepCharacter' && command.revision !== room.revision) throw new Conflict('ข้อมูลเปลี่ยนแล้ว กรุณาลองอีกครั้ง')
       const output = applyCommand(room, member, command)
       await save(query, room)
       const receipt = { revision: room.revision, ...output }
@@ -203,7 +245,7 @@ export async function createApp(database: Database, assetDirectory: string) {
     void memberId(database.query, roomId, req.headers.cookie).then(id => {
       socket.off('error', onSocketError)
       sockets.handleUpgrade(req, socket, head, ws => {
-        subscribers.set(ws, { roomId, memberId: id })
+        subscribers.set(ws, { roomId, memberId: id, accountSecret: profileSecret(accountCookie, req.headers.cookie) })
         ws.on('close', () => subscribers.delete(ws))
         ws.on('error', () => ws.terminate())
         void roomBy(database.query, roomId).then(room => send(ws, room, id)).catch(() => ws.close(1011))

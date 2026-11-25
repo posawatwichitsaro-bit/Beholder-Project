@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { abilities, blankSheet, damageKinds, nextLivingTurn, sizes } from '../shared/model.ts'
-import type { Actor, DamageKind, InventoryItem, LootSkill, Member, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token } from '../shared/model.ts'
+import type { Actor, DamageKind, InventoryItem, LootSkill, Member, ObjectDefinition, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token, TokenRole } from '../shared/model.ts'
 import { areaContains, areaLabels, areaOutline, validArea } from '../shared/area.ts'
 import type { Area } from '../shared/area.ts'
 import { d20, deathSave, die, harm, heal, Invalid, parseDice, rollDice } from './rules.ts'
@@ -39,6 +39,21 @@ function requireDM(member: Member) {
 function owns(member: Member, actor: Actor) {
   if (member.role !== 'dm' && actor.ownerId !== member.id) throw new Forbidden('คุณไม่ได้ควบคุมตัวนี้')
 }
+function readTokenRole(value: unknown): TokenRole {
+  if (value !== 'character' && value !== 'companion') throw new Invalid('เลือก Character Token หรือ Companion Token')
+  return value
+}
+function withTokenRoles(scene: Scene, actors: Actor[]) {
+  const owners = new Map(actors.filter(actor => actor.kind === 'pc').map(actor => [actor.id, actor.ownerId]))
+  const main = new Set(scene.tokens.filter(token => token.role === 'character').map(token => owners.get(token.actorId)))
+  return scene.tokens.map(token => {
+    const owner = owners.get(token.actorId)
+    if (!owner || token.role) return token
+    const role: TokenRole = main.has(owner) ? 'companion' : 'character'
+    main.add(owner)
+    return { ...token, role }
+  })
+}
 function image(value: unknown) {
   if (value === undefined || value === '') return undefined
   if (typeof value !== 'string' || value.length > 32000 || !/^data:image\/(webp|png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) {
@@ -57,6 +72,72 @@ function parseItem(value: unknown, monster: boolean): InventoryItem {
     lootTier: monster ? item.lootTier === 'bonus' ? 'bonus' : 'basic' : undefined
   }
 }
+export function parseObjectDefinition(value: unknown): ObjectDefinition {
+  const input = record(value)
+  const kind = input.kind
+  const fields = {
+    name: text(input.name), description: description(input.description), image: image(input.image),
+    width: number(input.width ?? 1, .5, 50, .5), height: number(input.height ?? 1, .5, 50, .5)
+  }
+  if (kind === 'container') {
+    const items = input.items ?? []
+    if (!Array.isArray(items) || items.length > 50) throw new Invalid('ใส่ของในกล่องได้สูงสุด 50 รายการ')
+    return { ...fields, kind, lockDc: input.lockDc === undefined ? undefined : number(input.lockDc, 1, 30),
+      items: items.map(entry => {
+        const { id: _id, ...item } = parseItem(typeof entry === 'string' ? { name: entry } : entry, false)
+        return item
+      }) }
+  }
+  if (kind === 'structure') {
+    const cover = input.cover
+    if (cover !== 0 && cover !== 2 && cover !== 5 && cover !== 99) throw new Invalid('เลือกประเภทที่กำบัง')
+    return { ...fields, kind, hp: number(input.hp, 1, 9999), ac: number(input.ac, 1, 99), cover }
+  }
+  if (kind === 'prop' || kind === 'item') return { ...fields, kind }
+  throw new Invalid('ประเภท Object ไม่ถูกต้อง')
+}
+
+function placeObject(definition: ObjectDefinition, position: Command): SceneObject {
+  const { kind, name, description, image, width, height } = definition
+  const fields = { id: id(), name, description, image, width, height,
+    x: number(position.x, -1000, 1000, .5), y: number(position.y, -1000, 1000, .5) }
+  if (kind === 'container') return { ...fields, kind, open: false, items: definition.items.map(item => ({ ...item, id: id() })),
+    lock: definition.lockDc === undefined ? undefined : { dc: definition.lockDc, locked: true, tried: [] } }
+  if (kind === 'structure') return { ...fields, kind, hp: definition.hp, maxHp: definition.hp, ac: definition.ac, cover: definition.cover }
+  return { ...fields, kind }
+}
+
+function copyScene(room: Room, source: Scene, name: string) {
+  const monsters: Actor[] = []
+  const copy: Scene = {
+    id: id(), name, cell: source.cell, originX: source.originX, originY: source.originY,
+    map: source.map && { ...source.map },
+    tokens: source.tokens.map(token => {
+      const actor = get(room.actors, token.actorId)
+      let actorId = actor.id
+      if (actor.kind === 'monster') {
+        const duplicate = structuredClone(actor)
+        duplicate.id = actorId = id()
+        duplicate.inventory?.forEach(item => { item.id = id() })
+        monsters.push(duplicate)
+      }
+      return { ...token, id: id(), actorId }
+    }),
+    objects: source.objects?.map(object => {
+      const duplicate = structuredClone(object)
+      duplicate.id = id()
+      if (duplicate.kind === 'container') {
+        duplicate.items.forEach(item => { item.id = id() })
+        if (duplicate.lock) duplicate.lock = { dc: duplicate.lock.dc, locked: duplicate.lock.locked, tried: [] }
+      }
+      return duplicate
+    })
+  }
+  room.actors.push(...monsters)
+  room.scenes.splice(room.scenes.indexOf(source) + 1, 0, copy)
+  return copy.id
+}
+
 function lootSettings(dc: unknown, skill: unknown) {
   if (skill !== 'investigation' && skill !== 'perception') throw new Invalid('เลือกทักษะค้นหา')
   return { lootDc: number(dc, 1, 30), lootSkill: skill as LootSkill }
@@ -121,6 +202,10 @@ export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory
   const input = record(value)
   let sheet = blankSheet(kind)
   sheet.portrait = image(input.portrait)
+  if (kind === 'monster' && input.monsterReference !== undefined) {
+    const reference = record(input.monsterReference)
+    sheet.monsterReference = { statBlock: text(reference.statBlock, 32000), page: reference.page === undefined ? undefined : number(reference.page, 258, 364) }
+  }
   const proficiencies = input.itemProficiency === undefined ? {} : record(input.itemProficiency)
   sheet.itemProficiency = {
     thievesTools: proficiencies.thievesTools === true, sleight: proficiencies.sleight === true,
@@ -178,9 +263,10 @@ export function visibleRolls(room: Room, me: Member) {
 }
 
 export function snapshot(room: Room, me: Member): Snapshot {
+  const publicMember = ({ id, name, role }: Member): Member => ({ id, name, role })
   const dm = me.role === 'dm'
-  const scenes = dm ? room.scenes : room.scenes.filter(scene => scene.id === room.activeSceneId).map(scene => ({
-    ...scene, objects: scene.objects?.map(object => object.kind === 'container' ? {
+  const scenes = (dm ? room.scenes : room.scenes.filter(scene => scene.id === room.activeSceneId)).map(scene => ({
+    ...scene, tokens: withTokenRoles(scene, room.actors), objects: dm ? scene.objects : scene.objects?.map(object => object.kind === 'container' ? {
       ...object, items: !object.open || object.lock?.locked ? [] : object.items,
       lock: object.lock && { ...object.lock, tried: object.lock.tried.filter(id => room.actors.some(actor => actor.id === id && actor.ownerId === me.id)) }
     } : object)
@@ -189,7 +275,7 @@ export function snapshot(room: Room, me: Member): Snapshot {
   const rolls = visibleRolls(room, me)
   const active = scenes.find(scene => scene.id === room.activeSceneId)
   return {
-    id: room.id, name: room.name, revision: room.revision, me, members: room.members,
+    id: room.id, name: room.name, revision: room.revision, me: publicMember(me), members: room.members.map(publicMember),
     activeSceneId: room.activeSceneId, scenes, invite: dm ? room.invite : undefined, dmInvite: dm ? room.dmInvite : undefined,
     actors: room.actors.filter(actor => dm || actor.ownerId === me.id),
     publicActors: room.actors.filter(actor => dm || visible.has(actor.id)).map(({ id, name, kind, size, portrait, hp, maxHp, tempHp, life, lootResult }) =>
@@ -248,6 +334,27 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         room.scenes.push({ id: sceneId, ...fields, tokens: [] })
         room.activeSceneId ??= sceneId
       }
+      return {}
+    }
+    case 'copyScene': {
+      requireDM(member)
+      return { sceneId: copyScene(room, scene(), text(command.name)) }
+    }
+    case 'moveScene': {
+      requireDM(member)
+      const index = room.scenes.indexOf(scene())
+      const offset = command.offset
+      if (offset !== -1 && offset !== 1) throw new Invalid('ระบุทิศทางการย้ายฉาก')
+      const destination = index + offset
+      if (room.scenes[destination]) [room.scenes[index], room.scenes[destination]] = [room.scenes[destination], room.scenes[index]]
+      return {}
+    }
+    case 'deleteScene': {
+      requireDM(member)
+      const removed = scene()
+      const index = room.scenes.indexOf(removed)
+      room.scenes.splice(index, 1)
+      if (room.activeSceneId === removed.id) room.activeSceneId = (room.scenes[index] ?? room.scenes[index - 1])?.id
       return {}
     }
     case 'activate':
@@ -337,21 +444,58 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       return {}
     }
     case 'place': {
-      requireDM(member)
-      const target = scene()
+      const target = board()
+      if (command.templateId || command.kind === 'monster') requireDM(member)
+      if ([command.templateId, command.actorId, command.sheet].filter(value => value !== undefined).length !== 1) throw new Invalid('เลือกชีตสำหรับวาง Token')
       const template = command.templateId ? get(room.templates, command.templateId) : undefined
+      const sheet = command.sheet === undefined ? undefined : parseSheet(command.sheet, command.kind === 'monster' ? 'monster' : 'pc')
       const creature = template ? { ...structuredClone(template.sheet), id: id(), ownerId: member.id, templateId: template.id,
-        inventory: template.sheet.inventory?.map(item => ({ ...item, id: id() })) } : actor()
+        inventory: template.sheet.inventory?.map(item => ({ ...item, id: id() })) }
+        : sheet ? { ...sheet, id: id(), ownerId: member.id } : actor()
+      owns(member, creature)
+      if (creature.kind === 'monster') requireDM(member)
       if (target.tokens.some(token => token.actorId === creature.id)) throw new Invalid('มี Token ของตัวนี้ในฉากแล้ว')
+      const tokens = withTokenRoles(target, room.actors)
+      const hasMain = tokens.some(token => token.role === 'character' && room.actors.some(actor => actor.id === token.actorId && actor.ownerId === creature.ownerId))
+      const role = creature.kind === 'pc' ? command.role === undefined ? hasMain ? 'companion' : 'character' : readTokenRole(command.role) : undefined
+      if (role === 'character' && hasMain) throw new Conflict('ผู้เล่นนี้มี Character Token ในฉากแล้ว เลือก Companion Token หรือเปลี่ยนตัวหลักจากเมนู Token')
+      const token = { id: id(), actorId: creature.id, role,
+        x: number(command.x, -1000, 1000, .5), y: number(command.y, -1000, 1000, .5) }
       if (template) {
         const ordinal = room.actors.filter(item => item.templateId === template.id).length + 1
         creature.name = template.sheet.name + ' ' + ordinal
-        room.actors.push(creature)
       }
-      target.tokens.push({
-        id: id(), actorId: creature.id,
-        x: number(command.x, -1000, 1000, .5), y: number(command.y, -1000, 1000, .5)
+      if (template || sheet) room.actors.push(creature)
+      target.tokens = [...tokens, token]
+      return {}
+    }
+    case 'tokenRole': {
+      const target = board()
+      const tokens = withTokenRoles(target, room.actors)
+      const token = get(tokens, command.tokenId)
+      const creature = get(room.actors, token.actorId)
+      owns(member, creature)
+      if (creature.kind !== 'pc') throw new Invalid('เลือก Token ตัวละคร')
+      const role = readTokenRole(command.role)
+      const owned = new Set(room.actors.filter(actor => actor.ownerId === creature.ownerId).map(actor => actor.id))
+      target.tokens = tokens.map(entry => {
+        if (entry.id === token.id) return { ...entry, role }
+        if (role === 'character' && entry.role === 'character' && owned.has(entry.actorId)) return { ...entry, role: 'companion' }
+        return entry
       })
+      return {}
+    }
+    case 'stepCharacter': {
+      const target = active()
+      const token = get(withTokenRoles(target, room.actors), command.tokenId)
+      if (member.role !== 'player' || token.role !== 'character') throw new Forbidden('ใช้ปุ่มลูกศรกับ Character Token ของตัวเอง')
+      owns(member, get(room.actors, token.actorId))
+      const dx = number(command.dx, -1, 1)
+      const dy = number(command.dy, -1, 1)
+      if (Math.abs(dx) + Math.abs(dy) !== 1) throw new Invalid('ย้ายได้ทีละหนึ่งช่อง')
+      const x = number(token.x + dx, -1000, 1000, .5)
+      const y = number(token.y + dy, -1000, 1000, .5)
+      Object.assign(get(target.tokens, token.id), { x, y })
       return {}
     }
     case 'move': {
@@ -378,25 +522,8 @@ export function applyCommand(room: Room, member: Member, command: Command) {
     case 'importObject': {
       requireDM(member)
       const target = scene()
-      const kind = command.kind
-      const base = {
-        id: id(), name: text(command.name), description: description(command.description), image: image(command.image),
-        x: number(command.x, -1000, 1000, .5), y: number(command.y, -1000, 1000, .5),
-        width: number(command.width ?? 1, .5, 50, .5), height: number(command.height ?? 1, .5, 50, .5)
-      }
-      let imported: SceneObject
-      if (kind === 'container') {
-        const names = command.items ?? []
-        if (!Array.isArray(names) || names.length > 50) throw new Invalid('ใส่ของในกล่องได้สูงสุด 50 รายการ')
-        imported = { ...base, kind, open: false, items: names.map(name => ({ id: id(), name: text(name), description: '' })),
-          lock: command.locked === true ? { dc: number(command.lockDc ?? 15, 1, 30), locked: true, tried: [] } : undefined }
-      } else if (kind === 'structure') {
-        const cover = command.cover
-        if (cover !== 0 && cover !== 2 && cover !== 5 && cover !== 99) throw new Invalid('เลือกประเภทที่กำบัง')
-        const hp = number(command.hp, 1, 9999)
-        imported = { ...base, kind, hp, maxHp: hp, ac: number(command.ac, 1, 99), cover }
-      } else if (kind === 'prop' || kind === 'item') imported = { ...base, kind }
-      else throw new Invalid('ประเภท Object ไม่ถูกต้อง')
+      const definition = parseObjectDefinition(command.definition ?? { ...command, lockDc: command.locked === true ? command.lockDc ?? 15 : undefined })
+      const imported = placeObject(definition, command)
       ;(target.objects ??= []).push(imported)
       return {}
     }
@@ -509,7 +636,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       if (target.combat?.order.some(entry => entry.actorId === token.actorId)) {
         throw new Conflict('ให้นำ Token ออกหลังจบการต่อสู้')
       }
-      target.tokens = target.tokens.filter(item => item.id !== token.id)
+      target.tokens = withTokenRoles(target, room.actors).filter(item => item.id !== token.id)
       return {}
     }
     case 'roll':
