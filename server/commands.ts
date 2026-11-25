@@ -386,6 +386,14 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       if (room.scenes[destination]) [room.scenes[index], room.scenes[destination]] = [room.scenes[destination], room.scenes[index]]
       return {}
     }
+    case 'reorderScenes': {
+      // Drag-and-drop order from the scene strip: the full list of scene ids, each exactly once.
+      requireDM(member)
+      const ids = command.sceneIds
+      if (!Array.isArray(ids) || ids.length !== room.scenes.length || new Set(ids).size !== ids.length) throw new Invalid('ลำดับฉากไม่ครบ')
+      room.scenes = ids.map(sceneId => get(room.scenes, sceneId))
+      return {}
+    }
     case 'deleteScene': {
       requireDM(member)
       const removed = scene()

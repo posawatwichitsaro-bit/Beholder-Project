@@ -289,6 +289,96 @@ test('manage scenes and reuse an account Object in another room', { timeout: 600
   assert.deepEqual(placed, reused)
 })
 
+test('DM reorders scene cards, lines the grid up on the map and tidies up in the management screen', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
+    ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  page.setDefaultTimeout(10000)
+  await page.goto(base)
+  const account = await page.request.post(base + '/api/account/session', { data: {
+    mode: 'register', email: randomUUID() + '@example.com', password: 'back-office-test', name: 'Office DM'
+  } })
+  assert.equal(account.status(), 201)
+  await page.reload()
+  await startTable(page, 'Back office')
+  await openPanel(page, 'ฉากและแผนที่')
+  for (const name of ['Gate', 'Hall', 'Vault']) await createScene(page, name)
+  const roomUrl = base + '/api/rooms/' + roomIdOf(page.url())
+  const room = async (): Promise<Snapshot> => (await page.request.get(roomUrl)).json()
+
+  // Drag the last card onto the first to reorder.
+  const card = (name: string) => page.locator('.scene-row').filter({ has: page.locator('.scene-name', { hasText: new RegExp('^' + name + '$') }) })
+  await card('Vault').dragTo(card('Gate'))
+  await page.locator('.scene-row').first().locator('.scene-name', { hasText: 'Vault' }).waitFor()
+  assert.deepEqual((await room()).scenes.map(scene => scene.name), ['Vault', 'Gate', 'Hall'])
+  await card('Hall').getByRole('button', exact('เปิดฉาก Hall ให้ผู้เล่น')).click()
+  await card('Hall').locator('.scene-badge.live').waitFor()
+
+  // Calibrate the grid by drawing a box over the map.
+  await card('Hall').locator('.scene-item').click()
+  assert.ok(await page.getByRole('button', exact('ปรับ Grid บนภาพ')).isDisabled(), 'calibration needs a map')
+  const upload = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().endsWith('/map'))
+  await page.getByLabel('อัปโหลดแผนที่').setInputFiles({
+    name: 'hall.png', mimeType: 'image/png',
+    buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP9sAAAAASUVORK5CYII=', 'base64')
+  })
+  assert.equal((await upload).status(), 204)
+  // The panel folds away after an upload so the new map is in view.
+  await page.locator('.scene-panel').waitFor({ state: 'detached' })
+  await openPanel(page, 'ฉากและแผนที่')
+  await page.getByRole('button', exact('ปรับ Grid บนภาพ')).click()
+  const calibrator = page.getByRole('region', exact('ปรับ Grid บนภาพ'))
+  await calibrator.waitFor()
+  const box = (await page.locator('canvas').boundingBox())!
+  await page.mouse.move(box.x + 500, box.y + 300)
+  await page.mouse.down()
+  await page.mouse.move(box.x + 580, box.y + 340, { steps: 4 })
+  await page.mouse.move(box.x + 660, box.y + 380, { steps: 4 })
+  await page.mouse.up()
+  await calibrator.getByLabel('กรอบครอบกี่ช่อง (แนวนอน)').fill('2')
+  await calibrator.getByRole('button', exact('เพิ่ม ขนาดช่อง (px)')).click()
+  const cell = Number(await calibrator.locator('.grid-stepper').first().locator('b').textContent())
+  assert.ok(cell > 12 && cell !== 56, 'the drawn box sets the cell size')
+  await calibrator.getByRole('button', exact('บันทึก Grid')).click()
+  await calibrator.waitFor({ state: 'detached' })
+  assert.equal((await room()).scenes.find(scene => scene.name === 'Hall')!.cell, cell)
+
+  // The management screen lists tokens, items and scenes across the whole table.
+  await page.keyboard.press('Control+k')
+  await page.getByRole('combobox').fill('Encounter')
+  await page.keyboard.press('Enter')
+  await page.getByRole('heading', exact('ด่านร้างริมทาง')).waitFor()
+  await page.getByRole('button', exact('ห้องเก็บของ DM')).click()
+  const manage = page.getByRole('dialog', exact('ห้องเก็บของ DM'))
+  await manage.getByRole('row').filter({ hasText: 'ยามด่าน' }).waitFor()
+  const tokensBefore = (await room()).scenes.find(scene => scene.name === 'ด่านร้างริมทาง')!.tokens.length
+  await manage.getByLabel('เลือก ลูกสมุน 1 ใน ด่านร้างริมทาง').check()
+  await manage.getByLabel('เลือก ลูกสมุน 2 ใน ด่านร้างริมทาง').check()
+  await manage.getByRole('button', exact('นำออกจากฉาก')).first().click()
+  await manage.getByRole('toolbar', exact('คำสั่งกับรายการที่เลือก')).waitFor({ state: 'detached' })
+  await manage.getByRole('row').filter({ hasText: /ลูกสมุน [12]/ }).first().waitFor({ state: 'detached' })
+  assert.equal((await room()).scenes.find(scene => scene.name === 'ด่านร้างริมทาง')!.tokens.length, tokensBefore - 2)
+
+  await manage.getByRole('button', { name: /Item และ Loot/ }).click()
+  await manage.getByRole('button', exact('ในกล่อง')).click()
+  await manage.getByRole('row').filter({ hasText: 'ยารักษา' }).waitFor()
+  assert.equal(await manage.getByRole('row').filter({ hasText: 'เหรียญทองแดง' }).count(), 0, 'the filter hides loot carried by monsters')
+
+  await manage.getByRole('button', { name: /ฉากในเรื่อง/ }).click()
+  await manage.getByRole('row').filter({ hasText: 'Gate' }).click()
+  await manage.getByRole('button', exact('เปิดให้ผู้เล่น')).click()
+  await manage.getByRole('row').filter({ hasText: 'Gate' }).getByText('ผู้เล่นเห็นอยู่').waitFor()
+  const opened = await room()
+  assert.equal(opened.scenes.find(scene => scene.id === opened.activeSceneId)?.name, 'Gate')
+  await page.keyboard.press('Escape')
+  await manage.waitFor({ state: 'detached' })
+  await page.keyboard.press('m')
+  await manage.waitFor()
+  await manage.getByRole('button', exact('ปิดห้องเก็บของ')).click()
+  await manage.waitFor({ state: 'detached' })
+})
+
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')

@@ -24,9 +24,13 @@ type Props = {
   drop?: (payload: TokenDragPayload, cell: Point) => void
   /** DM dragged an object to a new cell. */
   moveObject?: (objectId: string, position: Point) => void
+  /** Grid calibration: the next drag draws a box over map cells and reports it in map pixels. */
+  calibrate?: (rect: { x: number; y: number; width: number; height: number }) => void
+  /** Preview grid while calibrating (map pixels). */
+  gridOverride?: { cell: number; originX: number; originY: number }
 }
 const objectColors = { container: '#6e5432', prop: '#4b5e58', structure: '#5c5a66', item: '#6a5470' }
-type Mode = 'pan' | 'measure' | 'select' | 'move' | 'area' | 'object'
+type Mode = 'pan' | 'measure' | 'select' | 'move' | 'area' | 'object' | 'calibrate'
 type Gesture = {
   from: Point; camera: Point; mode: Mode; tokens: Token[]; delta?: Point
   moved: boolean; token?: Token; object?: SceneObject
@@ -51,7 +55,7 @@ function hpBar(ctx: CanvasRenderingContext2D, x: number, y: number, width: numbe
 const editableTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && Boolean(target.closest('input,select,textarea,[contenteditable]'))
 
-export function Board({ room, scene, selected, targetId, select, move, place, placementLabel, mainTokenId, actions, focus, areaKind, preview, onArea, drop, moveObject }: Props) {
+export function Board({ room, scene, selected, targetId, select, move, place, placementLabel, mainTokenId, actions, focus, areaKind, preview, onArea, drop, moveObject, calibrate, gridOverride }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ x: 640, y: 480 })
   const [camera, setCamera] = useState({ x: 36, y: 36 })
@@ -63,6 +67,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
   const [objectDraft, setObjectDraft] = useState<{ id: string; delta: Point }>()
   const [selectedObject, setSelectedObject] = useState<string>()
   const [selection, setSelection] = useState<{ from: Point; to: Point }>()
+  const [calibration, setCalibration] = useState<{ from: Point; to: Point }>()
   const [areaDraft, setAreaDraft] = useState<Area>()
   const [ruler, setRuler] = useState<{ from: Point; to: Point }>()
   const [dropCell, setDropCell] = useState<Point>()
@@ -146,8 +151,9 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
     images.current.clear()
   }, [])
 
-  const grid = scene.cell * zoom
-  const origin = { x: camera.x + scene.originX * zoom, y: camera.y + scene.originY * zoom }
+  const gridCell = gridOverride?.cell ?? scene.cell
+  const grid = gridCell * zoom
+  const origin = { x: camera.x + (gridOverride?.originX ?? scene.originX) * zoom, y: camera.y + (gridOverride?.originY ?? scene.originY) * zoom }
   const pixel = (point: Point): Point => ({ x: origin.x + point.x * grid, y: origin.y + point.y * grid })
   const cell = (point: Point, step = 1): Point => ({
     x: Math.floor((point.x - origin.x) / grid / step) * step,
@@ -383,6 +389,17 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       ctx.font = '14px Sarabun, system-ui'
       ctx.fillText(feet + ' ฟุต', end.x + 15, end.y - 17)
     }
+    if (calibration) {
+      const rect = bounds(calibration.from, calibration.to)
+      ctx.save()
+      ctx.fillStyle = '#e0b87833'
+      ctx.strokeStyle = '#ffd08a'
+      ctx.lineWidth = 2
+      ctx.setLineDash([6, 4])
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
+      ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
+      ctx.restore()
+    }
     if (selection) {
       const rect = bounds(selection.from, selection.to)
       ctx.fillStyle = '#9fc4f033'
@@ -391,7 +408,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
       ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
     }
-  }, [size, map, camera, zoom, grid, scene, room.publicActors, selected, targetId, mainTokenId, draft, objectDraft, selectedObject, ruler, group, selection, imageRevision, outline, effectTime, dropCell])
+  }, [size, map, camera, zoom, grid, scene, room.publicActors, selected, targetId, mainTokenId, draft, objectDraft, selectedObject, ruler, group, selection, imageRevision, outline, effectTime, dropCell, calibration])
 
   function pointer(event: { clientX: number; clientY: number; currentTarget: Element }) {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -446,6 +463,11 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
     if (areaKind && !pan && !place) {
       gesture.current = { from: point, camera, mode: 'area', tokens: [], moved: false }
       setAreaDraft({ kind: areaKind, from: areaPoint(point), to: areaPoint(point) })
+      return
+    }
+    if (calibrate && !pan) {
+      gesture.current = { from: point, camera, mode: 'calibrate', tokens: [], moved: false }
+      setCalibration({ from: point, to: point })
       return
     }
     if (place && tool === 'token' && !pan) { place(cell(point)); return }
@@ -503,6 +525,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
     if (action.mode === 'area' && areaKind) setAreaDraft({ kind: areaKind, from: areaPoint(action.from), to: areaPoint(point) })
     else if (action.mode === 'measure') setRuler({ from: cell(action.from), to: cell(point) })
     else if (action.mode === 'select') setSelection({ from: action.from, to: point })
+    else if (action.mode === 'calibrate') setCalibration({ from: action.from, to: point })
     else if (action.mode === 'move') {
       const step = action.tokens.every(token => span(token) === .5) ? .5 : 1
       action.delta = { x: Math.round(dx / grid / step) * step, y: Math.round(dy / grid / step) * step }
@@ -532,6 +555,11 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       move(action.tokens.map(token => token.id), action.delta)
     } else if (action?.mode === 'object' && action.object && action.delta && (action.delta.x || action.delta.y)) {
       moveObject?.(action.object.id, { x: action.object.x + action.delta.x, y: action.object.y + action.delta.y })
+    } else if (action?.mode === 'calibrate' && calibrate) {
+      const rect = bounds(action.from, pointer(event))
+      const view = transform.current
+      if (rect.width > 4 && rect.height > 4) calibrate({ x: (rect.x - view.camera.x) / view.zoom, y: (rect.y - view.camera.y) / view.zoom, width: rect.width / view.zoom, height: rect.height / view.zoom })
+      setCalibration(undefined)
     } else if (action?.mode === 'select') {
       const rect = bounds(action.from, pointer(event))
       const found = rect.width > 3 && rect.height > 3 ? scene.tokens.filter(token => {
@@ -573,7 +601,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
   const barSheet = selectedToken && room.actors.find(actor => actor.id === selectedToken.actorId)
 
   return <section className="board">
-    <canvas ref={canvas} className={(areaKind ? 'drawing-aoe' : '') + (panning ? ' panning' : '') + (tool === 'measure' ? ' measuring' : '')}
+    <canvas ref={canvas} className={(areaKind || calibrate ? 'drawing-aoe' : '') + (panning ? ' panning' : '') + (tool === 'measure' ? ' measuring' : '')}
       tabIndex={0} aria-label="กระดานแผนที่" onPointerDown={down} onPointerMove={drag} onPointerUp={up}
       onContextMenu={event => {
         event.preventDefault()

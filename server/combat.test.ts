@@ -73,6 +73,16 @@ test('combat remembers who fought in the scene', () => {
   assert.deepEqual(scene.lastParticipants, ['wizard', 'goblin'])
 })
 
+test('the DM reorders scenes by sending the whole new order', () => {
+  const { dm, mira, room } = table()
+  room.scenes.push({ id: 'vault', name: 'Vault', cell: 48, originX: 0, originY: 0, tokens: [] }, { id: 'crypt', name: 'Crypt', cell: 48, originX: 0, originY: 0, tokens: [] })
+  applyCommand(room, dm, { type: 'reorderScenes', sceneIds: ['crypt', 'gate', 'vault'] })
+  assert.deepEqual(room.scenes.map(scene => scene.id), ['crypt', 'gate', 'vault'])
+  assert.throws(() => applyCommand(room, dm, { type: 'reorderScenes', sceneIds: ['crypt', 'gate'] }), /ไม่ครบ/)
+  assert.throws(() => applyCommand(room, dm, { type: 'reorderScenes', sceneIds: ['crypt', 'crypt', 'gate'] }), /ไม่ครบ/)
+  assert.throws(() => applyCommand(room, mira, { type: 'reorderScenes', sceneIds: ['gate', 'crypt', 'vault'] }), /DM/)
+})
+
 test('condition and slot text round-trips; free text stays usable', () => {
   assert.deepEqual(parseConditions('Prone, Poisoned:3, ถูกสาป'), [{ name: 'Prone' }, { name: 'Poisoned', rounds: 3 }, { name: 'ถูกสาป' }])
   assert.deepEqual(tickConditions('Prone, Poisoned:1, Stunned:2'), { value: 'Prone, Stunned:1', expired: ['Poisoned'] })

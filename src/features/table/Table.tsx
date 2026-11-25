@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { blankSheet, objectDefinition, objectLabels, tokenRoleLabels } from '../../../shared/model.ts'
-import type { Actor, ObjectDefinition, Roll, Sheet, Template, TokenRole } from '../../../shared/model.ts'
+import type { Actor, ObjectDefinition, Roll, Scene, Sheet, Template, TokenRole } from '../../../shared/model.ts'
 import type { Area, AreaKind } from '../../../shared/area.ts'
 import { AccountPanel } from '../account/AccountPanel.tsx'
 import { MonsterManual } from '../manual/MonsterManual.tsx'
@@ -22,6 +22,10 @@ import { ObjectEditor, ObjectActions } from '../objects/Objects.tsx'
 import { LootDialog } from '../objects/Inventory.tsx'
 import { SceneForm, SceneOperationForm } from '../scenes/SceneForms.tsx'
 import type { SceneOperation } from '../scenes/SceneForms.tsx'
+import { ScenePanel } from '../scenes/ScenePanel.tsx'
+import { GridCalibrator } from '../scenes/GridCalibrator.tsx'
+import type { GridFit, MapRect } from '../scenes/gridFit.ts'
+import { ManageScreen } from '../manage/ManageScreen.tsx'
 import { tokenDragProps } from '../board/tokenDrag.ts'
 import type { TokenDragPayload, TokenSource } from '../board/tokenDrag.ts'
 import type { AccountProps } from '../entry/Entry.tsx'
@@ -90,6 +94,9 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [older, setOlder] = useState<Roll[]>([])
   const [historyEnded, setHistoryEnded] = useState(false)
   const [saveProficiency, setSaveProficiency] = useState<Record<string, boolean>>({})
+  const [calibrating, setCalibrating] = useState<{ sceneId: string; rect?: MapRect }>()
+  const [gridPreview, setGridPreview] = useState<GridFit>()
+  const [manageOpen, setManageOpen] = useState(false)
   const dm = room.me.role === 'dm'
   const role: Role = dm ? 'dm' : 'player'
   const published = room.scenes.find(item => item.id === room.activeSceneId)
@@ -181,9 +188,16 @@ export function Table({ account, changeAccount }: AccountProps) {
         setObjectPlacement(undefined)
         setPlacementPoint(undefined)
         clearArea()
+        setCalibrating(undefined)
+        setGridPreview(undefined)
         return
       }
       if (typingTarget(event.target) || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return
+      if (shortcutState.current.role === 'dm' && event.key.toLowerCase() === 'm') {
+        event.preventDefault()
+        setManageOpen(true)
+        return
+      }
       const panel = panelForShortcut(event.key, shortcutState.current.role)
       if (panel?.inRail) {
         event.preventDefault()
@@ -258,56 +272,33 @@ export function Table({ account, changeAccount }: AccountProps) {
   const preparing = Boolean(dm && scene && scene.id !== room.activeSceneId)
   const focusMain = () => mainToken && setCameraFocus(current => ({ actorId: mainToken.actorId, sequence: (current?.sequence ?? 0) + 1 }))
 
+  function addDemo() {
+    void send({ type: 'demoEncounter' }).then(ok => { if (ok) switchView(currentRoom().scenes.at(-1)!.id) })
+  }
+  async function uploadMap(target: Scene, file: File) {
+    try {
+      await api(base + '/scenes/' + target.id + '/map', { method: 'PUT', body: file, headers: { 'Content-Type': file.type } })
+      await refresh()
+      closePanels()
+    } catch (error) { setError((error as Error).message) }
+  }
+  /** Line the grid up on the map: show the scene, close panels so the map is free, and wait for a drag. */
+  function beginCalibration(target: Scene) {
+    switchView(target.id)
+    closePanels()
+    setManageOpen(false)
+    setGridPreview(undefined)
+    setCalibrating({ sceneId: target.id })
+  }
+  function endCalibration() { setCalibrating(undefined); setGridPreview(undefined) }
+  const calibratingScene = dm && calibrating?.sceneId === scene?.id ? scene : undefined
+
   const bodies: Record<PanelId, () => ReactNode> = {
-    scenes: () => <>
-      <div className="section-head"><h2>ฉาก</h2>{dm && <button aria-label="สร้างฉาก" onClick={() => setModal('createScene')}>+</button>}</div>
-      {dm && <button className="demo-button" onClick={async () => {
-        if (await send({ type: 'demoEncounter' })) switchView(currentRoom().scenes.at(-1)!.id)
-      }}>เพิ่ม Encounter ด่านร้างริมทาง</button>}
-      <ol className="scene-list">
-        {room.scenes.map((item, index) => <li key={item.id} className="scene-row">
-          <button className={'scene-item ' + (scene?.id === item.id ? 'selected' : '')} aria-current={scene?.id === item.id ? 'true' : undefined}
-            onClick={() => switchView(item.id)}>
-            <span>{item.name}</span>{room.activeSceneId === item.id && <small>เปิดอยู่</small>}
-          </button>
-          {dm && <>
-            <button aria-label={'ย้ายฉาก ' + item.name + ' ขึ้น'} title="ย้ายขึ้น" disabled={index === 0}
-              onClick={() => void send({ type: 'moveScene', sceneId: item.id, offset: -1 })}>↑</button>
-            <button aria-label={'ย้ายฉาก ' + item.name + ' ลง'} title="ย้ายลง" disabled={index === room.scenes.length - 1}
-              onClick={() => void send({ type: 'moveScene', sceneId: item.id, offset: 1 })}>↓</button>
-          </>}
-        </li>)}
-      </ol>
-      {!room.scenes.length && <p className="muted">ยังไม่มีฉาก</p>}
-      {dm && scene && <div className="scene-settings">
-        <button onClick={() => setModal({ sceneId: scene.id })}>ตั้งค่า Grid</button>
-        <button onClick={() => setSceneOperation({ mode: 'copy', scene })}>คัดลอกฉาก</button>
-        <button className="danger" onClick={() => setSceneOperation({ mode: 'delete', scene })}>ลบฉาก</button>
-        {room.scenes.some(item => item.id !== scene.id && item.map) && <select aria-label="ใช้ภาพจากฉากอื่น" value="" onChange={event => {
-          if (event.target.value) void commandHere({ type: 'reuseMap', sourceId: event.target.value })
-        }}><option value="">ใช้ภาพจากฉากอื่น</option>
-          {room.scenes.filter(item => item.id !== scene.id && item.map).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select>}
-        <label className="button file">อัปโหลดแผนที่<input type="file" accept="image/png,image/jpeg,image/webp" onChange={async event => {
-          const file = event.currentTarget.files?.[0]
-          event.currentTarget.value = ''
-          if (!file) return
-          try {
-            await api(base + '/scenes/' + scene.id + '/map', { method: 'PUT', body: file, headers: { 'Content-Type': file.type } })
-            await refresh()
-            closePanels()
-          } catch (error) { setError((error as Error).message) }
-        }} /></label>
-      </div>}
-      {inviteLink && <details className="invite"><summary>เชิญผู้เล่น</summary><input aria-label="ลิงก์เชิญ" readOnly value={inviteLink} onFocus={e => e.target.select()} />
-        <button onClick={() => void copyInvite()}>คัดลอก</button></details>}
-      {dm && <details className="invite"><summary>เชิญ DM</summary>
-        <button onClick={() => void send({ type: 'dmInvite' })}>{dmInviteLink ? 'ออกลิงก์ DM ใหม่' : 'สร้างลิงก์ DM'}</button>
-        {dmInviteLink && <input aria-label="ลิงก์เชิญ DM" readOnly value={dmInviteLink} onFocus={event => event.currentTarget.select()} />}
-      </details>}
-      <p className="muted">{room.members.length} คน · {room.members.map(member => member.name).join(', ')}</p>
-      <a className="home-link" href="/">กลับหน้าเปิดโต๊ะ</a>
-    </>,
+    scenes: () => <ScenePanel room={room} scene={scene} send={send} commandHere={commandHere} switchView={switchView}
+      addDemo={addDemo} createScene={() => setModal('createScene')} editGrid={item => setModal({ sceneId: item.id })}
+      calibrateGrid={beginCalibration} copyScene={item => setSceneOperation({ mode: 'copy', scene: item })}
+      deleteScene={item => setSceneOperation({ mode: 'delete', scene: item })} uploadMap={uploadMap}
+      inviteLink={inviteLink} dmInviteLink={dmInviteLink} copyInvite={() => void copyInvite()} />,
     objects: () => <>
       <div className="section-head"><h2>Object ในฉาก</h2>{dm && scene && <button onClick={() => setObjectImport({ sceneId: scene.id, point: { x: 2, y: 2 } })}>นำเข้า Object</button>}</div>
       <button className="library-shortcut" onClick={openObjectLibrary}>เปิดคลัง Object ส่วนตัว</button>
@@ -414,7 +405,9 @@ export function Table({ account, changeAccount }: AccountProps) {
       ...(scene && preparing ? [{ id: 'publish', label: 'เปิดฉากนี้ให้ผู้เล่น', group: 'DM', keywords: 'publish activate show เปิด', run: () => void commandHere({ type: 'activate' }) }] : []),
       ...(scene ? [{ id: 'grid', label: 'ตั้งค่า Grid ของฉากนี้', group: 'DM', keywords: 'grid cell origin', run: () => setModal({ sceneId: scene.id }) }] : []),
       ...(scene?.tokens.length ? [{ id: 'combat', label: combat ? 'เปิดแผงต่อสู้' : 'เตรียมการต่อสู้', group: 'DM', keywords: 'combat initiative fight', run: () => openPanel('combat') }] : []),
-      { id: 'demo', label: 'เพิ่ม Encounter ด่านร้างริมทาง', group: 'DM', keywords: 'demo encounter goblin', run: () => void send({ type: 'demoEncounter' }).then(ok => { if (ok) switchView(currentRoom().scenes.at(-1)!.id) }) },
+      { id: 'manage', label: 'เปิดห้องเก็บของ DM', group: 'DM', keywords: 'manage token item loot scene จัดการ', shortcut: 'M', run: () => setManageOpen(true) },
+      ...(scene?.map ? [{ id: 'calibrate', label: 'ปรับ Grid บนภาพ', group: 'DM', keywords: 'grid calibrate align map ปรับ', run: () => beginCalibration(scene) }] : []),
+      { id: 'demo', label: 'เพิ่ม Encounter ด่านร้างริมทาง', group: 'DM', keywords: 'demo encounter goblin', run: addDemo },
       { id: 'private-roll', label: privateRoll ? 'เลิกทอยลับ' : 'ทอยลับ (เฉพาะ DM เห็น)', group: 'DM', keywords: 'private secret roll ลับ', run: () => setPrivateRoll(!privateRoll) }
     ] : []),
     { id: 'roll-d20', label: 'ทอย d20', group: 'ลูกเต๋า', keywords: 'roll dice', run: () => void send({ type: 'roll', formula: '1d20' }) },
@@ -431,13 +424,15 @@ export function Table({ account, changeAccount }: AccountProps) {
     <HudTopBar sceneName={scene?.name} roomName={room.name} preparing={preparing} live={Boolean(scene && scene.id === room.activeSceneId)}
       canPublish={preparing} publish={() => void commandHere({ type: 'activate' })}
       railOpen={railOpen} toggleRail={() => setRailOpen(open => !open)} openPalette={() => setPaletteOpen(true)}
-      online={online} me={room.me.name} dm={dm} />
+      openManage={dm ? () => setManageOpen(true) : undefined} online={online} me={room.me.name} dm={dm} />
     <PanelRail items={roleDefs} isPressed={isPressed} choose={choosePanel} open={railOpen} />
     <Dock items={dock.open.map(id => ({ id, title: panelById(id).label, body: bodies[id]() }))}
       pinned={dock.pinned} pin={id => dispatchDock({ type: 'pin', id })} close={id => dispatchDock({ type: 'close', id })} />
     <section className="workspace" aria-label="ฉากปัจจุบัน">
       {scene ? <Board key={scene.id} scene={scene} room={room} selected={selected} targetId={combatOpen ? combatTarget : undefined}
         mainTokenId={mainTokenId}
+        calibrate={calibratingScene ? rect => setCalibrating({ sceneId: calibratingScene.id, rect }) : undefined}
+        gridOverride={calibratingScene ? gridPreview : undefined}
         focus={cameraFocus} areaKind={combatOpen ? areaKind : undefined} preview={combatOpen ? areaPreview : undefined}
         onArea={area => { setAreaPreview(area); setAreaKind(undefined) }}
         select={value => {
@@ -504,6 +499,12 @@ export function Table({ account, changeAccount }: AccountProps) {
       }} />}
       {scene?.combat && scene.id === room.activeSceneId && <TurnBanner scene={scene} room={room} send={commandHere} />}
       <DamageQueue room={room} send={send} />
+      {calibratingScene && <GridCalibrator key={calibratingScene.id} scene={calibratingScene} rect={calibrating?.rect} preview={setGridPreview} cancel={endCalibration}
+        save={async fit => {
+          const ok = await send({ type: 'scene', sceneId: calibratingScene.id, name: calibratingScene.name, ...fit })
+          if (ok) { endCalibration(); setNotice('บันทึก Grid ของ ' + calibratingScene.name + ' แล้ว') }
+          return ok
+        }} />}
     </section>
     {combatOpen && <CombatPanel key={scene?.id} room={room} scene={scene} targetId={combatTarget} setTarget={setCombatTarget}
       shape={areaKind} preview={areaPreview} clearArea={clearArea}
@@ -511,6 +512,17 @@ export function Table({ account, changeAccount }: AccountProps) {
       send={commandHere} close={() => setDmCombat(false)}
       advanced={(acting, target) => <ActorActions key={acting.id} actor={acting} room={room} scene={scene} send={commandHere} combatTarget={target} />} />}
     {(error || notice) && <div className="toast" role={error ? 'alert' : 'status'}>{error || notice}<button aria-label="ปิดข้อความ" onClick={clearMessages}>×</button></div>}
+    {manageOpen && dm && <ManageScreen room={room} send={send} close={() => setManageOpen(false)}
+      openSheet={target => { setManageOpen(false); showActor(target.id) }}
+      goTo={(sceneId, actorId) => {
+        setManageOpen(false)
+        switchView(sceneId)
+        setSelected(actorId)
+        setCameraFocus(current => ({ actorId, sequence: (current?.sequence ?? 0) + 1 }))
+      }}
+      viewScene={sceneId => { setManageOpen(false); switchView(sceneId) }}
+      copyScene={item => setSceneOperation({ mode: 'copy', scene: item })}
+      deleteScene={item => setSceneOperation({ mode: 'delete', scene: item })} />}
     {paletteOpen && <CommandPalette commands={paletteCommands} close={() => setPaletteOpen(false)} />}
     {(modal === 'createScene' || editingScene) && <SceneForm scene={editingScene} save={send} cancel={() => setModal(undefined)} />}
     {sceneOperation && <SceneOperationForm key={sceneOperation.mode + sceneOperation.scene.id} operation={sceneOperation}
