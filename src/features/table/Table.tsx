@@ -7,7 +7,9 @@ import { AccountPanel } from '../account/AccountPanel.tsx'
 import { MonsterManual } from '../manual/MonsterManual.tsx'
 import { Board } from '../board/Board.tsx'
 import { CombatPanel } from '../combat/CombatPanel.tsx'
-import { DamageTypeSelect, TurnRail } from '../combat/CombatEffects.tsx'
+import { DamageTypeSelect } from '../combat/CombatEffects.tsx'
+import { InitiativeBar, TurnBanner } from '../combat/InitiativeBar.tsx'
+import { DamageQueue } from '../combat/DamageQueue.tsx'
 import { SheetEditor } from '../sheets/SheetEditor.tsx'
 import { ActorActions } from '../sheets/ActorActions.tsx'
 import { SheetView } from '../sheets/SheetView.tsx'
@@ -384,22 +386,12 @@ export function Table({ account, changeAccount }: AccountProps) {
       <ol className="rolls">{[...history].reverse().map(roll => <li key={roll.id}>
         <div><small>{roll.name} · {roll.label}</small><br /><span>{roll.formula}{roll.faces.length > 0 && ' · [' + roll.faces.join(', ') + ']'}{roll.modifier ? ' ' + (roll.modifier > 0 ? '+' : '') + roll.modifier : ''}</span>
           {roll.outcome && <small> · {roll.outcome}</small>}</div><strong>{roll.total}</strong>
-        {roll.cast && !roll.cast.resolved && (dm || room.actors.some(item => item.id === roll.targetId)) && <div className="inline damage">
+        {roll.cast && !roll.cast.resolved && !dm && room.actors.some(item => item.id === roll.targetId) && <div className="inline damage">
           <label><input type="checkbox" checked={saveProficiency[roll.id] ?? false}
             onChange={event => setSaveProficiency({ ...saveProficiency, [roll.id]: event.target.checked })} />Proficient</label>
           <button onClick={() => void commandHere({ type: 'spellSave', rollId: roll.id, proficient: saveProficiency[roll.id] })}>ทอยให้ {actorName(roll.cast.targetId)}</button>
         </div>}
-        {dm && roll.targetId && roll.applied === false && <form className="damage damage-form" onSubmit={event => {
-          event.preventDefault()
-          const damageKind = new FormData(event.currentTarget).get('damageKind')
-          void commandHere({ type: 'damage', rollId: roll.id, actorId: roll.targetId, amount: amounts[roll.id] ?? Math.max(0, roll.total), damageKind })
-        }}>
-          <DamageTypeSelect />
-          <div className="inline">
-          <input aria-label="ความเสียหายที่ยืนยัน" type="number" min="0" value={amounts[roll.id] ?? Math.max(0, roll.total)}
-            onChange={e => setAmounts({ ...amounts, [roll.id]: e.target.valueAsNumber })} />
-          <button>ยืนยัน HP</button>
-          </div></form>}
+        {dm && roll.targetId && roll.applied === false && <small className="pending-note">รอยืนยันในคิว “รอการตัดสิน”</small>}
       </li>)}</ol>
       {!historyEnded && history.length >= 40 && <button onClick={async () => {
         try {
@@ -435,7 +427,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     { id: 'home', label: 'กลับหน้าแรก', group: 'โต๊ะ', keywords: 'home lobby leave ออก', run: () => { location.href = '/' } }
   ]
 
-  return <main className={'table hud' + (combatOpen ? ' with-combat' : '') + (showTurnRail ? ' with-turn-rail' : '')}>
+  return <main className={'table hud' + (combatOpen ? ' with-combat' : '') + (showTurnRail ? ' in-combat' : '')}>
     <HudTopBar sceneName={scene?.name} roomName={room.name} preparing={preparing} live={Boolean(scene && scene.id === room.activeSceneId)}
       canPublish={preparing} publish={() => void commandHere({ type: 'activate' })}
       railOpen={railOpen} toggleRail={() => setRailOpen(open => !open)} openPalette={() => setPaletteOpen(true)}
@@ -506,11 +498,13 @@ export function Table({ account, changeAccount }: AccountProps) {
         </li>)}</ol> : <p>ยังไม่มีการทอย</p>}
       </aside>}
       <DiceReveal rolls={room.rolls} />
+      {scene && showTurnRail && <InitiativeBar scene={scene} room={room} send={commandHere} focus={actorId => {
+        if (menuOpen) closePanels()
+        setCameraFocus(current => ({ actorId, sequence: (current?.sequence ?? 0) + 1 }))
+      }} />}
+      {scene?.combat && scene.id === room.activeSceneId && <TurnBanner scene={scene} room={room} send={commandHere} />}
+      <DamageQueue room={room} send={send} />
     </section>
-    {scene && showTurnRail && <TurnRail scene={scene} room={room} focus={actorId => {
-      if (menuOpen) closePanels()
-      setCameraFocus(current => ({ actorId, sequence: (current?.sequence ?? 0) + 1 }))
-    }} />}
     {combatOpen && <CombatPanel key={scene?.id} room={room} scene={scene} targetId={combatTarget} setTarget={setCombatTarget}
       shape={areaKind} preview={areaPreview} clearArea={clearArea}
       chooseArea={kind => { setAreaPreview(undefined); setAreaKind(kind) }}

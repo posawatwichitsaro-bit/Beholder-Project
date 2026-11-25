@@ -7,6 +7,7 @@ import { d20, deathSave, die, harm, heal, Invalid, parseDice, rollDice } from '.
 import { center, isNear, structureCover } from './cover.ts'
 import { createRoadsideEncounter } from './encounter.ts'
 import { bonusForCheck, calculatedSheet, commonSkills } from '../shared/characterStats.ts'
+import { formatConditions, tickConditions } from '../shared/conditions.ts'
 import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared/characterStats.ts'
 
 export class Forbidden extends Error {}
@@ -296,11 +297,12 @@ export function snapshot(room: Room, me: Member): Snapshot {
     id: room.id, name: room.name, revision: room.revision, me: publicMember(me), members: room.members.map(publicMember),
     activeSceneId: room.activeSceneId, scenes, invite: dm ? room.invite : undefined, dmInvite: dm ? room.dmInvite : undefined,
     actors: room.actors.filter(actor => dm || actor.ownerId === me.id),
-    publicActors: room.actors.filter(actor => dm || visible.has(actor.id)).map(({ id, name, kind, size, portrait, hp, maxHp, tempHp, life, lootResult }) =>
-      ({ id, name, kind, size, portrait, hp, maxHp, tempHp, lootResult, lootable: kind === 'monster' && life === 'dead' })),
+    publicActors: room.actors.filter(actor => dm || visible.has(actor.id)).map(({ id, name, kind, size, portrait, hp, maxHp, tempHp, life, lootResult, conditions }) =>
+      ({ id, name, kind, size, portrait, hp, maxHp, tempHp, lootResult, conditions, lootable: kind === 'monster' && life === 'dead' })),
     templates: dm ? room.templates : [],
     rolls: rolls.slice(-40),
     log: visibleLog(room, me).slice(-80),
+    settings: room.settings,
     combatQueue: dm && active ? rolls.filter(roll =>
       (roll.sceneId === active.id || (!roll.sceneId && active.tokens.some(token => token.actorId === roll.targetId))) &&
       (roll.applied === false || (roll.cast && !roll.cast.resolved))) : undefined
@@ -331,6 +333,22 @@ export function applyCommand(room: Room, member: Member, command: Command) {
     const roll = { id: id(), name: member.name, label, privateTo, at: Date.now(), ...result, ...extra }
     room.rolls.push(roll)
     return { rollId: roll.id }
+  }
+  /** Move to the next living combatant; a new round counts down timed conditions. */
+  function advanceTurn(target: Scene, combat: NonNullable<Scene['combat']>) {
+    const next = nextLivingTurn(combat, actorId => get(room.actors, actorId).life === 'dead')
+    if (!next) throw new Invalid('ไม่มีผู้ร่วมต่อสู้ที่ยังมีเทิร์น')
+    if (next.round > combat.round) {
+      addLog(room, { kind: 'combat', sceneId: target.id, text: 'รอบที่ ' + next.round })
+      for (const entry of combat.order) {
+        const creature = room.actors.find(item => item.id === entry.actorId)
+        if (!creature?.conditions) continue
+        const { value, expired } = tickConditions(creature.conditions)
+        creature.conditions = value
+        if (expired.length) addLog(room, { kind: 'combat', sceneId: target.id, text: creature.name + ' พ้นจาก ' + expired.join(', ') })
+      }
+    }
+    Object.assign(combat, next)
   }
   switch (command.type) {
     case 'dmInvite':
@@ -699,11 +717,20 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         const hit = critical || (hitRoll.natural !== 1 && hitRoll.total >= victim.ac + cover)
         const context = { sceneId: target.id, sourceId: creature.id, targetId: victim.id }
         saveRoll((weapon?.name ?? rollType) + ' · ' + creature.name, hitRoll, { ...context, outcome: critical ? 'คริติคัล' : hit ? 'โดน' : 'พลาด' })
-        if (hit) return saveRoll('Damage · ' + victim.name, rollDice(rollType === 'attack' ? weapon?.damage ?? creature.damage : text(command.formula), die, critical), {
+        if (!hit) return {}
+        const receipt = saveRoll('Damage · ' + victim.name, rollDice(rollType === 'attack' ? weapon?.damage ?? creature.damage : text(command.formula), die, critical), {
           ...context, applied: false, critical, damageKind: rollType === 'attack'
             ? (weapon ?? creature.attacks?.find(attack => attack.bonus === creature.attack && attack.damage === creature.damage))?.damageKind : undefined
         })
-        return {}
+        if (room.settings?.autoDamage) {
+          // Table rule: hits apply at once; the DM can still adjust HP afterwards.
+          const damageRoll = room.rolls[room.rolls.length - 1]
+          const kind = damageRoll.damageKind ?? 'untyped'
+          const lost = applyDamage(target, victim, Math.max(0, damageRoll.total), kind, critical)
+          damageRoll.applied = true
+          if (lost > 0) addLog(room, { kind: 'hp', text: damageText(victim, lost, kind), sceneId: target.id })
+        }
+        return receipt
       }
       if (rollType === 'initiative') return saveRoll('Initiative · ' + creature.name, d20(creature.initiative, advantage, disadvantage))
       if (rollType !== 'check' && rollType !== 'save') throw new Invalid('ประเภทการทอยไม่ถูกต้อง')
@@ -770,8 +797,46 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         return { actorId: creature.id, initiative }
       })
       target.combat = { order: order.sort((a, b) => b.initiative - a.initiative), round: 1, turn: 0 }
+      target.lastParticipants = participants as string[]
       addLog(room, { kind: 'combat', sceneId: target.id, text: 'เริ่มการต่อสู้ · ' + target.combat.order.map(entry =>
         get(room.actors, entry.actorId).name + ' ' + entry.initiative).join(', ') })
+      return {}
+    }
+    case 'endTurn': {
+      // A player ends their own character's turn; the DM can end anyone's.
+      const target = active()
+      const combat = target.combat
+      if (!combat) throw new Invalid('ยังไม่ได้เริ่มการต่อสู้')
+      const currentActor = get(room.actors, combat.order[combat.turn].actorId)
+      if (member.role !== 'dm' && (currentActor.ownerId !== member.id || command.actorId !== currentActor.id)) throw new Forbidden('ยังไม่ถึงเทิร์นของคุณ')
+      advanceTurn(target, combat)
+      return {}
+    }
+    case 'previousTurn': {
+      requireDM(member)
+      const combat = active().combat
+      if (!combat) throw new Invalid('ยังไม่ได้เริ่มการต่อสู้')
+      if (combat.turn > 0) combat.turn--
+      else if (combat.round > 1) { combat.round--; combat.turn = combat.order.length - 1 }
+      else throw new Invalid('นี่คือเทิร์นแรกของการต่อสู้แล้ว')
+      return {}
+    }
+    case 'settings': {
+      requireDM(member)
+      const input = record(command.settings)
+      room.settings = { ...room.settings, autoDamage: input.autoDamage === true }
+      return {}
+    }
+    case 'conditions': {
+      const creature = actor()
+      owns(member, creature)
+      if (!Array.isArray(command.conditions) || command.conditions.length > 20) throw new Invalid('เลือก Condition ได้สูงสุด 20 อย่าง')
+      creature.conditions = formatConditions(command.conditions.map(value => {
+        const entry = record(value)
+        const name = text(entry.name, 40)
+        if (name.includes(',') || name.includes(':')) throw new Invalid('ชื่อ Condition ไม่ถูกต้อง')
+        return { name, rounds: entry.rounds === undefined ? undefined : number(entry.rounds, 1, 99) }
+      }))
       return {}
     }
     case 'next':
@@ -791,12 +856,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         const current = order[combat.turn].actorId
         ;[order[index - 1], order[index]] = [order[index], order[index - 1]]
         combat.turn = order.findIndex(entry => entry.actorId === current)
-      } else {
-        const next = nextLivingTurn(combat, actorId => get(room.actors, actorId).life === 'dead')
-        if (!next) throw new Invalid('ไม่มีผู้ร่วมต่อสู้ที่ยังมีเทิร์น')
-        if (next.round > combat.round) addLog(room, { kind: 'combat', sceneId: target.id, text: 'รอบที่ ' + next.round })
-        Object.assign(combat, next)
-      }
+      } else advanceTurn(target, combat)
       return {}
     }
     case 'damage': {

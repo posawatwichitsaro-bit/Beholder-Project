@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
-import type { Actor, DamageKind, Roll, Scene, Snapshot } from '../../../shared/model.ts'
+import type { Actor, Scene, Snapshot } from '../../../shared/model.ts'
 import { nextLivingTurn } from '../../../shared/model.ts'
 import { AreaAttack, DamageTypeSelect } from './CombatEffects.tsx'
 import type { Area, AreaKind } from '../../../shared/area.ts'
@@ -10,31 +10,6 @@ type Props = {
   room: Snapshot; scene?: Scene; targetId: string; setTarget: (id: string) => void
   send: Send; close: () => void; advanced: (actor: Actor, targetId: string) => ReactNode
   shape?: AreaKind; preview?: Area; chooseArea: (kind: AreaKind) => void; clearArea: () => void
-}
-
-function QueueItem({ roll, name, send }: { roll: Roll; name: string; send: Send }) {
-  const [amount, setAmount] = useState(String(Math.max(0, roll.total)))
-  const [proficient, setProficient] = useState(false)
-  const [damageKind, setDamageKind] = useState<DamageKind>(roll.damageKind ?? 'untyped')
-  if (roll.cast) return <div className="combat-result">
-    <strong>{name} · {roll.cast.ability} Save DC {roll.cast.dc}</strong>
-    <small>{roll.label}</small>
-    <label className="inline"><input type="checkbox" checked={proficient} onChange={event => setProficient(event.target.checked)} />มี Proficiency</label>
-    <button onClick={() => void send({ type: 'spellSave', rollId: roll.id, proficient })}>ทอย Save ให้ {name}</button>
-  </div>
-  return <form className="combat-result" onSubmit={event => {
-    event.preventDefault()
-    void send({ type: 'damage', rollId: roll.id, actorId: roll.targetId, amount: Number(amount), damageKind })
-  }}>
-    <strong>{name} · ความเสียหาย {roll.total}{roll.critical ? ' (คริติคัล)' : ''}</strong>
-    <small>{roll.formula} · [{roll.faces.join(', ')}]</small>
-    <DamageTypeSelect value={damageKind} change={setDamageKind} />
-    <div className="inline">
-      <input aria-label={'ความเสียหายต่อ ' + name} required type="number" min={0} max={9999} value={amount} onChange={event => setAmount(event.target.value)} />
-      <button className="primary">หัก HP</button>
-      <button type="button" onClick={() => void send({ type: 'damage', rollId: roll.id, actorId: roll.targetId, amount: 0 })}>ข้ามผล</button>
-    </div>
-  </form>
 }
 
 function TurnActions({ actor, targetId, targets, setTarget, send, advanced, deathSaved }: {
@@ -90,11 +65,12 @@ function TurnActions({ actor, targetId, targets, setTarget, send, advanced, deat
 }
 
 export function CombatPanel({ room, scene, targetId, setTarget, send, close, advanced, shape, preview, chooseArea, clearArea }: Props) {
-  const [excluded, setExcluded] = useState<string[]>([])
+  // One click to start: everyone on the board is in, or whoever fought here last time.
+  const [excluded, setExcluded] = useState<string[]>(() => scene?.lastParticipants
+    ? scene.tokens.map(token => token.actorId).filter(id => !scene.lastParticipants!.includes(id)) : [])
   const [surprised, setSurprised] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [confirmation, setConfirmation] = useState<'next' | 'end'>()
-  const pendingSection = useRef<HTMLElement>(null)
   const fight = scene?.combat
   const current = fight?.order[fight.turn]
   const activeActor = room.actors.find(actor => actor.id === current?.actorId)
@@ -124,12 +100,10 @@ export function CombatPanel({ room, scene, targetId, setTarget, send, close, adv
   return <aside className="combat-panel" aria-label="แผงต่อสู้ DM" aria-busy={busy}>
     <header><div><small>{fight ? 'รอบ ' + fight.round : 'เตรียม Encounter'}</small><h2>{activeActor ? activeActor.name : 'การต่อสู้'}</h2></div>
       <div className="inline">
-        {scenePublished && queue.length > 0 && <button className="combat-pending" onClick={() => {
-          pendingSection.current?.scrollIntoView({ block: 'nearest' })
-          pendingSection.current?.focus({ preventScroll: true })
-        }}>ผลค้าง {queue.length}</button>}
         <button onClick={close} aria-label="ปิดแผงต่อสู้">×</button>
       </div></header>
+    <label className="inline combat-auto"><input type="checkbox" checked={room.settings?.autoDamage === true}
+      onChange={event => void run({ type: 'settings', settings: { autoDamage: event.target.checked } })} />หักความเสียหายอัตโนมัติเมื่อโจมตีโดน</label>
     {activeActor && <div className="combat-vitals">
       {activeActor.portrait && <img src={activeActor.portrait} alt="" />}
       <p><b>HP {activeActor.hp}/{activeActor.maxHp}</b> · AC {activeActor.ac}{activeActor.tempHp > 0 && ' · Temp HP ' + activeActor.tempHp}
@@ -170,10 +144,6 @@ export function CombatPanel({ room, scene, targetId, setTarget, send, close, adv
         {scenePublished && activeActor && <TurnActions key={fight.round + ':' + activeActor.id} actor={activeActor} targetId={targetId}
           targets={targets} setTarget={setTarget} send={run} advanced={advanced} deathSaved={fight.deathSaveAt === fight.round + ':' + activeActor.id} />}
       </>}
-      {scenePublished && queue.length > 0 && <section className="combat-block" aria-label="ผลรอจัดการ" ref={pendingSection} tabIndex={-1}>
-        <h3>ผลรอจัดการ <span>{queue.length}</span></h3>
-        {queue.map(roll => <QueueItem key={roll.id} roll={roll} name={name(roll.targetId)} send={run} />)}
-      </section>}
       {fight && scenePublished && scene && <AreaAttack room={room} scene={scene} preview={preview} shape={shape} choose={chooseArea} clear={clearArea} send={run} />}
       {results.length > 0 && <section className="combat-block"><h3>ผลล่าสุด</h3>
         <ol className="combat-history" aria-live="polite">{results.map(roll => <li key={roll.id}>

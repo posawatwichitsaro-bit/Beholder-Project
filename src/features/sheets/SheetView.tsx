@@ -7,6 +7,8 @@ import type { Skill } from '../../../shared/characterStats.ts'
 import type { Send } from '../../state/useCommand.ts'
 import { HpBar, Tabs } from '../../ui/index.ts'
 import { InventoryPanel } from '../objects/Inventory.tsx'
+import { ConditionEditor } from '../combat/ConditionEditor.tsx'
+import { SlotTracker } from './SlotTracker.tsx'
 
 type Tab = 'overview' | 'actions' | 'spells' | 'inventory' | 'notes'
 type Mode = 'normal' | 'advantage' | 'disadvantage'
@@ -31,7 +33,6 @@ export function SheetView({ actor, scene, room, send, edit, copy }: {
   const [spellName, setSpellName] = useState('')
   const [saveAbility, setSaveAbility] = useState<Ability>('DEX')
   const [half, setHalf] = useState(false)
-  const [slots, setSlots] = useState(actor.slots)
   const [healing, setHealing] = useState(1)
   const targets = room.publicActors.filter(item => item.id !== actor.id && scene?.tokens.some(token => token.actorId === item.id))
   const targetId = targets.some(item => item.id === target) ? target : targets[0]?.id
@@ -49,7 +50,6 @@ export function SheetView({ actor, scene, room, send, edit, copy }: {
     return saved ? bonusForCheck(actor, saved) : abilityModifier(actor.abilities[key])
   }
   const skills = (Object.keys(commonSkills) as Skill[]).filter(key => actor.skillChecks?.[key])
-  const conditions = actor.conditions.split(/[,،]/).map(value => value.trim()).filter(Boolean)
   const attacks = actor.attacks ?? []
 
   const rollOptions = <div className="sheet-roll-options" role="group" aria-label="ตัวเลือกการทอย">
@@ -99,7 +99,7 @@ export function SheetView({ actor, scene, room, send, edit, copy }: {
         <Zap size={14} aria-hidden="true" /><b>{signed(actor.initiative)}</b><span>Init</span></button>
       <div className="sheet-stat"><Footprints size={14} aria-hidden="true" /><b>{actor.speed}</b><span>ฟุต</span></div>
       <div className="sheet-stat"><b>{signed(actor.proficiency)}</b><span>Prof</span></div>
-      {conditions.length > 0 && <div className="sheet-conditions">{conditions.map(item => <span key={item} className="bh-chip" data-active="true">{item}</span>)}</div>}
+      <div className="sheet-conditions"><ConditionEditor actor={actor} send={send} /></div>
     </section>
 
     {rollOptions}
@@ -180,10 +180,7 @@ export function SheetView({ actor, scene, room, send, edit, copy }: {
           <button disabled={!targetId || !spellName.trim()}>ขอ {saveAbility} Save · DC {actor.spellDC}</button>
         </form>
         {actor.spells && <p className="sheet-note">เวท / ความสามารถ · {actor.spells}</p>}
-        <form className="sheet-inline" onSubmit={event => { event.preventDefault(); void send({ type: 'slots', slots, actorId: actor.id }) }}>
-          <label>ช่องเวท<input value={slots} placeholder="ช่องเวทคงเหลือ" onChange={event => setSlots(event.target.value)} /></label>
-          <button>บันทึก</button>
-        </form>
+        <SlotTracker key={actor.slots} actor={actor} send={send} />
       </>}
 
       {tab === 'inventory' && <InventoryPanel key={actor.id} actor={actor} send={send} expanded />}

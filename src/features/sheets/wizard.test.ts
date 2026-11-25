@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildCharacter, suggestedAbilities, weaponAttack } from './wizard.ts'
+import { buildCharacter, spellSlotsFor, suggestedAbilities, weaponAttack } from './wizard.ts'
 
 test('class suggestions place the standard array in priority order', () => {
   assert.deepEqual(suggestedAbilities('Wizard'), { INT: 15, CON: 14, DEX: 13, WIS: 12, CHA: 10, STR: 8 })
@@ -24,6 +24,15 @@ test('a level 3 wizard gets SRD hit points, armor class, saves and spell numbers
   assert.equal(sheet.attack, 1, 'Quarterstaff uses STR −1')
   assert.equal(sheet.damage, '1d6-1')
   assert.deepEqual(sheet.attacks, [{ name: 'Dagger', bonus: 3, damage: '1d4+1', damageKind: 'piercing' }], 'Dagger is finesse: DEX +1')
+})
+
+test('spell slots follow the SRD tables for full, half and pact casters', () => {
+  assert.equal(spellSlotsFor('Wizard', 3), 'L1 4/4, L2 2/2')
+  assert.equal(spellSlotsFor('Cleric', 1), 'L1 2/2')
+  assert.equal(spellSlotsFor('Paladin', 5), 'L1 4/4, L2 2/2', 'half caster uses the full table at half level, rounded up')
+  assert.equal(spellSlotsFor('Warlock', 5), 'L3 2/2')
+  assert.equal(spellSlotsFor('Fighter', 10), '')
+  assert.equal(buildCharacter({ name: 'Lyra', className: 'Wizard', level: 3, abilities: suggestedAbilities('Wizard'), armor: 'Unarmored', shield: false, weapons: [] }).slots, 'L1 4/4, L2 2/2')
 })
 
 test('armour, shields and ranged weapons follow their rules', () => {
