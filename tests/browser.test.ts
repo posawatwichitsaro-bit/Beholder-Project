@@ -118,8 +118,7 @@ test('manage scenes and reuse an account Object in another room', { timeout: 600
   await page.reload()
 
   async function openRoom(name: string, scene: string) {
-    await page.getByLabel('ชื่อห้อง').fill(name)
-    await page.getByRole('button', exact('สร้างห้อง DM')).click()
+    await startTable(page, name)
     await openPanel(page, 'ฉากและแผนที่')
     await createScene(page, scene)
     return base + '/api/rooms/' + roomIdOf(page.url())
@@ -176,6 +175,16 @@ test('manage scenes and reuse an account Object in another room', { timeout: 600
   const placed = (await (await page.request.get(secondRoom)).json()).scenes[0].objects[0]
   assert.deepEqual(placed, reused)
 })
+
+/** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
+async function startTable(page: Page, name: string) {
+  const field = page.getByLabel('ชื่อห้อง')
+  const write = page.getByRole('button', exact('เขียนเรื่องใหม่'))
+  await field.or(write).first().waitFor()
+  if (!await field.isVisible()) await write.click()
+  await field.fill(name)
+  await page.getByRole('button', exact('สร้างห้อง DM')).click()
+}
 
 /** Open a panel from the HUD rail. On narrow screens the rail is folded behind the menu button. */
 async function openPanel(page: Page, name: string) {
@@ -296,7 +305,8 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   for (const [page, name] of [[one, 'Scout player'], [two, 'Mage player']] as const) {
     await page.goto(invite)
     await page.getByLabel('ชื่อที่ใช้บนโต๊ะ').fill(name)
-    assert.deepEqual(await page.getByLabel('บทบาท').locator('option').allTextContents(), ['DM', 'Player'])
+    await page.getByText('คุณจะเข้าร่วมในฐานะผู้เล่น', { exact: true }).waitFor()
+    assert.equal(await page.getByLabel('บทบาท').count(), 0, 'a player invite no longer offers a DM role that would fail')
     await page.getByRole('button', exact('เข้าร่วม')).click()
     await page.getByRole('heading', exact('กระดาน')).waitFor()
   }
@@ -494,17 +504,17 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   assert.equal(await two.getByRole('button', exact('Mage')).count(), 1)
   await two.getByRole('button', exact('Mage')).click()
   await two.getByRole('button', exact('คัดลอกเข้าคลังส่วนตัว')).click()
-  const profile = 'Mage ' + Date.now()
-  await two.getByLabel('ชื่อโปรไฟล์').fill(profile)
-  await two.getByLabel('รหัสผ่านโปรไฟล์').fill('browser-test-pass')
-  await two.getByRole('button', exact('สร้างโปรไฟล์')).click()
+  // A guest saves to the library by creating an account right in the panel; the seat and the draft stay.
+  const library = two.locator('.personal-library')
+  await library.getByLabel('อีเมล').fill('mage-' + randomUUID() + '@example.com')
+  await library.getByLabel('รหัสผ่าน', { exact: true }).fill('browser-test-password')
+  await library.getByLabel('ชื่อตัวละครที่ใช้บนโต๊ะ').fill('Mage player')
+  await library.getByRole('button', exact('สมัครบัญชี')).click()
   await two.getByRole('button', exact('บันทึกเป็นชีตใหม่')).click()
   await two.getByRole('button', exact('บันทึกชีต')).click()
   await two.getByRole('heading', exact('Mage')).waitFor()
   await two.goto(base)
-  await two.getByLabel('ชื่อห้อง').fill('Second table')
-  await two.getByLabel('ชื่อที่ใช้บนโต๊ะ').fill('New role')
-  await two.getByRole('button', exact('สร้างห้อง DM')).click()
+  await startTable(two, 'Second table')
   await openPanel(two, 'คลังส่วนตัว')
   await two.getByRole('button', exact('ใช้ในห้องนี้')).click()
   await two.getByText('คัดลอกชีตเข้าห้องแล้ว').waitFor()

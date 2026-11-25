@@ -102,7 +102,18 @@ function RoomRoute(props: AccountProps) {
     const held = useRoomStore.getState().room
     if (held?.id === id && !accountChanged) { setLoading(false); return }
     let active = true
-    if (accountChanged) useRoomStore.getState().leaveRoom()
+    if (accountChanged && held?.id === id) {
+      // Signing in or out while seated: re-check the seat in the background so the
+      // table (and anything half-done in it, like a sheet waiting to be saved) stays open.
+      api<Snapshot>('/api/rooms/' + id).then(state => {
+        if (active) useRoomStore.getState().accept(state)
+      }).catch(failure => {
+        if (!active) return
+        useRoomStore.getState().leaveRoom()
+        setError(email ? (failure as Error).message : '')
+      })
+      return () => { active = false }
+    }
     setLoading(true)
     api<Snapshot>('/api/rooms/' + id).then(state => {
       if (!active) return
