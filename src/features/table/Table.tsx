@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { blankSheet, objectDefinition, objectLabels, tokenRoleLabels } from '../../../shared/model.ts'
 import type { Actor, ObjectDefinition, Roll, Sheet, Template, TokenRole } from '../../../shared/model.ts'
 import type { Area, AreaKind } from '../../../shared/area.ts'
@@ -16,24 +17,29 @@ import { SceneForm, SceneOperationForm } from '../scenes/SceneForms.tsx'
 import type { SceneOperation } from '../scenes/SceneForms.tsx'
 import { TokenRoleForm } from '../tokens/TokenRoleForm.tsx'
 import type { AccountProps } from '../entry/Entry.tsx'
+import { HudTopBar } from '../shell/HudTopBar.tsx'
+import { PanelRail } from '../shell/PanelRail.tsx'
+import { Dock } from '../shell/Dock.tsx'
+import { CommandPalette } from '../shell/CommandPalette.tsx'
+import type { PaletteCommand } from '../shell/commands.ts'
+import { dockReducer, emptyDock } from '../shell/dock.ts'
+import { groupLabels, panelById, panelForShortcut, panelsFor } from '../shell/panelRegistry.ts'
+import type { PanelId, Role } from '../shell/panelRegistry.ts'
 import { api } from '../../lib/api.ts'
 import { currentRoom, roomPath, useRoomStore } from '../../state/roomStore.ts'
 import { refreshRoom, useRoomConnection } from '../../state/connection.ts'
 import { sendCommand } from '../../state/useCommand.ts'
 import type { Command } from '../../state/useCommand.ts'
 
-type Drawer = 'scenes' | 'sheets' | 'actor' | 'combat' | 'dice' | 'library' | 'objects' | 'account' | 'manual'
 type Point = { x: number; y: number }
 type TokenSource = { actorId: string } | { templateId: string } | { sheet: Sheet }
 type TokenPlacement = { sceneId: string; source: TokenSource; role?: TokenRole }
 const arrowSteps: Record<string, Point> = {
   ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }
 }
-const menuGroups = [
-  { title: 'กระดาน', items: [['scenes', '◇', 'ฉากและแผนที่'], ['sheets', '♙', 'ชีตในห้อง'], ['objects', '▣', 'Object']] },
-  { title: 'การเล่น', items: [['combat', '⚔', 'การต่อสู้'], ['dice', '⬡', 'ลูกเต๋า'], ['manual', '♜', 'Monster Manual']] },
-  { title: 'ส่วนตัว', items: [['library', '▤', 'คลังส่วนตัว'], ['account', '⚙', 'ตั้งค่าบัญชี']] }
-] as const
+const wideScreen = () => typeof matchMedia === 'undefined' || matchMedia('(min-width: 761px)').matches
+const typingTarget = (target: EventTarget | null) =>
+  target instanceof HTMLElement && Boolean(target.closest('input, select, textarea, [contenteditable]'))
 
 /** The table view. Renders only while the store holds a room (see RoomRoute). */
 export function Table({ account, changeAccount }: AccountProps) {
@@ -47,7 +53,10 @@ export function Table({ account, changeAccount }: AccountProps) {
   const notice = useRoomStore(state => state.notice)
   const privateRoll = useRoomStore(state => state.privateRoll)
   const { setError, setNotice, clearMessages, setPrivateRoll } = useRoomStore.getState()
-  const [drawer, setDrawer] = useState<Drawer>()
+  const [dock, dispatchDock] = useReducer(dockReducer, emptyDock)
+  const [dmCombat, setDmCombat] = useState(false)
+  const [railOpen, setRailOpen] = useState(wideScreen)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const [libraryDraft, setLibraryDraft] = useState<Sheet>()
   const [objectDraft, setObjectDraft] = useState<ObjectDefinition>()
   const [librarySection, setLibrarySection] = useState<'sheets' | 'objects'>('sheets')
@@ -75,6 +84,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [historyEnded, setHistoryEnded] = useState(false)
   const [saveProficiency, setSaveProficiency] = useState<Record<string, boolean>>({})
   const dm = room.me.role === 'dm'
+  const role: Role = dm ? 'dm' : 'player'
   const published = room.scenes.find(item => item.id === room.activeSceneId)
   const scene = (dm && focusScene ? room.scenes.find(item => item.id === focusScene) : undefined) ?? published
   const placingObject = objectPlacement?.sceneId === scene?.id ? objectPlacement?.definition : undefined
@@ -87,14 +97,30 @@ export function Table({ account, changeAccount }: AccountProps) {
   const sceneObject = scene?.objects?.find(item => item.id === objectTarget)
   const lootMonster = room.publicActors.find(item => item.id === lootTarget && item.lootable && scene?.tokens.some(token => token.actorId === item.id))
   const combat = scene?.combat
-  const combatOpen = dm && drawer === 'combat'
+  const combatOpen = dm && dmCombat
   const showTurnRail = Boolean(combat && (dm || combat.order.some(entry => room.actors.some(actor => actor.id === entry.actorId))))
-  const menuOpen = Boolean(drawer && !combatOpen)
+  const menuOpen = dock.open.length > 0
   const base = roomPath(room.id)
   const refresh = () => refreshRoom(room.id)
   const send = sendCommand
 
   useRoomConnection(room.id)
+
+  /** Open a panel. The DM's combat tracker is its own side panel, not a dock panel. */
+  function openPanel(id: PanelId, stack = false) {
+    if (dm && id === 'combat') { setDmCombat(true); return }
+    dispatchDock({ type: 'open', id, stack })
+  }
+  function choosePanel(id: PanelId) {
+    setPlacementPoint(undefined)
+    if (dm && id === 'combat') setDmCombat(open => !open)
+    else dispatchDock({ type: 'toggle', id })
+    if (!wideScreen()) setRailOpen(false)
+  }
+  /** Close dock panels (a pinned one stays). */
+  const closePanels = () => dispatchDock({ type: 'closeAll' })
+  const isPressed = (id: PanelId) => id === 'combat' && dm ? dmCombat
+    : dock.open.includes(id) || (id === 'sheets' && dock.open.includes('actor'))
 
   const mainTokenId = mainToken?.id
   const keyboardSceneId = !dm ? scene?.id : undefined
@@ -132,18 +158,31 @@ export function Table({ account, changeAccount }: AccountProps) {
   useEffect(() => { setOlder([]); setHistoryEnded(false) }, [room.activeSceneId])
   useEffect(() => { setCombatTarget(''); clearArea() }, [scene?.id, combat?.round, combat?.turn])
   useEffect(() => { if (!combatOpen) clearArea() }, [combatOpen])
+  const shortcutState = useRef({ role, choosePanel })
+  shortcutState.current = { role, choosePanel }
   useEffect(() => {
     function key(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setPaletteOpen(open => !open)
+        return
+      }
       if (event.defaultPrevented || document.querySelector('.scrim')) return
       if (event.key === 'Escape') {
-        setDrawer(undefined)
+        dispatchDock({ type: 'closeAll' })
+        setDmCombat(false)
         setPlacing(undefined)
         setObjectPlacement(undefined)
         setPlacementPoint(undefined)
         clearArea()
+        return
       }
-      if (!(event.target instanceof HTMLElement) || event.target.closest('input,select,textarea,button,[contenteditable]') || event.altKey || event.ctrlKey || event.metaKey) return
-      if (event.key.toLowerCase() === 't') setDrawer(current => current === 'sheets' ? undefined : 'sheets')
+      if (typingTarget(event.target) || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return
+      const panel = panelForShortcut(event.key, shortcutState.current.role)
+      if (panel?.inRail) {
+        event.preventDefault()
+        shortcutState.current.choosePanel(panel.id)
+      }
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
@@ -155,16 +194,16 @@ export function Table({ account, changeAccount }: AccountProps) {
   const commandHere = (command: Command) => send({ ...command, sceneId: scene?.id })
   function showActor(id: string) {
     setSelected(id)
-    setDrawer('actor')
+    openPanel('actor')
   }
   function saveToLibrary(value: Sheet) {
     setLibraryDraft(value)
     setLibrarySection('sheets')
-    setDrawer('library')
+    openPanel('library')
   }
   function openObjectLibrary() {
     setLibrarySection('objects')
-    setDrawer('library')
+    openPanel('library')
   }
   function hasMain(ownerId: string) {
     return Boolean(scene?.tokens.some(token => token.role === 'character' &&
@@ -174,11 +213,11 @@ export function Table({ account, changeAccount }: AccountProps) {
     setObjectPlacement(undefined)
     if (placementPoint) {
       void placeToken(value, placementPoint).then(ok => {
-        if (ok) { setPlacementPoint(undefined); setDrawer(undefined) }
+        if (ok) { setPlacementPoint(undefined); closePanels() }
       })
     } else {
       setPlacing(value)
-      setDrawer(undefined)
+      closePanels()
     }
   }
   const placeToken = (value: TokenPlacement, point: Point) =>
@@ -189,33 +228,19 @@ export function Table({ account, changeAccount }: AccountProps) {
     if (name !== undefined) setTokenChoice({ placement, name, ownerId })
     else beginPlace(placement)
   }
+  async function copyInvite() {
+    if (!inviteLink) return
+    try { await navigator.clipboard.writeText(inviteLink); setNotice('คัดลอกลิงก์แล้ว') }
+    catch { setNotice('เลือกข้อความในช่องเพื่อคัดลอกลิงก์') }
+  }
   const turnName = combat && actorName(combat.order[combat.turn].actorId)
   const recentRolls = room.rolls.slice(-5).reverse()
   const canPlace = dm && Boolean(scene)
-  const chooseDrawer = (value: Drawer) => {
-    setPlacementPoint(undefined)
-    setDrawer(current => current === value ? undefined : value)
-  }
+  const preparing = Boolean(dm && scene && scene.id !== room.activeSceneId)
+  const focusMain = () => mainToken && setCameraFocus(current => ({ actorId: mainToken.actorId, sequence: (current?.sequence ?? 0) + 1 }))
 
-  return <main className={'table' + (combatOpen ? ' with-combat' : '') + (showTurnRail ? ' with-turn-rail' : '')}>
-    <header className="table-header">
-      <button className="hamburger" aria-label="เมนูโต๊ะ" aria-expanded={menuOpen} aria-controls="table-drawer" onClick={() => setDrawer(menuOpen ? undefined : 'scenes')}>☰</button>
-      <div className="table-location"><h1>{scene?.name ?? 'กระดาน'}</h1><span>{room.name}{dm && scene && scene.id !== room.activeSceneId ? ' · ฉากเตรียม' : ''}</span></div>
-      {dm && scene && room.activeSceneId !== scene.id && <button className="primary publish-scene" onClick={() => void commandHere({ type: 'activate' })}>เปิดให้ผู้เล่น</button>}
-      <div className="identity"><span className={online ? 'online' : 'offline'}>{online ? 'สด' : 'กำลังเชื่อมต่อ'}</span><span>{room.me.name} · {dm ? 'DM' : 'ผู้เล่น'}</span></div>
-    </header>
-    {menuOpen && <button className="drawer-backdrop" aria-label="ปิดเมนูบนกระดาน" onClick={() => { setDrawer(undefined); setPlacementPoint(undefined) }} />}
-    <aside className="table-drawer panel" id="table-drawer" aria-label="เมนูโต๊ะ" hidden={!menuOpen}>
-    <nav className="drawer-nav" aria-label="ระบบในห้อง">
-      {menuGroups.map(group => <div className="drawer-group" key={group.title}>
-        <span className="drawer-group-title">{group.title}</span>
-        <div className="drawer-group-actions">{group.items.filter(([item]) => item !== 'manual' || dm).map(([item, icon, title]) =>
-          <button key={item} aria-pressed={drawer === item || (item === 'sheets' && drawer === 'actor')} onClick={() => chooseDrawer(item)}>
-            <span aria-hidden="true">{icon}</span>{title}
-          </button>)}</div>
-      </div>)}
-    </nav>
-    <div className="drawer-content" hidden={drawer !== 'scenes'}>
+  const bodies: Record<PanelId, () => ReactNode> = {
+    scenes: () => <>
       <div className="section-head"><h2>ฉาก</h2>{dm && <button aria-label="สร้างฉาก" onClick={() => setModal('createScene')}>+</button>}</div>
       {dm && <button className="demo-button" onClick={async () => {
         if (await send({ type: 'demoEncounter' })) switchView(currentRoom().scenes.at(-1)!.id)
@@ -251,34 +276,31 @@ export function Table({ account, changeAccount }: AccountProps) {
           try {
             await api(base + '/scenes/' + scene.id + '/map', { method: 'PUT', body: file, headers: { 'Content-Type': file.type } })
             await refresh()
-            setDrawer(undefined)
+            closePanels()
           } catch (error) { setError((error as Error).message) }
         }} /></label>
       </div>}
       {inviteLink && <details className="invite"><summary>เชิญผู้เล่น</summary><input aria-label="ลิงก์เชิญ" readOnly value={inviteLink} onFocus={e => e.target.select()} />
-        <button onClick={async () => {
-          try { await navigator.clipboard.writeText(inviteLink); setNotice('คัดลอกลิงก์แล้ว') }
-          catch { setNotice('เลือกข้อความในช่องเพื่อคัดลอกลิงก์') }
-        }}>คัดลอก</button></details>}
+        <button onClick={() => void copyInvite()}>คัดลอก</button></details>}
       {dm && <details className="invite"><summary>เชิญ DM</summary>
         <button onClick={() => void send({ type: 'dmInvite' })}>{dmInviteLink ? 'ออกลิงก์ DM ใหม่' : 'สร้างลิงก์ DM'}</button>
         {dmInviteLink && <input aria-label="ลิงก์เชิญ DM" readOnly value={dmInviteLink} onFocus={event => event.currentTarget.select()} />}
       </details>}
       <p className="muted">{room.members.length} คน · {room.members.map(member => member.name).join(', ')}</p>
       <a className="home-link" href="/">กลับหน้าเปิดโต๊ะ</a>
-    </div>
-    <div className="drawer-content" hidden={drawer !== 'objects'}>
+    </>,
+    objects: () => <>
       <div className="section-head"><h2>Object ในฉาก</h2>{dm && scene && <button onClick={() => setObjectImport({ sceneId: scene.id, point: { x: 2, y: 2 } })}>นำเข้า Object</button>}</div>
       <button className="library-shortcut" onClick={openObjectLibrary}>เปิดคลัง Object ส่วนตัว</button>
       {!scene?.objects?.length && <p className="muted">ยังไม่มี Object ในฉาก</p>}
       {scene?.objects?.map(item => <button className="scene-item" key={item.id} onClick={() => setObjectTarget(item.id)}>
         <span>{item.name}</span><small>{objectLabels[item.kind]}</small>
       </button>)}
-    </div>
-    <div className="drawer-content" hidden={drawer !== 'sheets'}>
+    </>,
+    sheets: () => <>
       {placementPoint && <p className="feedback">เลือกชีตหรือมอนสเตอร์เพื่อวางที่ช่อง {placementPoint.x}, {placementPoint.y}</p>}
       <div className="section-head"><h2>ชีต</h2><div className="inline">
-        <button onClick={() => { setLibrarySection('sheets'); setDrawer('library') }}>เปิดคลังชีต</button>
+        <button onClick={() => { setLibrarySection('sheets'); openPanel('library') }}>เปิดคลังชีต</button>
         <button onClick={() => setSheet({ initial: blankSheet() })}>+ ตัวละคร</button>
       </div></div>
       {room.actors.map(item => {
@@ -296,25 +318,21 @@ export function Table({ account, changeAccount }: AccountProps) {
           <button onClick={() => setSheet({ initial: item.sheet, template: item, asTemplate: true })}>{item.sheet.name}</button>
           {scene && <button onClick={() => chooseToken({ templateId: item.id })}>วาง</button>}
         </div>)}</>}
-    </div>
-    {dm && drawer === 'manual' && <div className="drawer-content"><MonsterManual
+    </>,
+    manual: () => <MonsterManual
       addTemplate={sheet => send({ type: 'template', sheet })}
-      placeMonster={scene ? sheet => chooseToken({ sheet }) : undefined} /></div>}
-    <div className="drawer-content" hidden={drawer !== 'library'}>
-      {drawer === 'library' && <PersonalLibrary key={account?.email} useAccount={Boolean(account)} roomName={room.me.name} dm={dm} draft={libraryDraft} clearDraft={() => setLibraryDraft(undefined)}
-        section={librarySection} selectSection={setLibrarySection} objectDraft={objectDraft} clearObjectDraft={() => setObjectDraft(undefined)}
-        placeCharacter={scene ? value => chooseToken({ sheet: value }, value.name) : undefined}
-        placeObject={dm && scene ? definition => {
-          setPlacing(undefined)
-          setObjectPlacement({ sceneId: scene.id, definition })
-          setDrawer(undefined)
-        } : undefined}
-        importSheet={value => send({ type: value.kind === 'monster' ? 'template' : 'sheet', kind: value.kind, sheet: value })} />}
-    </div>
-    <div className="drawer-content account-settings" hidden={drawer !== 'account'}>
-      {drawer === 'account' && <AccountPanel account={account} change={changeAccount} />}
-    </div>
-    {!dm && <div className="drawer-content" hidden={drawer !== 'combat'}>
+      placeMonster={scene ? sheet => chooseToken({ sheet }) : undefined} />,
+    library: () => <PersonalLibrary key={account?.email} useAccount={Boolean(account)} roomName={room.me.name} dm={dm} draft={libraryDraft} clearDraft={() => setLibraryDraft(undefined)}
+      section={librarySection} selectSection={setLibrarySection} objectDraft={objectDraft} clearObjectDraft={() => setObjectDraft(undefined)}
+      placeCharacter={scene ? value => chooseToken({ sheet: value }, value.name) : undefined}
+      placeObject={dm && scene ? definition => {
+        setPlacing(undefined)
+        setObjectPlacement({ sceneId: scene.id, definition })
+        closePanels()
+      } : undefined}
+      importSheet={value => send({ type: value.kind === 'monster' ? 'template' : 'sheet', kind: value.kind, sheet: value })} />,
+    account: () => <div className="account-settings"><AccountPanel account={account} change={changeAccount} /></div>,
+    combat: () => <>
       <div className="section-head"><h2>การต่อสู้</h2></div>
       {combat && <div className="encounter">
         <p>รอบ {combat.round}</p>
@@ -323,21 +341,19 @@ export function Table({ account, changeAccount }: AccountProps) {
         </div>)}
       </div>}
       {!combat && <p className="muted">ยังไม่มีการต่อสู้ในฉากนี้</p>}
-    </div>}
-    <div className="drawer-content" hidden={drawer !== 'actor'}>
-      {actor && <section className="sheet-summary"><div className="section-head"><h2>{actor.name}</h2>
-        <button onClick={() => setSheet({ initial: actor, actor })}>แก้ชีต</button></div>
-        <button className="save-to-library" onClick={() => saveToLibrary(actor)}>คัดลอกเข้าคลังส่วนตัว</button>
-        <InventoryPanel key={actor.id} actor={actor} send={send} />
-        {actor.monsterReference && <details><summary>Stat block{actor.monsterReference.page && ' · SRD หน้า ' + actor.monsterReference.page}</summary><p className="stat-block">{actor.monsterReference.statBlock}</p></details>}
-        <ActorActions key={actor.id} actor={actor} scene={scene} room={room} send={async value => {
-          const ok = await send(value)
-          if (ok && (value.type === 'sheetRoll' || value.type === 'castSave')) setDrawer('dice')
-          return ok
-        }} />
-      </section>}
-    </div>
-    <div className="drawer-content" hidden={drawer !== 'dice'}>
+    </>,
+    actor: () => actor ? <section className="sheet-summary"><div className="section-head"><h2>{actor.name}</h2>
+      <button onClick={() => setSheet({ initial: actor, actor })}>แก้ชีต</button></div>
+      <button className="save-to-library" onClick={() => saveToLibrary(actor)}>คัดลอกเข้าคลังส่วนตัว</button>
+      <InventoryPanel key={actor.id} actor={actor} send={send} />
+      {actor.monsterReference && <details><summary>Stat block{actor.monsterReference.page && ' · SRD หน้า ' + actor.monsterReference.page}</summary><p className="stat-block">{actor.monsterReference.statBlock}</p></details>}
+      <ActorActions key={actor.id} actor={actor} scene={scene} room={room} send={async value => {
+        const ok = await send(value)
+        if (ok && (value.type === 'sheetRoll' || value.type === 'castSave')) openPanel('dice', true)
+        return ok
+      }} />
+    </section> : <p className="muted">เลือกตัวละครจากชีตในห้องหรือจาก Token บนกระดาน</p>,
+    dice: () => <>
       <div className="section-head"><h2>ผลทอย</h2></div>
       {dm && <div className="dice-settings">
         <label className="inline"><input type="checkbox" checked={privateRoll} onChange={event => setPrivateRoll(event.target.checked)} />ทอยลับสำหรับ DM คนนี้</label>
@@ -374,8 +390,39 @@ export function Table({ account, changeAccount }: AccountProps) {
           setHistoryEnded(page.length < 40)
         } catch (error) { setError((error as Error).message) }
       }}>ดูผลทอยก่อนหน้า</button>}
-    </div>
-    </aside>
+    </>
+  }
+
+  const roleDefs = panelsFor(role)
+  const paletteCommands: PaletteCommand[] = [
+    ...roleDefs.filter(panel => panel.inRail).map(panel => ({
+      id: 'panel-' + panel.id, label: 'เปิด ' + panel.label, group: 'แผง · ' + groupLabels[panel.group],
+      keywords: panel.keywords, shortcut: panel.shortcut, run: () => openPanel(panel.id)
+    })),
+    ...(dm ? [
+      { id: 'create-scene', label: 'สร้างฉากใหม่', group: 'DM', keywords: 'scene new ฉาก', run: () => setModal('createScene') },
+      ...(scene && preparing ? [{ id: 'publish', label: 'เปิดฉากนี้ให้ผู้เล่น', group: 'DM', keywords: 'publish activate show เปิด', run: () => void commandHere({ type: 'activate' }) }] : []),
+      ...(scene ? [{ id: 'grid', label: 'ตั้งค่า Grid ของฉากนี้', group: 'DM', keywords: 'grid cell origin', run: () => setModal({ sceneId: scene.id }) }] : []),
+      ...(scene?.tokens.length ? [{ id: 'combat', label: combat ? 'เปิดแผงต่อสู้' : 'เตรียมการต่อสู้', group: 'DM', keywords: 'combat initiative fight', run: () => openPanel('combat') }] : []),
+      { id: 'demo', label: 'เพิ่ม Encounter ด่านร้างริมทาง', group: 'DM', keywords: 'demo encounter goblin', run: () => void send({ type: 'demoEncounter' }).then(ok => { if (ok) switchView(currentRoom().scenes.at(-1)!.id) }) },
+      { id: 'private-roll', label: privateRoll ? 'เลิกทอยลับ' : 'ทอยลับ (เฉพาะ DM เห็น)', group: 'DM', keywords: 'private secret roll ลับ', run: () => setPrivateRoll(!privateRoll) }
+    ] : []),
+    { id: 'roll-d20', label: 'ทอย d20', group: 'ลูกเต๋า', keywords: 'roll dice', run: () => void send({ type: 'roll', formula: '1d20' }) },
+    ...[4, 6, 8, 10, 12, 100].map(die => ({ id: 'roll-d' + die, label: 'ทอย d' + die, group: 'ลูกเต๋า', keywords: 'roll dice', run: () => void send({ type: 'roll', formula: '1d' + die }) })),
+    ...(mainToken ? [{ id: 'focus-main', label: 'ไปที่ ' + actorName(mainToken.actorId), group: 'กระดาน', keywords: 'camera center main character ตัวหลัก', run: focusMain }] : []),
+    ...(inviteLink ? [{ id: 'invite', label: 'คัดลอกลิงก์เชิญผู้เล่น', group: 'โต๊ะ', keywords: 'invite link share เชิญ', run: () => void copyInvite() }] : []),
+    { id: 'close-panels', label: 'ปิดแผงทั้งหมด', group: 'โต๊ะ', keywords: 'close hide escape', shortcut: 'Esc', run: () => { dispatchDock({ type: 'closeAll' }); setDmCombat(false) } },
+    { id: 'home', label: 'กลับหน้าแรก', group: 'โต๊ะ', keywords: 'home lobby leave ออก', run: () => { location.href = '/' } }
+  ]
+
+  return <main className={'table hud' + (combatOpen ? ' with-combat' : '') + (showTurnRail ? ' with-turn-rail' : '')}>
+    <HudTopBar sceneName={scene?.name} roomName={room.name} preparing={preparing} live={Boolean(scene && scene.id === room.activeSceneId)}
+      canPublish={preparing} publish={() => void commandHere({ type: 'activate' })}
+      railOpen={railOpen} toggleRail={() => setRailOpen(open => !open)} openPalette={() => setPaletteOpen(true)}
+      online={online} me={room.me.name} dm={dm} />
+    <PanelRail items={roleDefs} isPressed={isPressed} choose={choosePanel} open={railOpen} />
+    <Dock items={dock.open.map(id => ({ id, title: panelById(id).label, body: bodies[id]() }))}
+      pinned={dock.pinned} pin={id => dispatchDock({ type: 'pin', id })} close={id => dispatchDock({ type: 'close', id })} />
     <section className="workspace" aria-label="ฉากปัจจุบัน">
       {scene ? <Board key={scene.id} scene={scene} room={room} selected={selected} targetId={combatOpen ? combatTarget : undefined}
         mainTokenId={mainTokenId}
@@ -394,13 +441,13 @@ export function Table({ account, changeAccount }: AccountProps) {
         actions={(token, point, object) => {
           if (object) return [{ label: 'โต้ตอบกับ Object', run: () => setObjectTarget(object.id) }]
           if (!token) return [
-            { label: 'วาง Token ที่นี่', run: () => { setPlacementPoint(point); setDrawer('sheets') } },
+            { label: 'วาง Token ที่นี่', run: () => { setPlacementPoint(point); openPanel('sheets') } },
             ...(canPlace ? [
               { label: 'นำเข้า Object ที่นี่', run: () => setObjectImport({ sceneId: scene.id, point }) },
               { label: 'เปิดคลัง Object ส่วนตัว', run: openObjectLibrary },
               { label: 'ตั้งค่า Grid', run: () => setModal({ sceneId: scene.id }) }
             ] : []),
-            { label: 'เปิดลูกเต๋า', run: () => setDrawer('dice') }
+            { label: 'เปิดลูกเต๋า', run: () => openPanel('dice') }
           ]
           const accessible = room.actors.find(item => item.id === token.actorId)
           const lootable = room.publicActors.find(item => item.id === token.actorId && item.lootable)
@@ -416,22 +463,21 @@ export function Table({ account, changeAccount }: AccountProps) {
               { label: 'นำ Token ออกจากฉาก', disabled: combat?.order.some(entry => entry.actorId === token.actorId),
                 run: () => void commandHere({ type: 'removeToken', tokenId: token.id }) }
             ] : []),
-            { label: 'เปิดการต่อสู้', run: () => setDrawer('combat') }
+            { label: 'เปิดการต่อสู้', run: () => openPanel('combat') }
           ]
         }} />
         : <div className="empty"><p>{dm ? 'สร้างฉากเพื่อเริ่มจัดกระดาน' : 'รอ DM เปิดฉาก'}</p>
             {dm && <button className="primary" onClick={() => setModal('createScene')}>สร้างฉาก</button>}</div>}
       {(placing || placingObject) && <button className="cancel-placement" onClick={() => { setPlacing(undefined); setObjectPlacement(undefined) }}>ยกเลิกการวาง</button>}
       {!placing && !placingObject && <div className="board-status">
-        {mainToken && <button className="main-token-control" title="คลิกเพื่อไปที่ตัวละครหลัก" onClick={() =>
-          setCameraFocus(current => ({ actorId: mainToken.actorId, sequence: (current?.sequence ?? 0) + 1 }))}>
+        {mainToken && <button className="main-token-control" title="คลิกเพื่อไปที่ตัวละครหลัก" onClick={focusMain}>
           <kbd>↑ ↓ ← →</kbd><span>{actorName(mainToken.actorId)}</span>
         </button>}
-        {combat ? <button onClick={() => chooseDrawer('combat')}>รอบ {combat.round} · {turnName}</button>
-          : dm && scene?.tokens.length ? <button onClick={() => chooseDrawer('combat')}>เตรียมการต่อสู้</button> : null}
+        {combat ? <button onClick={() => choosePanel('combat')}>รอบ {combat.round} · {turnName}</button>
+          : dm && scene?.tokens.length ? <button onClick={() => choosePanel('combat')}>เตรียมการต่อสู้</button> : null}
       </div>}
       {(!dm || !hideTray) && <aside className="dice-tray" aria-label="ถาดผลเต๋า">
-        <header><button onClick={() => chooseDrawer('dice')}>ผลทอยของโต๊ะ</button>
+        <header><button onClick={() => choosePanel('dice')}>ผลทอยของโต๊ะ</button>
           {dm && <button aria-label="ปิดถาดผลเต๋าของฉัน" onClick={() => setHideTray(true)}>×</button>}</header>
         {recentRolls.length ? <ol aria-live="polite">{recentRolls.map(roll => <li key={roll.id}>
           <span><b>{roll.name}</b> · {roll.label}{roll.privateTo ? ' · ลับ' : ''}{roll.outcome ? ' · ' + roll.outcome : ''}</span><strong>{roll.total}</strong>
@@ -439,15 +485,16 @@ export function Table({ account, changeAccount }: AccountProps) {
       </aside>}
     </section>
     {scene && showTurnRail && <TurnRail scene={scene} room={room} focus={actorId => {
-      if (menuOpen) setDrawer(undefined)
+      if (menuOpen) closePanels()
       setCameraFocus(current => ({ actorId, sequence: (current?.sequence ?? 0) + 1 }))
     }} />}
     {combatOpen && <CombatPanel key={scene?.id} room={room} scene={scene} targetId={combatTarget} setTarget={setCombatTarget}
       shape={areaKind} preview={areaPreview} clearArea={clearArea}
       chooseArea={kind => { setAreaPreview(undefined); setAreaKind(kind) }}
-      send={commandHere} close={() => setDrawer(undefined)}
+      send={commandHere} close={() => setDmCombat(false)}
       advanced={(acting, target) => <ActorActions key={acting.id} actor={acting} room={room} scene={scene} send={commandHere} combatTarget={target} />} />}
     {(error || notice) && <div className="toast" role={error ? 'alert' : 'status'}>{error || notice}<button aria-label="ปิดข้อความ" onClick={clearMessages}>×</button></div>}
+    {paletteOpen && <CommandPalette commands={paletteCommands} close={() => setPaletteOpen(false)} />}
     {(modal === 'createScene' || editingScene) && <SceneForm scene={editingScene} save={send} cancel={() => setModal(undefined)} />}
     {visibleChoice && <TokenRoleForm name={visibleChoice.name} hasMain={hasMain(visibleChoice.ownerId)} cancel={() => setTokenChoice(undefined)}
       save={role => { setTokenChoice(undefined); beginPlace({ ...visibleChoice.placement, role }) }} />}
@@ -485,6 +532,6 @@ export function Table({ account, changeAccount }: AccountProps) {
     {sheet && <SheetEditor initial={sheet.initial} editInventory={!sheet.actor} copy={sheet.template ? () => { saveToLibrary(sheet.template!.sheet); setSheet(undefined) } : undefined}
       cancel={() => setSheet(undefined)} save={value => void send({
       type: sheet.asTemplate ? 'template' : 'sheet', actorId: sheet.actor?.id, templateId: sheet.template?.id, kind: value.kind, sheet: value
-    }).then(ok => { if (ok) { setSheet(undefined); setDrawer('sheets') } })} />}
+    }).then(ok => { if (ok) { setSheet(undefined); openPanel('sheets') } })} />}
   </main>
 }

@@ -3,6 +3,16 @@
  * kit can sit beside the legacy stylesheet while screens move over one by one.
  */
 
+/* Legacy `button:hover` / `button[aria-pressed]` set a background with higher
+   specificity than a single class; restate the kit's own colours for those states. */
+.bh-button:hover, .bh-button[aria-pressed] { background: var(--_bg); border-color: var(--_line); }
+.bh-icon-button:hover { background: var(--bh-surface); border-color: var(--bh-line); }
+.bh-on-parchment .bh-icon-button:hover { background: transparent; border-color: var(--bh-parchment-line); }
+.bh-tab:hover, .bh-tab[aria-selected] { background: transparent; }
+.bh-chip:hover { background: transparent; }
+.bh-chip[aria-pressed=true]:hover { background: #4a2f55; }
+.bh-bookmark:hover { background: var(--_tab, var(--bh-tab-1)); }
+
 /* ---------- Button ---------- */
 .bh-button {
   --_bg: var(--bh-surface-2);
