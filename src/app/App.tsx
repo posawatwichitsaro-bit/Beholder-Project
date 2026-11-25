@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, usePa
 import type { Account, Snapshot } from '../../shared/model.ts'
 import { api } from '../lib/api.ts'
 import { useRoomStore } from '../state/roomStore.ts'
+import { applyDisplayPrefs, usePrefs } from '../state/prefs.ts'
 import { Entry } from '../features/entry/Entry.tsx'
 import type { AccountProps } from '../features/entry/Entry.tsx'
 import { Table } from '../features/table/Table.tsx'
@@ -27,6 +28,9 @@ export function App() {
       .finally(() => setLoading(false))
   }, [])
   useSessionWatch(account, setAccount)
+  const uiScale = usePrefs(state => state.uiScale)
+  const reduceMotion = usePrefs(state => state.reduceMotion)
+  useEffect(() => applyDisplayPrefs({ uiScale, reduceMotion }), [uiScale, reduceMotion])
   if (loading) return <main className="entry"><p>กำลังเปิดโต๊ะ…</p></main>
   const props: AccountProps = { account, changeAccount: setAccount }
   return <BrowserRouter>

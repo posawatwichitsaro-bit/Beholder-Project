@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { chromium } from 'playwright-core'
-import type { Page } from 'playwright-core'
+import type { Browser, Page } from 'playwright-core'
 import { blankSheet } from '../shared/model.ts'
 import type { Snapshot } from '../shared/model.ts'
 
@@ -11,13 +11,28 @@ const exact = (name: string) => ({ name, exact: true })
 /** Room id from a table URL: `/room/:id` (current) or `/?room=id` (links issued before the router). */
 const roomIdOf = (url: string) => /\/room\/([^/?#]+)/.exec(new URL(url).pathname)?.[1] ?? new URL(url).searchParams.get('room')
 
+/**
+ * A browser seat that has already seen the first-run tour, so the tour card
+ * never sits over what a test clicks. The tour itself has its own test.
+ */
+async function seat(browser: Browser, options?: Parameters<Browser['newPage']>[0]) {
+  const page = await browser.newPage(options)
+  await page.addInitScript(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('beholder.prefs') ?? '{}') ?? {}
+      localStorage.setItem('beholder.prefs', JSON.stringify({ ...stored, tourSeen: { dm: true, player: true } }))
+    } catch { /* storage blocked: the tour shows, and Esc closes it */ }
+  })
+  return page
+}
+
 test('sign up with a character name, rename in the room and return with a fresh session', { timeout: 60000 }, async t => {
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
     ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
   t.after(() => browser.close())
-  const dm = await browser.newPage()
-  const guest = await browser.newPage()
-  const returning = await browser.newPage()
+  const dm = await seat(browser)
+  const guest = await seat(browser)
+  const returning = await seat(browser)
   const email = 'test-' + randomUUID() + '@example.com'
   const password = 'test-account-pass'
 
@@ -77,7 +92,7 @@ test('import a supplied D&D Beyond PDF and save a playable sheet', {
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
     ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
   t.after(() => browser.close())
-  const page = await browser.newPage()
+  const page = await seat(browser)
   await page.goto(base)
   await page.getByLabel('ชื่อห้อง').fill('Sheet import verification')
   await page.getByLabel('ชื่อที่ใช้บนโต๊ะ').fill('DM')
@@ -107,7 +122,7 @@ test('a new player builds a character step by step and rolls from the sheet', { 
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
     ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
   t.after(() => browser.close())
-  const page = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  const page = await seat(browser, { viewport: { width: 1280, height: 850 } })
   page.setDefaultTimeout(10000)
   const opened = await page.request.post(base + '/api/rooms', { data: { name: 'Wizard test', member: 'DM' } })
   const room: Snapshot = await opened.json()
@@ -165,8 +180,8 @@ test('a player ends their own turn; timed conditions and spell slots are tracked
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
     ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
   t.after(() => browser.close())
-  const dm = await browser.newPage({ viewport: { width: 1280, height: 850 } })
-  const player = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  const dm = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  const player = await seat(browser, { viewport: { width: 1280, height: 850 } })
   dm.setDefaultTimeout(10000)
   player.setDefaultTimeout(10000)
   const room: Snapshot = await (await dm.request.post(base + '/api/rooms', { data: { name: 'Turn test', member: 'DM' } })).json()
@@ -221,7 +236,7 @@ test('manage scenes and reuse an account Object in another room', { timeout: 600
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
     ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
   t.after(() => browser.close())
-  const page = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  const page = await seat(browser, { viewport: { width: 1280, height: 850 } })
   page.setDefaultTimeout(10000)
   await page.goto(base)
   const account = await page.request.post(base + '/api/account/session', { data: {
@@ -293,7 +308,7 @@ test('DM reorders scene cards, lines the grid up on the map and tidies up in the
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
     ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
   t.after(() => browser.close())
-  const page = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  const page = await seat(browser, { viewport: { width: 1280, height: 850 } })
   page.setDefaultTimeout(10000)
   await page.goto(base)
   const account = await page.request.post(base + '/api/account/session', { data: {
@@ -379,6 +394,59 @@ test('DM reorders scene cards, lines the grid up on the map and tidies up in the
   await manage.waitFor({ state: 'detached' })
 })
 
+test('first visit shows the role tour once; display settings stay on this device', { timeout: 45000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
+    ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  page.setDefaultTimeout(10000)
+  await page.goto(base)
+  await page.getByLabel('ชื่อห้อง').fill('Tour table')
+  await page.getByLabel('ชื่อที่ใช้บนโต๊ะ').fill('New DM')
+  await page.getByRole('button', exact('สร้างห้อง DM')).click()
+
+  const tour = page.getByRole('dialog', exact('ยินดีต้อนรับสู่โต๊ะของคุณ'))
+  await tour.waitFor()
+  await page.getByRole('button', exact('ถัดไป')).click()
+  await page.getByRole('heading', exact('เริ่มจากฉาก')).waitFor()
+  // The spotlight glides to the step target, then surrounds it.
+  await page.waitForFunction(() => {
+    const spot = document.querySelector('.tour-spot')?.getBoundingClientRect()
+    const target = document.querySelector('#hud-rail button[aria-label="ฉากและแผนที่"]')?.getBoundingClientRect()
+    return Boolean(spot && target && spot.left <= target.left && spot.right >= target.right && spot.top <= target.top && spot.bottom >= target.bottom)
+  })
+  await page.getByRole('button', exact('ก่อนหน้า')).click()
+  await page.getByRole('heading', exact('ยินดีต้อนรับสู่โต๊ะของคุณ')).waitFor()
+  await page.keyboard.press('Escape')
+  await page.locator('.tour').waitFor({ state: 'detached' })
+  // The empty board says what to do next.
+  await page.getByRole('button', exact('ลองด้วย Encounter ตัวอย่าง')).click()
+  await page.getByRole('heading', exact('ด่านร้างริมทาง')).waitFor()
+
+  await openPanel(page, 'ตั้งค่าการแสดงผล')
+  await page.getByRole('button', exact('110%')).click()
+  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize), '17.6px')
+  await page.getByLabel('ลดแอนิเมชัน').check()
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.motion), 'reduce')
+  await page.getByLabel('แสดงเส้น Grid บนกระดาน').uncheck()
+  assert.equal(await page.getByRole('button', exact('แสดง Grid')).getAttribute('aria-pressed'), 'false')
+
+  await page.reload()
+  await page.getByRole('heading', exact('ด่านร้างริมทาง')).waitFor()
+  assert.equal(await page.locator('.tour').count(), 0, 'the tour does not come back after it was closed')
+  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize), '17.6px')
+  assert.equal(await page.getByRole('button', exact('แสดง Grid')).getAttribute('aria-pressed'), 'false')
+  await page.keyboard.press('g')
+  assert.equal(await page.getByRole('button', exact('แสดง Grid')).getAttribute('aria-pressed'), 'true')
+
+  await openPanel(page, 'ตั้งค่าการแสดงผล')
+  await page.getByRole('button', exact('เริ่มทัวร์แนะนำอีกครั้ง')).click()
+  await page.getByRole('heading', exact('ยินดีต้อนรับสู่โต๊ะของคุณ')).waitFor()
+  for (let step = 0; step < 5; step++) await page.getByRole('button', exact('ถัดไป')).click()
+  await page.getByRole('button', exact('เริ่มเล่น')).click()
+  await page.locator('.tour').waitFor({ state: 'detached' })
+})
+
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')
@@ -401,8 +469,8 @@ test('a player places an owned main and a library companion, then drives the mai
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
     ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
   t.after(() => browser.close())
-  const dm = await browser.newPage()
-  const player = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  const dm = await seat(browser)
+  const player = await seat(browser, { viewport: { width: 1280, height: 850 } })
   const opened = await dm.request.post(base + '/api/rooms', { data: { name: 'Arrow verification', member: 'DM' } })
   assert.equal(opened.status(), 201)
   const initial: Snapshot = await opened.json()
@@ -509,7 +577,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
     ? { executablePath: process.env.BEHOLDER_BROWSER }
     : { channel: 'msedge' })
   t.after(() => browser.close())
-  const dm = await browser.newPage({ viewport: { width: 1440, height: 950 } })
+  const dm = await seat(browser, { viewport: { width: 1440, height: 950 } })
   dm.setDefaultTimeout(10000)
   await dm.goto(base)
   await dm.getByLabel('ชื่อห้อง').fill('Beholder browser verification')
@@ -518,8 +586,8 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await openPanel(dm, 'ฉากและแผนที่')
   await dm.getByText('เชิญผู้เล่น', { exact: true }).click()
   const invite = await dm.getByLabel('ลิงก์เชิญ').inputValue()
-  const one = await browser.newPage()
-  const two = await browser.newPage()
+  const one = await seat(browser)
+  const two = await seat(browser)
   one.setDefaultTimeout(10000)
   two.setDefaultTimeout(10000)
   for (const [page, name] of [[one, 'Scout player'], [two, 'Mage player']] as const) {
@@ -767,7 +835,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
 test('DM searches the SRD, saves a monster template and places the creature with its reference', { timeout: 45000 }, async t => {
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
   t.after(() => browser.close())
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+  const page = await seat(browser, { viewport: { width: 1280, height: 800 } })
   const response = await page.request.post(base + '/api/rooms', { data: { name: 'Bestiary test', member: 'DM' } })
   assert.equal(response.status(), 201)
   const room: Snapshot = await response.json()

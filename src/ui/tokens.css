@@ -100,6 +100,16 @@
   --bh-ui-scale: 1;
 }
 
+/* Personal setting: UI size. Text and rem-based spacing follow the root font size. */
+html { font-size: calc(100% * var(--bh-ui-scale)); }
+
+/* Personal setting: reduce motion even when the system does not ask for it. */
+:root[data-motion='reduce'] { --bh-fast: 0ms; --bh-medium: 0ms; --bh-slow: 0ms; }
+:root[data-motion='reduce'] *, :root[data-motion='reduce'] *::before, :root[data-motion='reduce'] *::after {
+  animation-duration: 1ms !important; animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important; scroll-behavior: auto !important;
+}
+
 /* Cormorant's default old-style figures make "14" read like "I4"; numbers must read at a glance. */
 body { font-variant-numeric: lining-nums; }
 

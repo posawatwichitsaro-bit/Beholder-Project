@@ -10,6 +10,7 @@ import './features/dice/dice.css'
 import './features/combat/combat.css'
 import './features/scenes/scenes.css'
 import './features/manage/manage.css'
+import './features/help/help.css'
 import { createRoot } from 'react-dom/client'
 import { App } from './app/App.tsx'
 

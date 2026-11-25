@@ -26,6 +26,8 @@ import { ScenePanel } from '../scenes/ScenePanel.tsx'
 import { GridCalibrator } from '../scenes/GridCalibrator.tsx'
 import type { GridFit, MapRect } from '../scenes/gridFit.ts'
 import { ManageScreen } from '../manage/ManageScreen.tsx'
+import { SettingsPanel } from '../help/SettingsPanel.tsx'
+import { Tour } from '../help/Tour.tsx'
 import { tokenDragProps } from '../board/tokenDrag.ts'
 import type { TokenDragPayload, TokenSource } from '../board/tokenDrag.ts'
 import type { AccountProps } from '../entry/Entry.tsx'
@@ -38,6 +40,7 @@ import { dockReducer, emptyDock } from '../shell/dock.ts'
 import { groupLabels, panelById, panelForShortcut, panelsFor } from '../shell/panelRegistry.ts'
 import type { PanelId, Role } from '../shell/panelRegistry.ts'
 import { api } from '../../lib/api.ts'
+import { EmptyState } from '../../ui/index.ts'
 import { currentRoom, roomPath, useRoomStore } from '../../state/roomStore.ts'
 import { refreshRoom, useRoomConnection } from '../../state/connection.ts'
 import { sendCommand } from '../../state/useCommand.ts'
@@ -97,6 +100,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [calibrating, setCalibrating] = useState<{ sceneId: string; rect?: MapRect }>()
   const [gridPreview, setGridPreview] = useState<GridFit>()
   const [manageOpen, setManageOpen] = useState(false)
+  const [touring, setTouring] = useState(false)
   const dm = room.me.role === 'dm'
   const role: Role = dm ? 'dm' : 'player'
   const published = room.scenes.find(item => item.id === room.activeSceneId)
@@ -118,6 +122,12 @@ export function Table({ account, changeAccount }: AccountProps) {
   const send = sendCommand
 
   useRoomConnection(room.id)
+  // First visit as this role on this device: show the tour once.
+  useEffect(() => { if (!usePrefs.getState().tourSeen[role]) setTouring(true) }, [role])
+  function endTour() {
+    setTouring(false)
+    usePrefs.getState().update({ tourSeen: { ...usePrefs.getState().tourSeen, [role]: true } })
+  }
 
   /** Open a panel. The DM's combat tracker is its own side panel, not a dock panel. */
   function openPanel(id: PanelId, stack = false) {
@@ -302,7 +312,8 @@ export function Table({ account, changeAccount }: AccountProps) {
     objects: () => <>
       <div className="section-head"><h2>Object ในฉาก</h2>{dm && scene && <button onClick={() => setObjectImport({ sceneId: scene.id, point: { x: 2, y: 2 } })}>นำเข้า Object</button>}</div>
       <button className="library-shortcut" onClick={openObjectLibrary}>เปิดคลัง Object ส่วนตัว</button>
-      {!scene?.objects?.length && <p className="muted">ยังไม่มี Object ในฉาก</p>}
+      {!scene?.objects?.length && <EmptyState title="ยังไม่มี Object ในฉาก"
+        hint={dm ? 'คลิกขวาที่ช่องบนกระดานแล้วเลือก “นำเข้า Object ที่นี่” หรือวางจากคลังส่วนตัว' : 'กล่อง ประตู และสิ่งของที่ DM วางในฉากจะแสดงที่นี่'} />}
       {scene?.objects?.map(item => <button className="scene-item" key={item.id} onClick={() => setObjectTarget(item.id)}>
         <span>{item.name}</span><small>{objectLabels[item.kind]}</small>
       </button>)}
@@ -313,6 +324,8 @@ export function Table({ account, changeAccount }: AccountProps) {
         <button onClick={() => { setLibrarySection('sheets'); openPanel('library') }}>เปิดคลังชีต</button>
         <button onClick={() => setWizard(true)}>+ ตัวละคร</button>
       </div></div>
+      {!room.actors.length && <EmptyState title="ยังไม่มีชีตในห้อง"
+        hint={dm ? 'สร้างมอนสเตอร์จาก “+ ต้นแบบ” ด้านล่าง หรือค้นใน Monster Manual (N)' : 'กด “+ ตัวละคร” เพื่อสร้างทีละขั้น หรือเปิดคลังชีตเพื่อใช้ตัวละครเดิม'} />}
       {room.actors.map(item => {
         const token = scene?.tokens.find(token => token.actorId === item.id)
         const roleLabel = token?.role && tokenRoleLabels[token.role]
@@ -325,6 +338,7 @@ export function Table({ account, changeAccount }: AccountProps) {
         </div>
       })}
       {dm && <><div className="section-head"><h2>มอนสเตอร์</h2><button onClick={() => setSheet({ initial: blankSheet('monster'), asTemplate: true })}>+ ต้นแบบ</button></div>
+        {!room.templates.length && <EmptyState title="ยังไม่มีต้นแบบมอนสเตอร์" hint="ค้นจาก Monster Manual (N) แล้วบันทึกเป็นต้นแบบ หรือกด “+ ต้นแบบ” เพื่อเขียนเอง" />}
         {room.templates.map(item => <div className="actor-item" key={item.id} {...(scene ? tokenDragProps({ source: { templateId: item.id } }) : {})}>
           <button onClick={() => setSheet({ initial: item.sheet, template: item, asTemplate: true })}>{item.sheet.name}</button>
           {scene && <button onClick={() => chooseToken({ templateId: item.id })}>วาง</button>}
@@ -346,6 +360,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       } : undefined}
       importSheet={value => send({ type: value.kind === 'monster' ? 'template' : 'sheet', kind: value.kind, sheet: value })} />,
     account: () => <div className="account-settings"><AccountPanel account={account} change={changeAccount} /></div>,
+    settings: () => <SettingsPanel role={role} replayTour={() => { closePanels(); setManageOpen(false); setTouring(true) }} />,
     combat: () => <>
       <div className="section-head"><h2>การต่อสู้</h2></div>
       {combat && <div className="encounter">
@@ -354,7 +369,7 @@ export function Table({ account, changeAccount }: AccountProps) {
           <button onClick={() => room.actors.some(item => item.id === entry.actorId) && showActor(entry.actorId)}>{actorName(entry.actorId)}</button><b>{entry.initiative}</b>
         </div>)}
       </div>}
-      {!combat && <p className="muted">ยังไม่มีการต่อสู้ในฉากนี้</p>}
+      {!combat && <EmptyState title="ยังไม่มีการต่อสู้ในฉากนี้" hint="เมื่อ DM เริ่มการต่อสู้ ลำดับเทิร์นจะขึ้นที่ด้านบนของกระดาน และจะมีป้ายบอกเมื่อถึงเทิร์นของคุณ" />}
     </>,
     actor: () => actor ? <SheetView key={actor.id} actor={actor} scene={scene} room={room}
       edit={() => setSheet({ initial: actor, actor })} copy={() => saveToLibrary(actor)}
@@ -362,7 +377,7 @@ export function Table({ account, changeAccount }: AccountProps) {
         const ok = await send(value)
         if (ok && (value.type === 'sheetRoll' || value.type === 'castSave')) openPanel('dice', true)
         return ok
-      }} /> : <p className="muted">เลือกตัวละครจากชีตในห้องหรือจาก Token บนกระดาน</p>,
+      }} /> : <EmptyState title="ยังไม่ได้เลือกตัวละคร" hint="เลือกจากชีตในห้อง (T) หรือคลิก Token บนกระดาน" />,
     log: () => <AdventureLog room={room} send={send} />,
     dice: () => <>
       <div className="section-head"><h2>ผลทอย</h2></div>
@@ -417,6 +432,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     ...(mainToken ? [{ id: 'focus-main', label: 'ไปที่ ' + actorName(mainToken.actorId), group: 'กระดาน', keywords: 'camera center main character ตัวหลัก', run: focusMain }] : []),
     ...(inviteLink ? [{ id: 'invite', label: 'คัดลอกลิงก์เชิญผู้เล่น', group: 'โต๊ะ', keywords: 'invite link share เชิญ', run: () => void copyInvite() }] : []),
     { id: 'close-panels', label: 'ปิดแผงทั้งหมด', group: 'โต๊ะ', keywords: 'close hide escape', shortcut: 'Esc', run: () => { dispatchDock({ type: 'closeAll' }); setDmCombat(false) } },
+    { id: 'tour', label: 'เริ่มทัวร์แนะนำ', group: 'ช่วยเหลือ', keywords: 'tour help guide ทัวร์ ช่วยเหลือ วิธีใช้', run: () => { closePanels(); setManageOpen(false); setTouring(true) } },
     { id: 'home', label: 'กลับหน้าแรก', group: 'โต๊ะ', keywords: 'home lobby leave ออก', run: () => { location.href = '/' } }
   ]
 
@@ -475,8 +491,14 @@ export function Table({ account, changeAccount }: AccountProps) {
             { label: 'เปิดการต่อสู้', run: () => openPanel('combat') }
           ]
         }} />
-        : <div className="empty"><p>{dm ? 'สร้างฉากเพื่อเริ่มจัดกระดาน' : 'รอ DM เปิดฉาก'}</p>
-            {dm && <button className="primary" onClick={() => setModal('createScene')}>สร้างฉาก</button>}</div>}
+        : <div className="empty">{dm
+          ? <EmptyState title="สร้างฉากเพื่อเริ่มจัดกระดาน" hint="ตั้งชื่อฉาก อัปโหลดแผนที่ แล้ววาง Token หรือลองเล่นจาก Encounter ตัวอย่างที่มีมอนสเตอร์พร้อมแล้ว">
+              <button className="primary" onClick={() => setModal('createScene')}>สร้างฉาก</button>
+              <button onClick={addDemo}>ลองด้วย Encounter ตัวอย่าง</button>
+            </EmptyState>
+          : <EmptyState title="รอ DM เปิดฉาก" hint="ระหว่างนี้สร้างตัวละครไว้ก่อนได้ พอ DM เปิดฉากแล้วค่อยลากลงกระดาน">
+              <button className="primary" onClick={() => setWizard(true)}>สร้างตัวละคร</button>
+            </EmptyState>}</div>}
       {(placing || placingObject) && <button className="cancel-placement" onClick={() => { setPlacing(undefined); setObjectPlacement(undefined) }}>ยกเลิกการวาง</button>}
       {!placing && !placingObject && <div className="board-status">
         {mainToken && <button className="main-token-control" title="คลิกเพื่อไปที่ตัวละครหลัก" onClick={focusMain}>
@@ -490,7 +512,7 @@ export function Table({ account, changeAccount }: AccountProps) {
           {dm && <button aria-label="ปิดถาดผลเต๋าของฉัน" onClick={() => setHideTray(true)}>×</button>}</header>
         {recentRolls.length ? <ol aria-live="polite">{recentRolls.map(roll => <li key={roll.id}>
           <span><b>{roll.name}</b> · {roll.label}{roll.privateTo ? ' · ลับ' : ''}{roll.outcome ? ' · ' + roll.outcome : ''}</span><strong>{roll.total}</strong>
-        </li>)}</ol> : <p>ยังไม่มีการทอย</p>}
+        </li>)}</ol> : <p>ยังไม่มีการทอย · กด D เพื่อเปิดลูกเต๋า</p>}
       </aside>}
       <DiceReveal rolls={room.rolls} />
       {scene && showTurnRail && <InitiativeBar scene={scene} room={room} send={commandHere} focus={actorId => {
@@ -523,6 +545,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       viewScene={sceneId => { setManageOpen(false); switchView(sceneId) }}
       copyScene={item => setSceneOperation({ mode: 'copy', scene: item })}
       deleteScene={item => setSceneOperation({ mode: 'delete', scene: item })} />}
+    {touring && <Tour key={role} role={role} close={endTour} />}
     {paletteOpen && <CommandPalette commands={paletteCommands} close={() => setPaletteOpen(false)} />}
     {(modal === 'createScene' || editingScene) && <SceneForm scene={editingScene} save={send} cancel={() => setModal(undefined)} />}
     {sceneOperation && <SceneOperationForm key={sceneOperation.mode + sceneOperation.scene.id} operation={sceneOperation}

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PointerEvent } from 'react'
-import { Crosshair, Maximize, Minus, MousePointer2, MoreHorizontal, Plus, Ruler } from 'lucide-react'
+import { Crosshair, Grid3x3, Maximize, Minus, MousePointer2, MoreHorizontal, Plus, Ruler } from 'lucide-react'
 import { damageKinds, sizes } from '../../../shared/model.ts'
 import { areaContains, areaOutline, validArea } from '../../../shared/area.ts'
 import type { Area, AreaKind, AreaOutline } from '../../../shared/area.ts'
@@ -11,6 +11,7 @@ import type { Point } from './gestures.ts'
 import { carriesToken, readTokenDrag } from './tokenDrag.ts'
 import { parseConditions } from '../../../shared/conditions.ts'
 import type { TokenDragPayload } from './tokenDrag.ts'
+import { usePrefs } from '../../state/prefs.ts'
 
 type Action = { label: string; run: () => void; disabled?: boolean }
 type Props = {
@@ -106,6 +107,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || document.querySelector('.scrim') || editableTarget(event.target)) return
       if (event.key.toLowerCase() === 'r') setTool('measure')
       if (event.key.toLowerCase() === 'v') setTool('token')
+      if (event.key.toLowerCase() === 'g') usePrefs.getState().update({ showGrid: !usePrefs.getState().showGrid })
       if (event.key === 'Escape') { setGroup([]); setSelectedObject(undefined); setRuler(undefined) }
     }
     const keyUp = (event: KeyboardEvent) => {
@@ -152,6 +154,9 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
   }, [])
 
   const gridCell = gridOverride?.cell ?? scene.cell
+  // Calibration always shows the grid: it is what the DM is lining up.
+  const gridPref = usePrefs(state => state.showGrid)
+  const showGrid = gridPref || Boolean(calibrate)
   const grid = gridCell * zoom
   const origin = { x: camera.x + (gridOverride?.originX ?? scene.originX) * zoom, y: camera.y + (gridOverride?.originY ?? scene.originY) * zoom }
   const pixel = (point: Point): Point => ({ x: origin.x + point.x * grid, y: origin.y + point.y * grid })
@@ -235,11 +240,13 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
     ctx.fillRect(0, 0, size.x, size.y)
     if (map) ctx.drawImage(map, camera.x, camera.y, map.width * zoom, map.height * zoom)
     const wrap = (value: number) => ((value % grid) + grid) % grid
-    ctx.beginPath()
-    ctx.strokeStyle = map ? '#140d0a99' : '#f5e3c01c'
-    for (let x = wrap(origin.x); x < size.x; x += grid) { ctx.moveTo(x, 0); ctx.lineTo(x, size.y) }
-    for (let y = wrap(origin.y); y < size.y; y += grid) { ctx.moveTo(0, y); ctx.lineTo(size.x, y) }
-    ctx.stroke()
+    if (showGrid) {
+      ctx.beginPath()
+      ctx.strokeStyle = map ? '#140d0a99' : '#f5e3c01c'
+      for (let x = wrap(origin.x); x < size.x; x += grid) { ctx.moveTo(x, 0); ctx.lineTo(x, size.y) }
+      for (let y = wrap(origin.y); y < size.y; y += grid) { ctx.moveTo(0, y); ctx.lineTo(size.x, y) }
+      ctx.stroke()
+    }
     function drawArea(shape: AreaOutline, color: string) {
       ctx.save()
       ctx.beginPath()
@@ -408,7 +415,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
       ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
     }
-  }, [size, map, camera, zoom, grid, scene, room.publicActors, selected, targetId, mainTokenId, draft, objectDraft, selectedObject, ruler, group, selection, imageRevision, outline, effectTime, dropCell, calibration])
+  }, [size, map, camera, zoom, grid, scene, room.publicActors, selected, targetId, mainTokenId, draft, objectDraft, selectedObject, ruler, group, selection, imageRevision, outline, effectTime, dropCell, calibration, showGrid])
 
   function pointer(event: { clientX: number; clientY: number; currentTarget: Element }) {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -638,8 +645,10 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
         <MousePointer2 size={16} aria-hidden="true" /><span className="board-tool-label">เลือก Token</span></button>
       <button aria-label="วัดระยะ" aria-pressed={tool === 'measure'} onClick={() => setTool('measure')} title="วัดระยะ (R)">
         <Ruler size={16} aria-hidden="true" /><span className="board-tool-label">วัดระยะ</span></button>
+      <button aria-label="แสดง Grid" aria-pressed={gridPref} onClick={() => usePrefs.getState().update({ showGrid: !gridPref })} title="แสดงหรือซ่อนเส้น Grid (G)">
+        <Grid3x3 size={16} aria-hidden="true" /></button>
       <span className="board-tools-sep" aria-hidden="true" />
-      <button aria-label="ซูมออก" title="ซูมออก" onClick={() => zoomAt(1 / 1.2, center)}><Minus size={16} aria-hidden="true" /></button>
+      <button aria-label="ซูมออก" title="ซูมออก (ล้อเมาส์ หรือหยิกสองนิ้ว)" onClick={() => zoomAt(1 / 1.2, center)}><Minus size={16} aria-hidden="true" /></button>
       <button aria-label="พอดีกระดาน" title="พอดีกระดาน" className="board-zoom" onClick={fit}>{Math.round(zoom * 100)}%</button>
       <button aria-label="ซูมเข้า" title="ซูมเข้า" onClick={() => zoomAt(1.2, center)}><Plus size={16} aria-hidden="true" /></button>
       <button aria-label="คำสั่งกระดาน" title="คำสั่งของ Token ที่เลือก หรือของกระดาน" onClick={() => {
