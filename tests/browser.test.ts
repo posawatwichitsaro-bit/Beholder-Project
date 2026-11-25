@@ -146,6 +146,19 @@ test('a new player builds a character step by step and rolls from the sheet', { 
   await page.locator('.rolls').getByText(/INT check · Lyra/).waitFor()
   await sheet.getByRole('tab', exact('Actions')).click()
   await sheet.getByRole('button', exact('Damage การโจมตีหลัก')).waitFor()
+
+  // Every new roll gets a short dice animation; the Adventure Log keeps chat and rolls in one timeline.
+  await page.locator('.dice-reveal').waitFor({ state: 'attached' })
+  await openPanel(page, 'บันทึกการผจญภัย')
+  const log = page.getByRole('region', exact('บันทึกการผจญภัย')).locator('.adventure-log-list')
+  await log.getByText(/INT check/).waitFor()
+  await page.getByLabel('ข้อความถึงโต๊ะ').fill('ตามมาทางนี้')
+  await page.getByRole('button', exact('ส่ง')).click()
+  await log.getByText('ตามมาทางนี้').waitFor()
+  await page.getByLabel('ข้อความถึงโต๊ะ').fill('/r 1d4')
+  await page.getByRole('button', exact('ส่ง')).click()
+  await log.locator('.log-roll').filter({ hasText: '1d4' }).waitFor()
+  assert.equal(await page.getByLabel('ข้อความถึงโต๊ะ').inputValue(), '')
 })
 
 test('manage scenes and reuse an account Object in another room', { timeout: 60000 }, async t => {

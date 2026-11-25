@@ -6,6 +6,7 @@ import './features/shell/shell.css'
 import './features/entry/lobby.css'
 import './features/board/board.css'
 import './features/sheets/sheet.css'
+import './features/dice/dice.css'
 import { createRoot } from 'react-dom/client'
 import { App } from './app/App.tsx'
 

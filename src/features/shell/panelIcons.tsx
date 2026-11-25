@@ -1,4 +1,4 @@
-import { Library, Map as MapIcon, Package, ScrollText, Settings, Skull, Swords, UserRound } from 'lucide-react'
+import { BookOpenText, Library, Map as MapIcon, Package, ScrollText, Settings, Skull, Swords, UserRound } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { D20Icon } from '../../ui/index.ts'
 import type { PanelId } from './panelRegistry.ts'
@@ -12,6 +12,7 @@ export const panelIcons: Record<PanelId, ReactNode> = {
   objects: <Package size={size} />,
   combat: <Swords size={size} />,
   dice: <D20Icon size={size} />,
+  log: <BookOpenText size={size} />,
   manual: <Skull size={size} />,
   library: <Library size={size} />,
   account: <Settings size={size} />
@@ -25,6 +26,7 @@ export const panelTabs: Record<PanelId, string> = {
   objects: 'var(--bh-tab-3)',
   combat: 'var(--bh-crimson)',
   dice: 'var(--bh-tab-4)',
+  log: '#6a4a2a',
   manual: 'var(--bh-tab-3)',
   library: 'var(--bh-tab-5)',
   account: 'var(--bh-surface-3)'

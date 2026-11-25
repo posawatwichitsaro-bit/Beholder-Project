@@ -1,0 +1,73 @@
+/* Dice reveal animation and the Adventure Log — Grimoire theme. */
+
+/* ---------- Dice reveal ---------- */
+.dice-reveal {
+  position: absolute; z-index: 3; left: 50%; bottom: 112px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 14px; padding: 10px 18px 10px 12px; pointer-events: none;
+  background: #1f1612f2; border: 1px solid var(--bh-line-strong); border-radius: var(--bh-radius-pill);
+  box-shadow: var(--bh-shadow-3);
+  animation: dice-in .25s var(--bh-ease) both, dice-out .35s ease-in 1.35s forwards;
+}
+.dice-reveal[data-outcome=critical], .dice-reveal[data-outcome=fumble] { animation: dice-in .25s var(--bh-ease) both, dice-out .35s ease-in 2.25s forwards; }
+.table:has(> .hud-dock:not([hidden])) .dice-reveal { left: calc((100% - var(--hud-rail) - var(--hud-dock-width) - 2 * var(--hud-gap)) / 2); }
+.dice-reveal-die { position: relative; width: 76px; height: 76px; display: grid; place-items: center; animation: dice-tumble .75s cubic-bezier(.2, .9, .25, 1.15) both; }
+.dice-reveal-die polygon { fill: #3a2418; stroke: var(--bh-brass-bright); stroke-width: 3; stroke-linejoin: round; }
+.dice-reveal-face::after {
+  content: attr(data-text); position: absolute; inset: 0; display: grid; place-items: center;
+  font: 700 1.9rem var(--bh-font-display); color: #fbefd8; opacity: 0; animation: dice-face .2s ease-out .6s forwards;
+}
+.dice-reveal-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dice-reveal-who::after { content: attr(data-text); font-size: var(--bh-text-sm); color: var(--bh-text-muted); white-space: nowrap; }
+.dice-reveal-total::after { content: attr(data-text); font: 700 2rem/1 var(--bh-font-display); color: var(--bh-text-strong); opacity: 0; animation: dice-face .2s ease-out .7s forwards; }
+.dice-reveal-banner::after { content: attr(data-text); font: 700 1rem var(--bh-font-heading); letter-spacing: .08em; opacity: 0; animation: dice-face .2s ease-out .8s forwards; }
+.dice-reveal[data-outcome=critical] { border-color: #ffd08a; box-shadow: 0 0 0 2px #ffd08a66, 0 0 40px #ffb84a99, var(--bh-shadow-3); }
+.dice-reveal[data-outcome=critical] polygon { fill: #6b4a10; stroke: #ffd36b; }
+.dice-reveal[data-outcome=critical] .dice-reveal-banner::after { color: #ffd36b; text-shadow: 0 0 12px #ffb84a; }
+.dice-reveal[data-outcome=critical] .dice-reveal-die { animation: dice-tumble .75s cubic-bezier(.2, .9, .25, 1.15) both, dice-glow 1s ease-in-out .75s 2; }
+.dice-reveal[data-outcome=fumble] { border-color: #c0302a; }
+.dice-reveal[data-outcome=fumble] polygon { fill: #4a1410; stroke: #e0473a; }
+.dice-reveal[data-outcome=fumble] .dice-reveal-banner::after { color: #ff8f80; }
+.dice-reveal[data-outcome=fumble] .dice-reveal-die { animation: dice-tumble .75s cubic-bezier(.2, .9, .25, 1.15) both, dice-shake .45s ease-in-out .78s; }
+@keyframes dice-in { from { opacity: 0; transform: translate(-50%, 12px); } }
+@keyframes dice-out { to { opacity: 0; transform: translate(-50%, 8px); } }
+@keyframes dice-tumble { 0% { transform: rotate(-560deg) scale(.35); opacity: 0; } 60% { opacity: 1; } 100% { transform: rotate(0) scale(1); } }
+@keyframes dice-face { from { opacity: 0; transform: scale(1.4); } to { opacity: 1; transform: none; } }
+@keyframes dice-glow { 50% { filter: drop-shadow(0 0 14px #ffd36b); } }
+@keyframes dice-shake { 20%, 60% { transform: translateX(-6px) rotate(-4deg); } 40%, 80% { transform: translateX(6px) rotate(4deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .dice-reveal-die, .dice-reveal[data-outcome] .dice-reveal-die { animation: none; }
+  .dice-reveal-face::after, .dice-reveal-total::after, .dice-reveal-banner::after { animation: none; opacity: 1; }
+}
+@media (max-width: 760px) { .dice-reveal { bottom: 150px; } .table:has(> .hud-dock:not([hidden])) .dice-reveal { left: 50%; } }
+
+/* ---------- Adventure Log ---------- */
+.adventure-log { display: flex; flex-direction: column; gap: 8px; min-height: 100%; }
+.table .hud-dock-body:has(> .adventure-log) { display: flex; flex-direction: column; }
+.adventure-log-tools { display: flex; align-items: center; justify-content: space-between; color: var(--bh-text-muted); font-size: var(--bh-text-xs); }
+.table .adventure-log-sound { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 50%; background: transparent; border-color: var(--bh-line); color: var(--bh-text-muted); }
+.table .adventure-log-sound[aria-pressed=true] { color: var(--bh-brass-bright); background: transparent; }
+.adventure-log-list {
+  flex: 1 1 auto; min-height: 160px; max-height: 58vh; overflow: auto; list-style: none; margin: 0; padding: 12px 12px;
+  display: flex; flex-direction: column; gap: 8px; border-radius: var(--bh-radius-md);
+  background: var(--bh-parchment); color: var(--bh-ink); box-shadow: inset 0 2px 8px #0002;
+}
+.adventure-log-list li { display: grid; grid-template-columns: 18px 1fr auto auto; gap: 8px; align-items: baseline; font-size: var(--bh-text-sm); line-height: 1.5; }
+.log-icon { color: var(--bh-ink-muted); align-self: center; display: inline-flex; }
+.log-who { font: italic 700 1rem var(--bh-font-display); color: #8a6a45; }
+.log-outcome, .log-formula { color: var(--bh-ink-muted); }
+.log-formula { font-size: var(--bh-text-xs); }
+.log-total { font: 700 1.15rem var(--bh-font-display); color: var(--bh-ink-strong); }
+.log-time { font-size: 11px; color: var(--bh-ink-muted); }
+.log-badge { margin-left: 6px; padding: 1px 7px; border-radius: var(--bh-radius-pill); font-size: 11px; font-weight: 700; }
+.log-roll[data-outcome=critical] .log-badge { background: #6b4a10; color: #ffe2a0; }
+.log-roll[data-outcome=fumble] .log-badge { background: #7a2018; color: #ffd9cf; }
+.log-roll[data-outcome=critical] .log-total { color: #8a5a10; }
+.log-chat .log-body { color: var(--bh-ink-strong); }
+.log-scene, .log-combat { padding: 4px 0; border-block: 1px dashed var(--bh-parchment-line); }
+.log-scene .log-body, .log-combat .log-body { font: 600 var(--bh-text-sm) var(--bh-font-heading); color: #4a2a1a; }
+.log-combat .log-icon { color: var(--bh-crimson); }
+.log-hp .log-body { color: #7a2018; }
+.log-join .log-body { color: var(--bh-ink-muted); font-style: italic; }
+.adventure-log-form { display: flex; gap: 6px; }
+.adventure-log-form input { flex: 1; min-height: 40px; }
+.table .adventure-log-form .primary { display: grid; place-items: center; width: 44px; padding: 0; }

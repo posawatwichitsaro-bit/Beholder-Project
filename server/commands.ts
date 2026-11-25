@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { abilities, blankSheet, damageKinds, nextLivingTurn, sizes } from '../shared/model.ts'
-import type { Actor, DamageKind, InventoryItem, LootSkill, Member, ObjectDefinition, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token, TokenRole } from '../shared/model.ts'
+import type { Actor, DamageKind, InventoryItem, LogEntry, LootSkill, Member, ObjectDefinition, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token, TokenRole } from '../shared/model.ts'
 import { areaContains, areaLabels, areaOutline, validArea } from '../shared/area.ts'
 import type { Area } from '../shared/area.ts'
 import { d20, deathSave, die, harm, heal, Invalid, parseDice, rollDice } from './rules.ts'
@@ -196,7 +196,13 @@ function applyDamage(scene: Scene, actor: Actor, amount: number, kind: DamageKin
     scene.damageEvents = [...(scene.damageEvents ?? []).filter(event => at - event.at < 6000),
       { id: id(), actorId: actor.id, amount: lost, kind, at }].slice(-100)
   }
+  return lost
 }
+/** "Goblin เสีย 7 HP (ไฟ) · ล้มลง" — the HP line for the Adventure Log. */
+function damageText(actor: Actor, lost: number, kind: DamageKind) {
+  return actor.name + ' เสีย ' + lost + ' HP' + (kind === 'untyped' ? '' : ' (' + damageKinds[kind][0] + ')') + (actor.hp === 0 ? ' · ล้มลง' : '')
+}
+const sceneOf = (room: Room, actorId: string) => room.scenes.find(scene => scene.tokens.some(token => token.actorId === actorId))?.id
 
 export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory = true): Sheet {
   const input = record(value)
@@ -256,6 +262,18 @@ export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory
   return sheet
 }
 
+const logLimit = 300
+
+/** Append an Adventure Log entry (keeps the most recent 300). */
+export function addLog(room: Room, entry: Omit<LogEntry, 'id' | 'at'>) {
+  room.log = [...(room.log ?? []), { id: id(), at: Date.now(), ...entry }].slice(-logLimit)
+}
+
+/** Log entries this seat may see: everything without a scene, plus the scene players can see (all scenes for the DM). */
+export function visibleLog(room: Room, me: Member) {
+  return (room.log ?? []).filter(entry => me.role === 'dm' || !entry.sceneId || entry.sceneId === room.activeSceneId)
+}
+
 export function visibleRolls(room: Room, me: Member) {
   const visible = new Set(room.scenes.filter(scene => scene.id === room.activeSceneId).flatMap(scene => scene.tokens.map(token => token.actorId)))
   return room.rolls.filter(roll => (!roll.privateTo || roll.privateTo === me.id) &&
@@ -282,6 +300,7 @@ export function snapshot(room: Room, me: Member): Snapshot {
       ({ id, name, kind, size, portrait, hp, maxHp, tempHp, lootResult, lootable: kind === 'monster' && life === 'dead' })),
     templates: dm ? room.templates : [],
     rolls: rolls.slice(-40),
+    log: visibleLog(room, me).slice(-80),
     combatQueue: dm && active ? rolls.filter(roll =>
       (roll.sceneId === active.id || (!roll.sceneId && active.tokens.some(token => token.actorId === roll.targetId))) &&
       (roll.applied === false || (roll.cast && !roll.cast.resolved))) : undefined
@@ -309,7 +328,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
   }
   const saveRoll = (label: string, result: Pick<Roll, 'formula' | 'faces' | 'modifier' | 'total'>, extra: Partial<Roll> = {}) => {
     const privateTo = member.role === 'dm' && command.privateRoll === true ? member.id : undefined
-    const roll = { id: id(), name: member.name, label, privateTo, ...result, ...extra }
+    const roll = { id: id(), name: member.name, label, privateTo, at: Date.now(), ...result, ...extra }
     room.rolls.push(roll)
     return { rollId: roll.id }
   }
@@ -357,10 +376,13 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       if (room.activeSceneId === removed.id) room.activeSceneId = (room.scenes[index] ?? room.scenes[index - 1])?.id
       return {}
     }
-    case 'activate':
+    case 'activate': {
       requireDM(member)
-      room.activeSceneId = scene().id
+      const opened = scene()
+      if (room.activeSceneId !== opened.id) addLog(room, { kind: 'scene', text: 'เปิดฉาก ' + opened.name, sceneId: opened.id })
+      room.activeSceneId = opened.id
       return {}
+    }
     case 'reuseMap': {
       requireDM(member)
       const source = get(room.scenes, command.sourceId)
@@ -748,6 +770,8 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         return { actorId: creature.id, initiative }
       })
       target.combat = { order: order.sort((a, b) => b.initiative - a.initiative), round: 1, turn: 0 }
+      addLog(room, { kind: 'combat', sceneId: target.id, text: 'เริ่มการต่อสู้ · ' + target.combat.order.map(entry =>
+        get(room.actors, entry.actorId).name + ' ' + entry.initiative).join(', ') })
       return {}
     }
     case 'next':
@@ -757,8 +781,10 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const target = active()
       const combat = target.combat
       if (!combat) throw new Invalid('ยังไม่ได้เริ่มการต่อสู้')
-      if (command.type === 'end') delete target.combat
-      else if (command.type === 'tie') {
+      if (command.type === 'end') {
+        delete target.combat
+        addLog(room, { kind: 'combat', sceneId: target.id, text: 'จบการต่อสู้' })
+      } else if (command.type === 'tie') {
         const index = combat.order.findIndex(entry => entry.actorId === command.actorId)
         if (index < 1 || combat.order[index].initiative !== combat.order[index - 1].initiative) throw new Invalid('สลับได้เฉพาะ Initiative ที่เสมอกัน')
         const order = combat.order
@@ -768,6 +794,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       } else {
         const next = nextLivingTurn(combat, actorId => get(room.actors, actorId).life === 'dead')
         if (!next) throw new Invalid('ไม่มีผู้ร่วมต่อสู้ที่ยังมีเทิร์น')
+        if (next.round > combat.round) addLog(room, { kind: 'combat', sceneId: target.id, text: 'รอบที่ ' + next.round })
         Object.assign(combat, next)
       }
       return {}
@@ -780,8 +807,10 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const roll = get(room.rolls, command.rollId)
       if (roll.targetId !== creature.id || roll.applied === undefined || (roll.sceneId && roll.sceneId !== target.id)) throw new Invalid('ผลทอยนี้ใช้กับเป้าหมายไม่ได้')
       if (!roll.applied) {
-        applyDamage(target, creature, number(command.amount, 0, 9999), damageKind(command.damageKind), roll.critical)
+        const kind = damageKind(command.damageKind)
+        const lost = applyDamage(target, creature, number(command.amount, 0, 9999), kind, roll.critical)
         roll.applied = true
+        if (lost > 0) addLog(room, { kind: 'hp', text: damageText(creature, lost, kind), sceneId: target.id })
       }
       return {}
     }
@@ -811,25 +840,46 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       })
       if (new Set(effects.map(entry => entry.actor.id)).size !== effects.length) throw new Invalid('เลือกเป้าหมายซ้ำ')
       const result = rollDice(text(command.formula))
-      for (const entry of effects) applyDamage(target, entry.actor, Math.max(0, Math.floor(result.total * entry.multiplier)), kind)
+      const hits = effects.map(entry => ({ actor: entry.actor, lost: applyDamage(target, entry.actor, Math.max(0, Math.floor(result.total * entry.multiplier)), kind) }))
+      const hurt = hits.filter(hit => hit.lost > 0)
+      if (hurt.length) addLog(room, { kind: 'hp', sceneId: target.id, text: 'AoE ' + damageKinds[kind][0] + ' · ' +
+        hurt.map(hit => hit.actor.name + ' −' + hit.lost + (hit.actor.hp === 0 ? ' ล้มลง' : '')).join(', ') })
       target.areaEffect = { area, kind, at: Date.now() }
       return saveRoll('AoE · ' + areaLabels[area.kind] + ' · ' + damageKinds[kind][0], result, {
         sceneId: target.id, sourceId: target.combat.order[target.combat.turn].actorId, outcome: effects.length + ' เป้าหมาย'
       })
     }
-    case 'heal':
+    case 'heal': {
       requireDM(member)
-      heal(actor(), number(command.amount, 1, 9999))
+      const creature = actor()
+      const amount = number(command.amount, 1, 9999)
+      heal(creature, amount)
+      const sceneId = sceneOf(room, creature.id)
+      if (sceneId) addLog(room, { kind: 'hp', text: creature.name + ' ฟื้น ' + amount + ' HP', sceneId })
       return {}
+    }
     case 'adjustHp': {
       requireDM(member)
       const creature = actor()
-      if (!scene().tokens.some(token => token.actorId === creature.id)) throw new Invalid('ไม่พบ Token ในฉาก')
+      const where = scene()
+      if (!where.tokens.some(token => token.actorId === creature.id)) throw new Invalid('ไม่พบ Token ในฉาก')
       const amount = number(command.amount, 1, 9999)
-      if (command.mode === 'damage') applyDamage(scene(), creature, amount, damageKind(command.damageKind))
-      else if (command.mode === 'heal') heal(creature, amount)
-      else if (command.mode === 'temp') creature.tempHp = amount
-      else throw new Invalid('ประเภทการปรับ HP ไม่ถูกต้อง')
+      if (command.mode === 'damage') {
+        const kind = damageKind(command.damageKind)
+        const lost = applyDamage(where, creature, amount, kind)
+        if (lost > 0) addLog(room, { kind: 'hp', text: damageText(creature, lost, kind), sceneId: where.id })
+      } else if (command.mode === 'heal') {
+        heal(creature, amount)
+        addLog(room, { kind: 'hp', text: creature.name + ' ฟื้น ' + amount + ' HP', sceneId: where.id })
+      } else if (command.mode === 'temp') {
+        creature.tempHp = amount
+        addLog(room, { kind: 'hp', text: creature.name + ' ได้ Temp HP ' + amount, sceneId: where.id })
+      } else throw new Invalid('ประเภทการปรับ HP ไม่ถูกต้อง')
+      return {}
+    }
+    case 'chat': {
+      const message = text(command.text, 500)
+      addLog(room, { kind: 'chat', text: message, name: member.name })
       return {}
     }
     case 'slots': {

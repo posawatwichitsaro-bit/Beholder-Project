@@ -110,10 +110,22 @@ export type Roll = {
   total: number; modifier: number; outcome?: string; targetId?: string; applied?: boolean
   cast?: { ability: Ability; dc: number; targetId: string; damage?: string; half: boolean; resolved?: boolean }
   critical?: boolean; privateTo?: string; sceneId?: string; sourceId?: string; damageKind?: DamageKind
+  /** When the roll happened (ms). Older rolls have none. */
+  at?: number
+}
+/**
+ * One line of the Adventure Log besides rolls: chat, scene changes, combat
+ * milestones, HP changes and arrivals. Entries tied to a scene (`sceneId`)
+ * are shown to players only while that scene is the one they can see.
+ */
+export type LogEntry = {
+  id: string; at: number; kind: 'chat' | 'scene' | 'combat' | 'hp' | 'join'
+  text: string; name?: string; sceneId?: string
 }
 export type Room = {
   id: string; name: string; invite: string; dmInvite?: string; revision: number; members: (Member & { profileId?: string })[]
   activeSceneId?: string; scenes: Scene[]; actors: Actor[]; templates: Template[]; rolls: Roll[]
+  log?: LogEntry[]
 }
 export type Snapshot = Omit<Room, 'invite' | 'dmInvite' | 'actors' | 'members'> & {
   me: Member; members: Member[]; invite?: string; dmInvite?: string; actors: Actor[]
