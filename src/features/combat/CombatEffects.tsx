@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { damageKinds, sizes } from '../shared/model.ts'
-import type { DamageKind, Scene, Snapshot } from '../shared/model.ts'
-import { areaContains, areaLabels, areaOutline } from '../shared/area.ts'
-import type { Area, AreaKind } from '../shared/area.ts'
-import { tokenColor, tokenInitials } from './tokenAppearance.ts'
+import { damageKinds, sizes } from '../../../shared/model.ts'
+import type { DamageKind, Scene, Snapshot } from '../../../shared/model.ts'
+import { areaContains, areaLabels, areaOutline } from '../../../shared/area.ts'
+import type { Area, AreaKind } from '../../../shared/area.ts'
+import { tokenColor, tokenInitials } from '../board/tokenAppearance.ts'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
 

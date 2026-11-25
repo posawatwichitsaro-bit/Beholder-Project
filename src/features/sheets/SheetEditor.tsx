@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { abilities, sizes } from '../shared/model.ts'
-import type { ItemProficiency, Sheet } from '../shared/model.ts'
+import { abilities, sizes } from '../../../shared/model.ts'
+import type { ItemProficiency, Sheet } from '../../../shared/model.ts'
 import { PictureInput } from './PictureInput.tsx'
-import { ItemFields, LootSettingsFields, blankItem } from './Inventory.tsx'
+import { ItemFields, LootSettingsFields, blankItem } from '../objects/Inventory.tsx'
 import { CharacterCalculationFields } from './CharacterCalculations.tsx'
-import { abilityModifier, calculatedSheet } from '../shared/characterStats.ts'
+import { abilityModifier, calculatedSheet } from '../../../shared/characterStats.ts'
 
 export function SheetEditor({ initial, save, cancel, copy, editInventory = true }: {
   initial: Sheet; save: (sheet: Sheet) => void; cancel: () => void; copy?: () => void; editInventory?: boolean

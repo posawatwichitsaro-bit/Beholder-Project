@@ -1,0 +1,105 @@
+/*
+ * Beholder design tokens — "Grimoire" theme.
+ *
+ * Every colour, font, radius, shadow and motion value the new UI uses lives
+ * here as a custom property. Components reference tokens, never raw values,
+ * so the theme can change in one place. See Context/UI_REBUILD_PLAN.md.
+ *
+ * Two surface families:
+ *   leather   – dark, warm backgrounds for the map frame, rails and HUD bars
+ *   parchment – light pages for sheets, queues, inspectors and dialogs
+ */
+:root {
+  color-scheme: dark;
+
+  /* leather (dark) surfaces */
+  --bh-bg: #17110f;
+  --bh-surface: #211814;
+  --bh-surface-2: #2a1f18;
+  --bh-surface-3: #3a2b20;
+  --bh-line: #4a3828;
+  --bh-line-strong: #8a6a45;
+  --bh-text: #eadfcd;
+  --bh-text-strong: #f6e7cc;
+  --bh-text-muted: #b3a184;
+
+  /* parchment (light) surfaces */
+  --bh-parchment: #efe2c8;
+  --bh-parchment-2: #f6ecd8;
+  --bh-parchment-3: #e4d3b3;
+  --bh-parchment-line: #c9b48f;
+  --bh-ink: #3a2a1c;
+  --bh-ink-strong: #2a1a0e;
+  --bh-ink-muted: #6e5034;
+
+  /* accents */
+  --bh-brass: #c79a5b;
+  --bh-brass-bright: #e0b878;
+  --bh-crimson: #9e3b3b;
+  --bh-crimson-ink: #fff3e6;
+  --bh-ember: #e07a4a;
+  --bh-arcane: #6f8fc4;
+  --bh-verdant: #2f6a3a;
+  --bh-focus: #ffd08a;
+
+  /* health — also differ in lightness so they read without colour vision */
+  --bh-hp-ally: #5a9a4a;
+  --bh-hp-foe: #c0503a;
+  --bh-hp-warn: #d0902a;
+  --bh-hp-critical: #8c1e18;
+  --bh-hp-track: #1a0f0c;
+  --bh-hp-track-light: #d6c3a0;
+
+  /* bookmark tab colours, used to tell panels apart */
+  --bh-tab-1: #7a2f2f;
+  --bh-tab-2: #2f5a6a;
+  --bh-tab-3: #5a4a2a;
+  --bh-tab-4: #4a3a5a;
+  --bh-tab-5: #3a5a3a;
+
+  /* type */
+  --bh-font-display: 'Cormorant Garamond', 'Noto Serif Thai', Georgia, serif;
+  --bh-font-heading: 'Noto Serif Thai', 'Cormorant Garamond', Georgia, serif;
+  --bh-font-body: 'Sarabun', 'Noto Sans Thai', 'Leelawadee UI', system-ui, sans-serif;
+  --bh-text-xs: 0.75rem;
+  --bh-text-sm: 0.8125rem;
+  --bh-text-md: 0.9375rem;
+  --bh-text-lg: 1.125rem;
+  --bh-text-xl: 1.5rem;
+  --bh-text-2xl: 2rem;
+
+  /* space, shape, depth */
+  --bh-space-1: 4px;
+  --bh-space-2: 8px;
+  --bh-space-3: 12px;
+  --bh-space-4: 16px;
+  --bh-space-5: 24px;
+  --bh-space-6: 32px;
+  --bh-radius-sm: 4px;
+  --bh-radius-md: 6px;
+  --bh-radius-lg: 10px;
+  --bh-radius-pill: 999px;
+  --bh-shadow-1: 0 4px 12px #0007;
+  --bh-shadow-2: 0 10px 24px #0008;
+  --bh-shadow-3: 0 16px 40px #000a;
+  --bh-touch: 44px;
+
+  /* layers */
+  --bh-z-hud: 20;
+  --bh-z-window: 40;
+  --bh-z-dialog: 60;
+  --bh-z-toast: 80;
+
+  /* motion */
+  --bh-fast: 120ms;
+  --bh-medium: 220ms;
+  --bh-slow: 360ms;
+  --bh-ease: cubic-bezier(.2, .7, .2, 1);
+
+  /* personal setting: UI scale 0.9 – 1.25 (applied by the settings panel) */
+  --bh-ui-scale: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --bh-fast: 0ms; --bh-medium: 0ms; --bh-slow: 0ms; }
+}

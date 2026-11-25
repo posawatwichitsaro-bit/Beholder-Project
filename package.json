@@ -7,18 +7,21 @@
   "scripts": {
     "build": "vite build",
     "start": "node server/index.ts",
-    "test": "node --test server/*.test.ts",
+    "test": "node --test server/*.test.ts src/**/*.test.ts",
     "test:browser": "node --test tests/browser.test.ts",
     "import:dndbeyond": "node scripts/import-dndbeyond.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {
     "express": "^5.1.0",
+    "lucide-react": "^1.79.0",
     "pdfjs-dist": "^6.5.438",
     "pg": "^8.16.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "ws": "^8.18.0"
+    "react-router": "^8.5.2",
+    "ws": "^8.18.0",
+    "zustand": "^5.1.0"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.0",

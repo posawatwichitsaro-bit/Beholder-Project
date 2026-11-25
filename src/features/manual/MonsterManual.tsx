@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { abilities, blankSheet, damageKinds } from '../shared/model.ts'
-import type { Sheet, Size, Ability, DamageKind } from '../shared/model.ts'
-import { monsterSheet, parseMonsterText } from '../shared/monsterManual.ts'
+import { abilities, blankSheet, damageKinds } from '../../../shared/model.ts'
+import type { Sheet, Size, Ability, DamageKind } from '../../../shared/model.ts'
+import { monsterSheet, parseMonsterText } from '../../../shared/monsterManual.ts'
 
 type Monster = {
   name: string; size: Size; type: string; cr: string; ac: number; hp: number; speed: number; initiative: number

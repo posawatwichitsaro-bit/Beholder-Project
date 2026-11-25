@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import type { Actor, InventoryItem, LootSkill, Snapshot } from '../shared/model.ts'
-import { commandId } from './api.ts'
+import type { Actor, InventoryItem, LootSkill, Snapshot } from '../../../shared/model.ts'
+import { commandId } from '../../lib/api.ts'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
 

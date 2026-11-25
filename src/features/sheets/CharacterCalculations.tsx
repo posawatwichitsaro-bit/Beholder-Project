@@ -1,7 +1,7 @@
-import { abilities } from '../shared/model.ts'
-import type { Ability, Sheet } from '../shared/model.ts'
-import { abilityModifier, armorPresets, calculatedSheet, hitDiceByClass } from '../shared/characterStats.ts'
-import type { ArmorSettings, CharacterCalculations, HitDie } from '../shared/characterStats.ts'
+import { abilities } from '../../../shared/model.ts'
+import type { Ability, Sheet } from '../../../shared/model.ts'
+import { abilityModifier, armorPresets, calculatedSheet, hitDiceByClass } from '../../../shared/characterStats.ts'
+import type { ArmorSettings, CharacterCalculations, HitDie } from '../../../shared/characterStats.ts'
 
 export function CharacterCalculationFields({ sheet, update }: { sheet: Sheet; update: (value: CharacterCalculations) => void }) {
   const config = sheet.calculations ?? {}

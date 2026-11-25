@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import type { Account } from '../shared/model.ts'
-import { api, json } from './api.ts'
+import type { Account } from '../../../shared/model.ts'
+import { api, json } from '../../lib/api.ts'
 
 export function AccountPanel({ account, change }: { account: Account | null; change: (account: Account | null) => void }) {
   const [mode, setMode] = useState<'login' | 'register'>('login')

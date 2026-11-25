@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { objectLabels } from '../shared/model.ts'
-import type { Actor, ObjectDefinition, ObjectKind, SceneObject } from '../shared/model.ts'
-import { PictureInput } from './PictureInput.tsx'
+import { objectLabels } from '../../../shared/model.ts'
+import type { Actor, ObjectDefinition, ObjectKind, SceneObject } from '../../../shared/model.ts'
+import { PictureInput } from '../sheets/PictureInput.tsx'
 import { ItemName } from './Inventory.tsx'
 
 type Point = { x: number; y: number }
