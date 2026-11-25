@@ -1,0 +1,61 @@
+/* Board chrome — Grimoire theme. Positions of tools/tray beside the rail live in shell.css. */
+.board canvas { cursor: default; touch-action: none; }
+.board canvas.panning { cursor: grabbing; }
+.board canvas.measuring { cursor: crosshair; }
+
+.table .board-tools {
+  display: flex; align-items: center; gap: 2px; padding: 4px;
+  background: #211814f2; border: 1px solid var(--bh-line-strong); border-radius: var(--bh-radius-pill);
+  box-shadow: var(--bh-shadow-1);
+}
+.table .board-tools button {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 10px;
+  border: 1px solid transparent; border-radius: var(--bh-radius-pill); background: transparent;
+  color: var(--bh-text); font-size: var(--bh-text-xs);
+}
+.table .board-tools button:hover { background: var(--bh-surface-3); border-color: transparent; }
+.table .board-tools button[aria-pressed=true] { background: var(--bh-surface-3); border-color: var(--bh-brass); color: var(--bh-brass-bright); }
+.table .board-tools .board-zoom { min-width: 54px; justify-content: center; font-variant-numeric: tabular-nums; }
+.board-tools-sep { width: 1px; height: 20px; background: var(--bh-line); margin: 0 4px; }
+.table .scale, .table .placing {
+  background: #211814e6; border: 1px solid var(--bh-line); border-radius: var(--bh-radius-pill);
+  color: var(--bh-text-muted); padding: 3px 10px;
+}
+.table .placing { left: 50%; transform: translateX(-50%); top: 14px; bottom: auto; color: var(--bh-brass-bright); border-color: var(--bh-brass); font-weight: 600; }
+
+/* Right-click / long-press menu */
+.table .context-popover {
+  background: var(--bh-parchment); color: var(--bh-ink); border: 0; border-radius: var(--bh-radius-md);
+  box-shadow: var(--bh-shadow-3); padding: 6px; min-width: 200px;
+}
+.table .context-popover strong { display: block; padding: 6px 10px 8px; font: 700 var(--bh-text-md) var(--bh-font-heading); color: var(--bh-ink-strong); border-bottom: 1px solid var(--bh-parchment-line); margin-bottom: 4px; }
+.table .context-popover button { width: 100%; background: transparent; border: 0; border-radius: var(--bh-radius-sm); color: var(--bh-ink); text-align: start; padding: 8px 10px; }
+.table .context-popover button:hover:not(:disabled) { background: var(--bh-ink); color: var(--bh-text-strong); }
+.table .context-popover button:last-child { color: var(--bh-ink-muted); }
+
+/* Selection bar: actions for the selected token or object */
+.selection-bar {
+  position: absolute; z-index: 2; left: 50%; bottom: 56px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center;
+  max-width: min(760px, calc(100% - 32px)); padding: 6px 8px;
+  background: var(--bh-parchment); color: var(--bh-ink); border-radius: var(--bh-radius-pill);
+  box-shadow: var(--bh-shadow-2); animation: bh-rise var(--bh-medium) var(--bh-ease);
+}
+.selection-bar-name { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px 0 4px; font-size: var(--bh-text-sm); color: var(--bh-ink-muted); }
+.selection-bar-name b { font: 700 1.05rem var(--bh-font-display); color: var(--bh-ink-strong); }
+.selection-bar-hp { font-variant-numeric: tabular-nums; }
+.table .selection-bar button {
+  min-height: 32px; padding: 0 12px; border: 1px solid var(--bh-parchment-line); border-radius: var(--bh-radius-pill);
+  background: transparent; color: var(--bh-ink); font-size: var(--bh-text-sm);
+}
+.table .selection-bar button:hover:not(:disabled) { background: var(--bh-ink); border-color: var(--bh-ink); color: var(--bh-text-strong); }
+.table .selection-count { background: #211814e6; border: 1px solid #9fc4f0; color: #cfe0f5; border-radius: var(--bh-radius-pill); padding: 3px 10px; }
+
+/* Sheet rows and cards can be dragged onto the board */
+.table [draggable=true] { cursor: grab; }
+.table [draggable=true]:active { cursor: grabbing; }
+
+@media (max-width: 760px) {
+  .table .board-tools .board-tool-label { display: none; }
+  .selection-bar { bottom: 52px; border-radius: var(--bh-radius-lg); }
+}

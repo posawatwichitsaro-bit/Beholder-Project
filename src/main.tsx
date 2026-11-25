@@ -4,6 +4,7 @@ import './styles/legacy.css'
 import './ui/ui.css'
 import './features/shell/shell.css'
 import './features/entry/lobby.css'
+import './features/board/board.css'
 import { createRoot } from 'react-dom/client'
 import { App } from './app/App.tsx'
 

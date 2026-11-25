@@ -15,7 +15,8 @@ import { ObjectEditor, ObjectActions } from '../objects/Objects.tsx'
 import { InventoryPanel, LootDialog } from '../objects/Inventory.tsx'
 import { SceneForm, SceneOperationForm } from '../scenes/SceneForms.tsx'
 import type { SceneOperation } from '../scenes/SceneForms.tsx'
-import { TokenRoleForm } from '../tokens/TokenRoleForm.tsx'
+import { tokenDragProps } from '../board/tokenDrag.ts'
+import type { TokenDragPayload, TokenSource } from '../board/tokenDrag.ts'
 import type { AccountProps } from '../entry/Entry.tsx'
 import { HudTopBar } from '../shell/HudTopBar.tsx'
 import { PanelRail } from '../shell/PanelRail.tsx'
@@ -32,7 +33,6 @@ import { sendCommand } from '../../state/useCommand.ts'
 import type { Command } from '../../state/useCommand.ts'
 
 type Point = { x: number; y: number }
-type TokenSource = { actorId: string } | { templateId: string } | { sheet: Sheet }
 type TokenPlacement = { sceneId: string; source: TokenSource; role?: TokenRole }
 const arrowSteps: Record<string, Point> = {
   ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }
@@ -72,7 +72,6 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [sceneOperation, setSceneOperation] = useState<SceneOperation>()
   const [sheet, setSheet] = useState<{ initial: Sheet; actor?: Actor; template?: Template; asTemplate?: boolean }>()
   const [tokenPlacement, setPlacing] = useState<TokenPlacement>()
-  const [tokenChoice, setTokenChoice] = useState<{ placement: TokenPlacement; name: string; ownerId: string }>()
   const [objectPlacement, setObjectPlacement] = useState<{ sceneId: string; definition: ObjectDefinition }>()
   const [formula, setFormula] = useState('1d20')
   const [combatTarget, setCombatTarget] = useState('')
@@ -90,7 +89,6 @@ export function Table({ account, changeAccount }: AccountProps) {
   const placingObject = objectPlacement?.sceneId === scene?.id ? objectPlacement?.definition : undefined
   const placing = tokenPlacement?.sceneId === scene?.id ? tokenPlacement : undefined
   const mainToken = !dm ? scene?.tokens.find(token => token.role === 'character' && room.actors.some(actor => actor.id === token.actorId)) : undefined
-  const visibleChoice = tokenChoice?.placement.sceneId === scene?.id ? tokenChoice : undefined
   const editingScene = typeof modal === 'object' ? room.scenes.find(item => item.id === modal.sceneId) : undefined
   const actor = room.actors.find(item => item.id === selected)
   const hpActor = room.actors.find(item => item.id === hpTarget)
@@ -152,7 +150,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   }, [mainTokenId, keyboardSceneId])
   function switchView(id: string) {
     setFocusScene(id); setPlacing(undefined); setPlacementPoint(undefined); setCombatTarget('')
-    setObjectTarget(undefined); setLootTarget(undefined); setObjectImport(undefined); setObjectPlacement(undefined); setTokenChoice(undefined)
+    setObjectTarget(undefined); setLootTarget(undefined); setObjectImport(undefined); setObjectPlacement(undefined)
   }
   function clearArea() { setAreaKind(undefined); setAreaPreview(undefined) }
   useEffect(() => { setOlder([]); setHistoryEnded(false) }, [room.activeSceneId])
@@ -220,13 +218,26 @@ export function Table({ account, changeAccount }: AccountProps) {
       closePanels()
     }
   }
-  const placeToken = (value: TokenPlacement, point: Point) =>
-    send({ type: 'place', sceneId: value.sceneId, ...value.source, kind: 'sheet' in value.source ? value.source.sheet.kind : undefined, role: value.role, ...point })
+  const placeToken = async (value: TokenPlacement, point: Point) => {
+    const ok = await send({ type: 'place', sceneId: value.sceneId, ...value.source, kind: 'sheet' in value.source ? value.source.sheet.kind : undefined, role: value.role, ...point })
+    if (ok && value.role === 'companion') setNotice('วางเป็น Companion Token แล้ว · เปลี่ยนเป็นตัวหลักได้จากแถบคำสั่งของ Token')
+    return ok
+  }
+  /** A player's first character in a scene becomes their main token; later ones are companions. */
+  function placementFor(source: TokenSource, name?: string, ownerId = room.me.id): TokenPlacement | undefined {
+    if (!scene) return undefined
+    return { sceneId: scene.id, source, role: name !== undefined ? hasMain(ownerId) ? 'companion' : 'character' : undefined }
+  }
   function chooseToken(source: TokenSource, name?: string, ownerId = room.me.id) {
-    if (!scene) return
-    const placement = { sceneId: scene.id, source }
-    if (name !== undefined) setTokenChoice({ placement, name, ownerId })
-    else beginPlace(placement)
+    const placement = placementFor(source, name, ownerId)
+    if (placement) beginPlace(placement)
+  }
+  function dropToken(payload: TokenDragPayload, point: Point) {
+    const placement = placementFor(payload.source, payload.name, payload.ownerId)
+    if (!placement) return
+    setPlacing(undefined)
+    setPlacementPoint(undefined)
+    void placeToken(placement, point)
   }
   async function copyInvite() {
     if (!inviteLink) return
@@ -306,7 +317,8 @@ export function Table({ account, changeAccount }: AccountProps) {
       {room.actors.map(item => {
         const token = scene?.tokens.find(token => token.actorId === item.id)
         const roleLabel = token?.role && tokenRoleLabels[token.role]
-        return <div className="actor-item" key={item.id}>
+        return <div className="actor-item" key={item.id}
+          {...(scene && !token ? tokenDragProps({ source: { actorId: item.id }, name: item.kind === 'pc' ? item.name : undefined, ownerId: item.ownerId }) : {})}>
           <button className={selected === item.id ? 'selected' : ''} aria-label={item.name} aria-description={roleLabel}
             onClick={() => showActor(item.id)}>{item.name}{roleLabel && <small className="actor-token-role" aria-hidden="true">{roleLabel}</small>}</button>
           {scene && <button aria-label={'วาง ' + item.name} disabled={Boolean(token)}
@@ -314,18 +326,20 @@ export function Table({ account, changeAccount }: AccountProps) {
         </div>
       })}
       {dm && <><div className="section-head"><h2>มอนสเตอร์</h2><button onClick={() => setSheet({ initial: blankSheet('monster'), asTemplate: true })}>+ ต้นแบบ</button></div>
-        {room.templates.map(item => <div className="actor-item" key={item.id}>
+        {room.templates.map(item => <div className="actor-item" key={item.id} {...(scene ? tokenDragProps({ source: { templateId: item.id } }) : {})}>
           <button onClick={() => setSheet({ initial: item.sheet, template: item, asTemplate: true })}>{item.sheet.name}</button>
           {scene && <button onClick={() => chooseToken({ templateId: item.id })}>วาง</button>}
         </div>)}</>}
     </>,
     manual: () => <MonsterManual
       addTemplate={sheet => send({ type: 'template', sheet })}
-      placeMonster={scene ? sheet => chooseToken({ sheet }) : undefined} />,
+      placeMonster={scene ? sheet => chooseToken({ sheet }) : undefined}
+      dragMonster={scene ? sheet => tokenDragProps({ source: { sheet } }) : undefined} />,
     library: () => <PersonalLibrary key={account?.email} useAccount={Boolean(account)} roomName={room.me.name} dm={dm} draft={libraryDraft} clearDraft={() => setLibraryDraft(undefined)}
       accountForm={<AccountPanel account={account} change={changeAccount} initialMode="register" />}
       section={librarySection} selectSection={setLibrarySection} objectDraft={objectDraft} clearObjectDraft={() => setObjectDraft(undefined)}
       placeCharacter={scene ? value => chooseToken({ sheet: value }, value.name) : undefined}
+      dragCharacter={scene ? value => tokenDragProps({ source: { sheet: value }, name: value.name }) : undefined}
       placeObject={dm && scene ? definition => {
         setPlacing(undefined)
         setObjectPlacement({ sceneId: scene.id, definition })
@@ -435,6 +449,8 @@ export function Table({ account, changeAccount }: AccountProps) {
           } else setSelected(value)
         }}
         move={(tokenIds, delta) => void commandHere({ type: 'moveTokens', tokenIds, dx: delta.x, dy: delta.y })}
+        drop={dropToken}
+        moveObject={dm ? (objectId, position) => void commandHere({ type: 'moveObject', objectId, ...position }) : undefined}
         place={placingObject ? point => void commandHere({ type: 'importObject', definition: placingObject, ...point })
           .then(ok => { if (ok) setObjectPlacement(undefined) })
           : placing && (point => void placeToken(placing, point).then(ok => { if (ok) setPlacing(undefined) }))}
@@ -497,8 +513,6 @@ export function Table({ account, changeAccount }: AccountProps) {
     {(error || notice) && <div className="toast" role={error ? 'alert' : 'status'}>{error || notice}<button aria-label="ปิดข้อความ" onClick={clearMessages}>×</button></div>}
     {paletteOpen && <CommandPalette commands={paletteCommands} close={() => setPaletteOpen(false)} />}
     {(modal === 'createScene' || editingScene) && <SceneForm scene={editingScene} save={send} cancel={() => setModal(undefined)} />}
-    {visibleChoice && <TokenRoleForm name={visibleChoice.name} hasMain={hasMain(visibleChoice.ownerId)} cancel={() => setTokenChoice(undefined)}
-      save={role => { setTokenChoice(undefined); beginPlace({ ...visibleChoice.placement, role }) }} />}
     {sceneOperation && <SceneOperationForm key={sceneOperation.mode + sceneOperation.scene.id} operation={sceneOperation}
       save={async command => {
         const ok = await send(command, switchView)
