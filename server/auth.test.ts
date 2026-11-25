@@ -90,3 +90,34 @@ test('account auth upgrades legacy hashes, rotates credentials and enforces sess
   assert.equal(limited.status, 429)
   assert(Number(limited.headers.get('retry-after')) > 0)
 })
+
+test('an empty PUBLIC_ORIGIN still accepts same-origin browser requests', { timeout: 30000 }, async t => {
+  const previous = process.env.PUBLIC_ORIGIN
+  process.env.PUBLIC_ORIGIN = ''
+  const db = new PGlite()
+  const database = {
+    query: db.query.bind(db),
+    transaction: <T>(work: (query: typeof db.query) => Promise<T>) => db.transaction(transaction => work(transaction.query.bind(transaction)))
+  }
+  const assets = await mkdtemp(join(tmpdir(), 'beholder-origin-'))
+  await migrate(database)
+  const server = await createApp(database, assets)
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(async () => {
+    if (previous === undefined) delete process.env.PUBLIC_ORIGIN
+    else process.env.PUBLIC_ORIGIN = previous
+    await new Promise<void>(done => server.close(() => done()))
+    await db.close()
+    await rm(assets, { recursive: true, force: true })
+  })
+  const address = server.address()
+  assert(address && typeof address === 'object')
+  const base = 'http://127.0.0.1:' + address.port
+  const register = (origin: string) => fetch(base + '/api/account/session', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({ mode: 'register', email: randomUUID() + '@example.com', password: 'empty-origin-password', name: 'Origin' })
+  })
+  assert.equal((await register(base)).status, 201)
+  assert.equal((await register('http://evil.example')).status, 403)
+})
