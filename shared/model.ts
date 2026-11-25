@@ -103,6 +103,8 @@ export function nextLivingTurn(combat: Combat, isDead: (actorId: string) => bool
 export type Scene = {
   id: string; name: string; cell: number; originX: number; originY: number
   map?: MapAsset; tokens: Token[]; combat?: Combat; objects?: SceneObject[]
+  /** Who fought in this scene's last encounter, pre-selected for the next one. */
+  lastParticipants?: string[]
   damageEvents?: DamageEvent[]; areaEffect?: { area: Area; kind: DamageKind; at: number }
 }
 export type Roll = {
@@ -126,10 +128,12 @@ export type Room = {
   id: string; name: string; invite: string; dmInvite?: string; revision: number; members: (Member & { profileId?: string })[]
   activeSceneId?: string; scenes: Scene[]; actors: Actor[]; templates: Template[]; rolls: Roll[]
   log?: LogEntry[]
+  /** Table rules the DM can switch. autoDamage: a hit applies its damage without waiting for the DM. */
+  settings?: { autoDamage?: boolean }
 }
 export type Snapshot = Omit<Room, 'invite' | 'dmInvite' | 'actors' | 'members'> & {
   me: Member; members: Member[]; invite?: string; dmInvite?: string; actors: Actor[]
-  publicActors: (Pick<Actor, 'id' | 'name' | 'kind' | 'size' | 'portrait' | 'hp' | 'maxHp' | 'tempHp' | 'lootResult'> & { lootable?: boolean })[]
+  publicActors: (Pick<Actor, 'id' | 'name' | 'kind' | 'size' | 'portrait' | 'hp' | 'maxHp' | 'tempHp' | 'lootResult' | 'conditions'> & { lootable?: boolean })[]
   combatQueue?: Roll[]
 }
 export function blankSheet(kind: Sheet['kind'] = 'pc'): Sheet {

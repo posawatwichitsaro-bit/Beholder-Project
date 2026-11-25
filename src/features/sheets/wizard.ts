@@ -24,6 +24,28 @@ export const classInfo: Record<ClassName, { saves: [Ability, Ability]; order: Ab
 
 export const standardArray = [15, 14, 13, 12, 10, 8] as const
 
+/** Spell slots per level for a full caster (SRD 5.2.1 spellcasting tables), index = character level − 1. */
+const fullCasterSlots = [
+  [2], [3], [4, 2], [4, 3], [4, 3, 2], [4, 3, 3], [4, 3, 3, 1], [4, 3, 3, 2], [4, 3, 3, 3, 1], [4, 3, 3, 3, 2],
+  [4, 3, 3, 3, 2, 1], [4, 3, 3, 3, 2, 1], [4, 3, 3, 3, 2, 1, 1], [4, 3, 3, 3, 2, 1, 1], [4, 3, 3, 3, 2, 1, 1, 1],
+  [4, 3, 3, 3, 2, 1, 1, 1], [4, 3, 3, 3, 2, 1, 1, 1, 1], [4, 3, 3, 3, 3, 1, 1, 1, 1], [4, 3, 3, 3, 3, 2, 1, 1, 1], [4, 3, 3, 3, 3, 2, 2, 1, 1]
+]
+const fullCasters: ClassName[] = ['Bard', 'Cleric', 'Druid', 'Sorcerer', 'Wizard']
+const halfCasters: ClassName[] = ['Paladin', 'Ranger', 'Artificer']
+
+/** Starting spell slots as "L1 4/4, L2 2/2" (pact magic for Warlocks); empty for non-casters. */
+export function spellSlotsFor(className: ClassName, level: number) {
+  let counts: number[] = []
+  if (fullCasters.includes(className)) counts = fullCasterSlots[level - 1]
+  else if (halfCasters.includes(className)) counts = fullCasterSlots[Math.ceil(level / 2) - 1]
+  else if (className === 'Warlock') {
+    const slots = level >= 17 ? 4 : level >= 11 ? 3 : level >= 2 ? 2 : 1
+    const slotLevel = Math.min(5, Math.ceil(level / 2))
+    return 'L' + slotLevel + ' ' + slots + '/' + slots
+  }
+  return counts.map((count, index) => 'L' + (index + 1) + ' ' + count + '/' + count).join(', ')
+}
+
 /** Standard array placed in the class's usual priority order. */
 export function suggestedAbilities(className: ClassName): Record<Ability, number> {
   const scores = {} as Record<Ability, number>
@@ -100,6 +122,7 @@ export function buildCharacter(choices: WizardChoices): Sheet {
     damage: main.damage,
     attacks: attacks.slice(1),
     saves: info.saves.join(', '),
+    slots: spellSlotsFor(choices.className, level),
     savingThrows,
     characterDetails: choices.species?.trim() ? { species: choices.species.trim() } : undefined,
     calculations: {

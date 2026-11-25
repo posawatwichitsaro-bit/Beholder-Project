@@ -161,6 +161,62 @@ test('a new player builds a character step by step and rolls from the sheet', { 
   assert.equal(await page.getByLabel('ข้อความถึงโต๊ะ').inputValue(), '')
 })
 
+test('a player ends their own turn; timed conditions and spell slots are tracked on the sheet', { timeout: 45000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
+    ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  const player = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  dm.setDefaultTimeout(10000)
+  player.setDefaultTimeout(10000)
+  const room: Snapshot = await (await dm.request.post(base + '/api/rooms', { data: { name: 'Turn test', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  async function command(page: Page, body: Record<string, unknown>) {
+    const state: Snapshot = await (await page.request.get(path)).json()
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: state.revision } })
+    assert.equal(response.status(), 200, await response.text())
+    return (await page.request.get(path)).json() as Promise<Snapshot>
+  }
+  const withScene = await command(dm, { type: 'scene', name: 'Arena', cell: 48, originX: 0, originY: 0 })
+  const sceneId = withScene.scenes[0].id
+  assert.equal((await player.request.post(base + '/api/join', { data: { invite: room.invite, name: 'Mira', role: 'player' } })).status(), 200)
+  const withSheet = await command(player, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Lyra', slots: 'L1 2/2' } })
+  const lyra = withSheet.actors.find(actor => actor.name === 'Lyra')!
+  await command(player, { type: 'place', sceneId, actorId: lyra.id, role: 'character', x: 2, y: 2 })
+  await command(dm, { type: 'combat', sceneId, participants: [lyra.id] })
+  await dm.goto(base + '/room/' + room.id)
+  await player.goto(base + '/room/' + room.id)
+
+  // The combat HUD: turn order across the top, and the player is told it is their turn.
+  await player.getByRole('complementary', { name: 'Turn Initiative' }).getByText('รอบ 1', { exact: true }).waitFor()
+  const banner = player.getByRole('status').filter({ hasText: 'ถึงเทิร์นของคุณ, Lyra' })
+  await banner.waitFor()
+
+  // A condition for one round, picked from the SRD list on the sheet.
+  await openPanel(player, 'ชีตในห้อง')
+  await player.getByRole('button', exact('Lyra')).click()
+  const sheet = player.getByRole('article', { name: 'ชีต Lyra' })
+  await sheet.getByRole('button', { name: 'Condition' }).click()
+  await sheet.getByLabel('นาน (รอบ)').fill('1')
+  await sheet.getByRole('button', { name: /^Prone/ }).click()
+  await sheet.locator('.condition-chip').filter({ hasText: 'Prone' }).waitFor()
+
+  // Spell slots are pips: spend one, the count follows.
+  await sheet.getByRole('tab', exact('Spells')).click()
+  await sheet.getByRole('button', exact('ช่องเวทระดับ 1 ที่ 2 (ยังใช้ได้)')).click()
+  await sheet.getByText('1/2', { exact: true }).waitFor()
+  assert.equal((await (await player.request.get(path)).json() as Snapshot).actors[0].slots, 'L1 1/2')
+
+  // Ending the turn starts round 2, which wears off the one-round condition.
+  await banner.getByRole('button', exact('จบเทิร์น')).click()
+  await player.getByRole('complementary', { name: 'Turn Initiative' }).getByText('รอบ 2', { exact: true }).waitFor()
+  await sheet.getByRole('tab', exact('ภาพรวม')).click()
+  await sheet.locator('.condition-chip').filter({ hasText: 'Prone' }).waitFor({ state: 'detached' })
+  const finished = await (await dm.request.get(path)).json() as Snapshot
+  assert.ok(finished.log!.some(entry => entry.text === 'Lyra พ้นจาก Prone'))
+  await dm.getByRole('complementary', { name: 'Turn Initiative' }).getByText('รอบ 2', { exact: true }).waitFor()
+})
+
 test('manage scenes and reuse an account Object in another room', { timeout: 60000 }, async t => {
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
     ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
@@ -323,6 +379,8 @@ async function createScene(page: Page, name: string) {
   await page.getByRole('button', exact('สร้างฉาก')).first().click()
   await page.getByLabel('ชื่อฉาก').fill(name)
   await page.getByRole('button', exact('บันทึกฉาก')).click()
+  // The list updates a moment before the dialog closes; wait for both.
+  await page.getByRole('button', exact('บันทึกฉาก')).waitFor({ state: 'detached' })
   await page.locator('.scene-item').filter({ hasText: name }).waitFor()
 }
 
@@ -531,10 +589,10 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
     if ((await response.json()).rollId) break
     await combat.getByRole('button', { name: /^โจมตี · / }).waitFor()
   }
-  await combat.getByRole('region', { name: 'ผลรอจัดการ' }).getByLabel('ประเภทความเสียหาย').selectOption('fire')
-  await combat.getByRole('button', exact('หัก HP')).click()
+  await dm.getByRole('region', { name: 'ผลรอจัดการ' }).getByLabel('ประเภทความเสียหาย').selectOption('fire')
+  await dm.getByRole('region', { name: 'ผลรอจัดการ' }).getByRole('button', exact('หัก HP')).click()
   await two.locator('.floating-damage[aria-label$="ไฟ"]').waitFor({ state: 'attached' })
-  await combat.getByRole('region', { name: 'ผลรอจัดการ' }).waitFor({ state: 'hidden' })
+  await dm.getByRole('region', { name: 'ผลรอจัดการ' }).waitFor({ state: 'hidden' })
   const updated = await (await dm.request.get(roomUrl)).json()
   assert.ok(updated.actors.find((actor: { id: string }) => actor.id === target.actorId).hp < targetHP)
   await combat.getByRole('button', exact('เทิร์นถัดไป')).click()
