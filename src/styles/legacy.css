@@ -287,7 +287,11 @@ h2 { font-size: 1rem }
 }
 
 /* Campaign journal surfaces shared by the lobby, table and character tools. */
-:root { --panel: #222124; --line: #4c4544; --gold: #edbe81; --muted: #bcb1a5; background: #161619 }
+/* Mapped to the Grimoire tokens (src/ui/tokens.css) while screens move to the UI kit. */
+:root { --panel: var(--bh-surface); --line: var(--bh-line); --gold: var(--bh-brass-bright); --muted: var(--bh-text-muted); background: var(--bh-bg); font-family: var(--bh-font-body) }
+button, .button, input, select, textarea { background-color: var(--bh-surface-2) }
+button:hover, .button:hover, button[aria-pressed=true], .selected { background-color: var(--bh-surface-3); border-color: var(--bh-line-strong) }
+.primary, .primary:hover { background-color: var(--gold) }
 .entry { max-width: 980px; margin: clamp(12px,5vh,58px) auto; }
 .entry-hero { display: flex; flex-direction: column; justify-content: end; min-height: clamp(180px,28vw,270px); padding: clamp(18px,4vw,42px); border: 1px solid #78604a; border-radius: 14px; background: linear-gradient(0deg,#121117b8,transparent 75%),url('/art/watchtower.jpg') center 56%/cover; }
 .entry .entry-hero h1 { font: 500 clamp(3.3rem,8vw,6.2rem)/1 Georgia,serif; margin: 0 0 6px; letter-spacing: -.045em; color: #ffebc9 }

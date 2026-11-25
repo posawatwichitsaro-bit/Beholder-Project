@@ -177,6 +177,7 @@ test('manage scenes and reuse an account Object in another room', { timeout: 600
   assert.deepEqual(placed, reused)
 })
 
+/** Open a panel from the HUD rail. On narrow screens the rail is folded behind the menu button. */
 async function openPanel(page: Page, name: string) {
   const menu = page.getByRole('button', exact('เมนูโต๊ะ'))
   if (await menu.getAttribute('aria-expanded') === 'false') await menu.click()
@@ -302,7 +303,14 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await createScene(dm, 'Gate')
   await createScene(dm, 'Vault')
   await one.getByRole('heading', exact('Gate')).waitFor()
-  assert.equal(await one.getByRole('button', exact('เมนูโต๊ะ')).getAttribute('aria-expanded'), 'false')
+  assert.equal(await one.locator('#table-drawer').isVisible(), false, 'no panel covers the map when a player arrives')
+  assert.equal(await one.getByRole('navigation', { name: 'ระบบในห้อง' }).getByRole('button', exact('Monster Manual')).count(), 0, 'players never see DM tools')
+  await one.keyboard.press('Control+k')
+  await one.getByRole('combobox', exact('ค้นหาคำสั่ง')).fill('ลูกเต๋า')
+  await one.keyboard.press('Enter')
+  await one.getByRole('region', exact('ลูกเต๋า')).waitFor()
+  await one.keyboard.press('Escape')
+  await one.locator('#table-drawer').waitFor({ state: 'hidden' })
   const playerBoard = await one.locator('canvas').boundingBox()
   assert.equal(playerBoard?.width, one.viewportSize()?.width)
   assert.equal(playerBoard?.height, one.viewportSize()!.height - 58)

@@ -1,0 +1,162 @@
+/*
+ * HUD shell: top bar, panel rail, dock and Command Palette (Grimoire theme).
+ * Overrides the legacy table chrome; panel *contents* keep their legacy
+ * styles until each one is rebuilt with the UI kit.
+ */
+.table {
+  --hud-rail: 60px;
+  --hud-gap: 12px;
+  --hud-dock-width: min(400px, calc(100vw - var(--hud-rail) - 2 * var(--hud-gap)));
+  font-family: var(--bh-font-body);
+  background: var(--bh-bg);
+}
+
+/* ---------- Top bar ---------- */
+.table .hud-top {
+  gap: var(--bh-space-3);
+  padding: 0 var(--bh-space-3);
+  background: var(--bh-surface);
+  border-bottom: 1px solid var(--bh-line-strong);
+  box-shadow: 0 2px 14px #000a, inset 0 -1px 0 #e0b87822;
+}
+.hud-menu {
+  display: grid; place-items: center; flex: none;
+  width: 40px; height: 40px; padding: 0;
+  border: 1px solid var(--bh-line); border-radius: 50%;
+  background: var(--bh-surface-2); color: var(--bh-brass-bright);
+}
+.hud-menu:hover, .hud-menu[aria-expanded=true] { background: var(--bh-surface-3); border-color: var(--bh-line-strong); }
+.hud-brand { color: var(--bh-brass); flex: none; }
+.table .hud-location h1 { font: 700 1.08rem/1.25 var(--bh-font-heading); color: var(--bh-text-strong); }
+.table .hud-location > span { color: var(--bh-text-muted); font-size: var(--bh-text-xs); }
+.hud-scene-state.live { color: #9fd8a0; }
+.hud-scene-state.preparing { color: var(--bh-brass-bright); font-weight: 600; }
+.hud-top .publish-scene.bh-button { min-height: 38px; }
+.hud-search {
+  display: inline-flex; align-items: center; gap: var(--bh-space-2); flex: none;
+  height: 38px; padding: 0 var(--bh-space-3);
+  border: 1px solid var(--bh-line); border-radius: var(--bh-radius-pill);
+  background: var(--bh-bg); color: var(--bh-text-muted); font-size: var(--bh-text-sm);
+}
+.hud-search:hover { border-color: var(--bh-line-strong); color: var(--bh-text); background: var(--bh-bg); }
+.hud-identity { margin-left: 0; color: var(--bh-text-muted); }
+.hud-identity .online, .hud-identity .offline { display: inline-flex; align-items: center; gap: 5px; }
+.hud-me { color: var(--bh-text); }
+
+/* ---------- Rail ---------- */
+.hud-rail {
+  position: absolute; z-index: 4; right: 0; top: calc(var(--header-height) + var(--hud-gap));
+  width: var(--hud-rail); display: flex; flex-direction: column; gap: var(--bh-space-3);
+  max-height: calc(100% - var(--header-height) - 2 * var(--hud-gap)); overflow: visible;
+}
+.hud-rail[hidden] { display: none; }
+.hud-rail-group { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.hud-rail-group + .hud-rail-group { padding-top: var(--bh-space-3); border-top: 1px dashed #c79a5b44; margin-left: 14px; }
+.hud-rail-button {
+  position: relative; display: grid; place-items: center;
+  width: 50px; height: 44px; padding: 0 0 0 4px;
+  border: 1px solid #00000055; border-right: 0; border-radius: 22px 0 0 22px;
+  background: var(--_tab); color: var(--bh-text-strong);
+  box-shadow: -4px 4px 12px #0007; transition: width var(--bh-fast) var(--bh-ease), filter var(--bh-fast);
+}
+.hud-rail-button:hover { width: 56px; filter: brightness(1.18); background: var(--_tab); border-color: #00000055; }
+.hud-rail-button[aria-pressed=true] { width: 60px; background: var(--_tab); border-color: var(--bh-brass-bright); box-shadow: -4px 4px 14px #000a, inset 3px 0 0 var(--bh-brass-bright); }
+.hud-rail-icon { display: inline-flex; }
+.hud-rail-tip {
+  position: absolute; right: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--bh-radius-md);
+  background: var(--bh-ink-strong); color: var(--bh-text-strong); white-space: nowrap;
+  font: 600 var(--bh-text-xs)/1.2 var(--bh-font-body); box-shadow: var(--bh-shadow-1);
+  opacity: 0; pointer-events: none; transition: opacity var(--bh-fast);
+}
+.hud-rail-button:hover .hud-rail-tip, .hud-rail-button:focus-visible .hud-rail-tip { opacity: 1; }
+
+/* ---------- Dock ---------- */
+.table .hud-dock {
+  inset: calc(var(--header-height) + var(--hud-gap)) calc(var(--hud-rail) + var(--hud-gap)) var(--hud-gap) auto;
+  width: var(--hud-dock-width); z-index: 4;
+  display: flex; flex-direction: column; gap: var(--hud-gap);
+  background: transparent; border: 0; box-shadow: none;
+  --line: var(--bh-line); --muted: var(--bh-text-muted);
+}
+.table .hud-dock[hidden] { display: none; }
+.table .hud-dock[data-count='1'] { bottom: auto; max-height: calc(100% - var(--header-height) - 2 * var(--hud-gap)); }
+.hud-dock-panel {
+  flex: 1 1 0; min-height: 0; display: flex; flex-direction: column;
+  background: var(--bh-surface); border: 1px solid var(--bh-line); border-top: 3px solid var(--_tab);
+  border-radius: var(--bh-radius-md); box-shadow: var(--bh-shadow-2); overflow: hidden;
+  animation: bh-rise var(--bh-medium) var(--bh-ease);
+}
+.table .hud-dock[data-count='1'] .hud-dock-panel { flex: 0 1 auto; }
+.hud-dock-head {
+  display: flex; align-items: center; gap: var(--bh-space-2); flex: none;
+  padding: 8px 8px 8px 14px; background: var(--bh-surface-2); border-bottom: 1px solid var(--bh-line);
+}
+.hud-dock-head h2 { flex: 1; margin: 0; font: 700 1rem/1.3 var(--bh-font-heading); color: var(--bh-text-strong); }
+.hud-dock-icon { display: inline-flex; color: var(--bh-brass-bright); }
+.hud-dock-action {
+  display: grid; place-items: center; width: 32px; height: 32px; padding: 0;
+  border: 1px solid transparent; border-radius: 50%; background: transparent; color: var(--bh-text-muted);
+}
+.hud-dock-action:hover { background: var(--bh-surface-3); border-color: var(--bh-line); color: var(--bh-text-strong); }
+.hud-dock-action[aria-pressed=true] { color: var(--bh-brass-bright); border-color: var(--bh-line-strong); background: transparent; }
+.table .hud-dock-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 14px 16px; }
+.table .hud-dock .section-head h2 { color: var(--bh-text-strong); font-family: var(--bh-font-heading); }
+
+/* Board furniture moves left of the rail. */
+.table .board-tools, .table .scale { right: calc(var(--hud-rail) + var(--hud-gap)); }
+.table .dice-tray { right: calc(var(--hud-rail) + var(--hud-gap)); }
+.table .board-status { right: calc(var(--hud-rail) + 300px); }
+/* While the dock is open, keep zoom/measure tools and the dice tray visible beside it. */
+.table:has(> .hud-dock:not([hidden])) .board-tools,
+.table:has(> .hud-dock:not([hidden])) .scale,
+.table:has(> .hud-dock:not([hidden])) .dice-tray { right: calc(var(--hud-rail) + 2 * var(--hud-gap) + var(--hud-dock-width)); }
+.table:has(> .hud-dock:not([hidden])) .board-status { right: calc(var(--hud-rail) + 3 * var(--hud-gap) + var(--hud-dock-width) + 280px); }
+.with-combat .hud-rail { right: var(--combat-width); }
+.with-combat .hud-dock { right: calc(var(--combat-width) + var(--hud-rail) + var(--hud-gap)); }
+.table .toast { z-index: var(--bh-z-toast); right: calc(var(--hud-rail) + var(--hud-gap)); background: var(--bh-parchment); color: var(--bh-ink); border-color: var(--bh-brass); }
+
+/* ---------- Command Palette ---------- */
+.hud-palette-scrim { align-items: start; padding-top: 12vh; }
+.hud-palette {
+  width: min(560px, 100%); display: flex; flex-direction: column; max-height: 70vh;
+  background: var(--bh-parchment); color: var(--bh-ink); border-radius: var(--bh-radius-lg);
+  box-shadow: var(--bh-shadow-3); overflow: hidden; animation: bh-rise var(--bh-medium) var(--bh-ease);
+}
+.hud-palette-search {
+  display: flex; align-items: center; gap: 10px; padding: 0 16px;
+  border-bottom: 1px solid var(--bh-parchment-line); color: var(--bh-ink-muted);
+}
+.hud-palette-search input {
+  flex: 1; height: 54px; border: 0; background: transparent; color: var(--bh-ink);
+  font: 500 var(--bh-text-lg) var(--bh-font-body); outline: none; padding: 0;
+}
+.hud-palette-list { list-style: none; margin: 0; padding: 6px; overflow: auto; }
+.hud-palette-group { display: block; padding: 10px 10px 4px; font: 600 var(--bh-text-xs)/1 var(--bh-font-heading); color: var(--bh-ink-muted); letter-spacing: .02em; }
+.hud-palette-item {
+  display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px;
+  border-radius: var(--bh-radius-md); cursor: pointer; font-size: var(--bh-text-md);
+}
+.hud-palette-item > span:first-child { flex: 1; }
+.hud-palette-item[aria-selected=true] { background: var(--bh-ink); color: var(--bh-text-strong); }
+.hud-palette-item[aria-disabled=true] { opacity: .45; cursor: not-allowed; }
+.hud-palette-item .bh-kbd { border-color: currentColor; color: inherit; opacity: .75; }
+.hud-palette-empty { padding: 18px 12px; color: var(--bh-ink-muted); }
+.hud-palette-foot { display: flex; gap: 16px; padding: 8px 16px; border-top: 1px solid var(--bh-parchment-line); font-size: var(--bh-text-xs); color: var(--bh-ink-muted); }
+
+/* ---------- Narrow screens: collapsible rail, dock as bottom sheet ---------- */
+@media (max-width: 760px) {
+  .table { --hud-rail: 56px; }
+  .hud-brand, .hud-search-text, .hud-search .bh-kbd, .hud-me { display: none; }
+  .hud-search { width: 40px; padding: 0; justify-content: center; }
+  .hud-rail { top: calc(var(--header-height) + 8px); }
+  .table .hud-dock, .table .hud-dock[data-count='1'] {
+    inset: auto 8px 8px 8px; width: auto; max-height: 72dvh; bottom: 8px;
+  }
+  .table .hud-dock[data-count='2'] { top: calc(var(--header-height) + 8px); max-height: none; }
+  .table .board-tools, .table .scale,
+  .table:has(> .hud-dock:not([hidden])) .board-tools, .table:has(> .hud-dock:not([hidden])) .scale { right: 14px; }
+  .table .dice-tray, .table:has(> .hud-dock:not([hidden])) .dice-tray { right: 12px; }
+  .table .board-status, .table:has(> .hud-dock:not([hidden])) .board-status { right: 120px; }
+  .hud-palette-scrim { padding-top: 8px; }
+}
