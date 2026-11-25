@@ -11,6 +11,7 @@ import type { Command } from './commands.ts'
 import { Invalid } from './rules.ts'
 import type { Database, Query } from './store.ts'
 import { libraryRoutes } from './library.ts'
+import { createAuthThrottle } from './authThrottle.ts'
 import { accountRoutes } from './account.ts'
 import { accountCookie, activeProfile, profileSecret } from './profiles.ts'
 
@@ -26,7 +27,7 @@ export async function createApp(database: Database, assetDirectory: string) {
   app.disable('x-powered-by')
   const server = createServer(app)
   const sockets = new WebSocketServer({ noServer: true })
-  const subscribers = new Map<WebSocket, { roomId: string; memberId: string; accountSecret?: string }>()
+  const subscribers = new Map<WebSocket, { roomId: string; memberId: string; accountSecret?: string; sessionExpires?: number }>()
 
   async function roomBy(query: Query, id: string, lock = false) {
     if (!uuid.test(id)) throw new Invalid('รหัสห้องไม่ถูกต้อง')
@@ -34,19 +35,22 @@ export async function createApp(database: Database, assetDirectory: string) {
     if (!rows[0]) throw new Invalid('ไม่พบห้อง')
     return rows[0].state
   }
-  async function memberId(query: Query, roomId: string, cookie?: string) {
+  async function roomAccess(query: Query, roomId: string, cookie?: string, touch = false) {
     if (!uuid.test(roomId)) throw new Forbidden('กรุณาเข้าห้องก่อน')
-    const account = await activeProfile(query, accountCookie, cookie)
+    const account = await activeProfile(query, accountCookie, cookie, false, touch)
     if (account) {
       const { rows } = await query<{ state: Room }>('SELECT state FROM rooms WHERE id = $1', [roomId])
       const seat = rows[0]?.state.members.find(member => member.profileId === account.id)
-      if (seat) return seat.id
+      if (seat) return { memberId: seat.id, accountSecret: profileSecret(accountCookie, cookie), sessionExpires: new Date(account.sessionExpires).getTime() }
     }
     const secret = secretFrom(cookie)
     if (!secret) throw new Forbidden('กรุณาเข้าห้องก่อน')
     const { rows } = await query<{ member_id: string }>('SELECT member_id FROM sessions WHERE room_id = $1 AND token_hash = $2', [roomId, hash(secret)])
     if (!rows[0]) throw new Forbidden('กรุณาเข้าห้องก่อน')
-    return rows[0].member_id
+    return { memberId: rows[0].member_id }
+  }
+  async function memberId(query: Query, roomId: string, cookie?: string, touch = false) {
+    return (await roomAccess(query, roomId, cookie, touch)).memberId
   }
   function memberOf(room: Room, memberId: string) {
     const member = room.members.find(entry => entry.id === memberId)
@@ -59,7 +63,7 @@ export async function createApp(database: Database, assetDirectory: string) {
     return secret
   }
   function setSeat(req: Request, res: Response, room: Room, secret: string) {
-    res.cookie(cookieName, secret, { httpOnly: true, sameSite: 'strict', secure: req.secure || process.env.SECURE_COOKIES === '1', path: '/api/rooms/' + room.id, maxAge: 90 * 86400000 })
+    res.cookie(cookieName, secret, { httpOnly: true, sameSite: 'strict', secure: req.secure || process.env.SECURE_COOKIES === '1' || Boolean(process.env.PUBLIC_ORIGIN), path: '/api/rooms/' + room.id, maxAge: 90 * 86400000 })
   }
   function send(socket: WebSocket, room: Room, id: string) {
     if (socket.readyState !== WebSocket.OPEN) return
@@ -68,7 +72,7 @@ export async function createApp(database: Database, assetDirectory: string) {
   }
   function publish(room: Room) {
     for (const [socket, seat] of subscribers) {
-      if (seat.roomId === room.id) send(socket, room, seat.memberId)
+      if (seat.roomId === room.id && (seat.sessionExpires ?? Infinity) > Date.now()) send(socket, room, seat.memberId)
     }
   }
   async function save(query: Query, room: Room) {
@@ -97,24 +101,32 @@ export async function createApp(database: Database, assetDirectory: string) {
       if (seat.accountSecret === secret) socket.close(1008)
     }
   }
-  const sameOrigin = (origin: string | undefined, host: string | undefined) =>
-    !origin || origin === 'https://' + host || origin === 'http://' + host
+  const publicOrigin = process.env.PUBLIC_ORIGIN
+  if (publicOrigin && (new URL(publicOrigin).origin !== publicOrigin || !publicOrigin.startsWith('https://'))) {
+    throw new Error('PUBLIC_ORIGIN must be an HTTPS origin without a trailing slash')
+  }
+  const sameOrigin = (origin: string | undefined, host: string | undefined, secure: boolean) =>
+    origin === undefined || origin === (publicOrigin ?? (host && (secure ? 'https://' : 'http://') + host))
+  const allowAttempt = createAuthThrottle()
 
   app.use('/api', (req, res, next) => {
     res.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' })
-    if (!sameOrigin(req.headers.origin, req.headers.host)) return next(new Forbidden('Origin ไม่ถูกต้อง'))
+    const site = req.headers['sec-fetch-site']
+    if (site === 'cross-site' || site === 'same-site' || !sameOrigin(req.headers.origin, req.headers.host, req.secure)) {
+      return next(new Forbidden('Origin ไม่ถูกต้อง'))
+    }
     next()
   })
   app.use(express.json({ limit: '128kb' }))
-  app.use('/api/account', accountRoutes(database, renameMembers, closeAccountSockets))
-  app.use('/api/library', libraryRoutes(database))
+  app.use('/api/account', accountRoutes(database, renameMembers, closeAccountSockets, allowAttempt))
+  app.use('/api/library', libraryRoutes(database, allowAttempt))
   app.get('/api/health', async (_req, res) => {
     await database.query('SELECT 1')
     res.json({ status: 'ok' })
   })
   app.post('/api/rooms', async (req, res) => {
     const { room, member, secret } = await database.transaction(async query => {
-      const account = await activeProfile(query, accountCookie, req.headers.cookie, true)
+      const account = await activeProfile(query, accountCookie, req.headers.cookie, true, true)
       const member: Room['members'][number] = { id: randomUUID(), name: account?.name ?? text(req.body?.member), role: 'dm', profileId: account?.id }
       const room: Room = {
         id: randomUUID(), invite: randomUUID(), name: text(req.body?.name), revision: 0,
@@ -134,7 +146,7 @@ export async function createApp(database: Database, assetDirectory: string) {
     const roomId = req.body?.roomId
     if (role === 'dm' && (typeof roomId !== 'string' || !uuid.test(roomId))) throw new Forbidden('ต้องใช้ลิงก์เชิญ DM ของห้องนี้')
     const { room, member, secret, changed } = await database.transaction(async query => {
-      const account = await activeProfile(query, accountCookie, req.headers.cookie, true)
+      const account = await activeProfile(query, accountCookie, req.headers.cookie, true, true)
       const { rows } = await query<{ state: Room }>(role === 'dm'
         ? 'SELECT state FROM rooms WHERE id = $1 AND state->>\'dmInvite\' = $2 FOR UPDATE'
         : 'SELECT state FROM rooms WHERE invite = $1 FOR UPDATE',
@@ -176,7 +188,7 @@ export async function createApp(database: Database, assetDirectory: string) {
     if (!command || typeof command.commandId !== 'string' || !uuid.test(command.commandId)) throw new Invalid('รหัสคำสั่งไม่ถูกต้อง')
     const roomId = req.params.id
     const result = await database.transaction(async query => {
-      const id = await memberId(query, roomId, req.headers.cookie)
+      const id = await memberId(query, roomId, req.headers.cookie, true)
       const room = await roomBy(query, roomId, true)
       const member = memberOf(room, id)
       const key = [roomId, id, command.commandId, JSON.stringify(command)]
@@ -236,19 +248,44 @@ export async function createApp(database: Database, assetDirectory: string) {
     if (!map) throw new Forbidden('ไม่สามารถเปิดภาพนี้ได้')
     res.type(map.mime).sendFile(map.id, { root: assets })
   })
+  async function checkSocket(ws: WebSocket, seat: { accountSecret?: string; sessionExpires?: number }) {
+    if (!seat.accountSecret) return true
+    const profile = await activeProfile(database.query, accountCookie, accountCookie + '=' + seat.accountSecret)
+    if (!profile || ws.readyState !== WebSocket.OPEN) {
+      ws.close(1008)
+      return false
+    }
+    seat.sessionExpires = new Date(profile.sessionExpires).getTime()
+    return true
+  }
+  const recheck = setInterval(() => {
+    for (const [ws, seat] of subscribers) {
+      if (seat.accountSecret && ws.readyState === WebSocket.OPEN) {
+        void checkSocket(ws, seat).catch(() => ws.close(1011))
+      }
+    }
+  }, 30_000)
+  recheck.unref()
+  server.once('close', () => clearInterval(recheck))
+
   server.on('upgrade', (req, socket, head) => {
     const route = /^\/api\/rooms\/([0-9a-f-]+)\/socket$/i.exec(req.url ?? '')
-    if (!route || !sameOrigin(req.headers.origin, req.headers.host)) return socket.destroy()
+    if (!route || !sameOrigin(req.headers.origin, req.headers.host, 'encrypted' in socket && socket.encrypted === true)) return socket.destroy()
     const roomId = route[1]
     const onSocketError = () => socket.destroy()
     socket.on('error', onSocketError)
-    void memberId(database.query, roomId, req.headers.cookie).then(id => {
+    void roomAccess(database.query, roomId, req.headers.cookie).then(access => {
       socket.off('error', onSocketError)
       sockets.handleUpgrade(req, socket, head, ws => {
-        subscribers.set(ws, { roomId, memberId: id, accountSecret: profileSecret(accountCookie, req.headers.cookie) })
+        const seat = { ...access, roomId }
+        subscribers.set(ws, seat)
         ws.on('close', () => subscribers.delete(ws))
         ws.on('error', () => ws.terminate())
-        void roomBy(database.query, roomId).then(room => send(ws, room, id)).catch(() => ws.close(1011))
+        void (async () => {
+          if (!await checkSocket(ws, seat)) return
+          const room = await roomBy(database.query, roomId)
+          if ((seat.sessionExpires ?? Infinity) > Date.now()) send(ws, room, seat.memberId)
+        })().catch(() => ws.close(1011))
       })
     }).catch(() => socket.destroy())
   })

@@ -82,7 +82,7 @@ export function PersonalLibrary({ roomName, dm, draft, clearDraft, importSheet, 
       {objectDraft && <p>เข้าคลังเพื่อบันทึก <b>{objectDraft.name}</b></p>}
       <p className="muted">ใช้โปรไฟล์เดียวกันในแต่ละห้องเพื่อเปิดชีตที่บันทึกไว้</p>
       <label>ชื่อโปรไฟล์<input name="name" autoComplete="username" defaultValue={roomName.slice(0, 40)} required maxLength={40} /></label>
-      <label>รหัสผ่านโปรไฟล์<input name="password" type="password" required minLength={8} maxLength={128} autoComplete="current-password" /></label>
+      <label>รหัสผ่านโปรไฟล์ (สร้างใหม่ 15–128 ตัวอักษร)<input name="password" type="password" required minLength={8} maxLength={256} autoComplete="current-password" /></label>
       <div className="inline"><button value="login" className="primary" disabled={busy}>เข้าคลัง</button><button value="register" disabled={busy}>สร้างโปรไฟล์</button></div>
     </form> : <>
       <div className="section-head"><h2>{library.name}</h2>{!useAccount && <button disabled={busy} onClick={() => void run(async () => {

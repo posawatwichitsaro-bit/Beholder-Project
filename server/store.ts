@@ -6,7 +6,7 @@ export type Database = { query: Query; transaction<T>(work: (query: Query) => Pr
 
 export async function migrate(database: Database) {
   await database.transaction(async query => {
-    for (const name of ['001', '002', '003', '004']) {
+    for (const name of ['001', '002', '003', '004', '005']) {
       const source = await readFile(new URL('./migrations/' + name + '.sql', import.meta.url), 'utf8')
       for (const statement of source.split(';').filter(part => part.trim())) await query(statement)
     }

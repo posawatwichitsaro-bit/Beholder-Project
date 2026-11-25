@@ -6,6 +6,7 @@ services:
     environment:
       DATABASE_URL: postgresql://beholder:beholder@db:5432/beholder
       ASSET_DIR: /data/maps
+      PUBLIC_ORIGIN: "${BEHOLDER_PUBLIC_ORIGIN:-}"
     depends_on:
       db:
         condition: service_healthy
