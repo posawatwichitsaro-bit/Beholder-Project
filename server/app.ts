@@ -101,7 +101,8 @@ export async function createApp(database: Database, assetDirectory: string) {
       if (seat.accountSecret === secret) socket.close(1008)
     }
   }
-  const publicOrigin = process.env.PUBLIC_ORIGIN
+  // Compose passes an empty string when BEHOLDER_PUBLIC_ORIGIN is unset; treat it as unset.
+  const publicOrigin = process.env.PUBLIC_ORIGIN || undefined
   if (publicOrigin && (new URL(publicOrigin).origin !== publicOrigin || !publicOrigin.startsWith('https://'))) {
     throw new Error('PUBLIC_ORIGIN must be an HTTPS origin without a trailing slash')
   }
