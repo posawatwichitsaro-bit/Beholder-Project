@@ -1,11 +1,11 @@
-import { Menu, Search, Wifi, WifiOff } from 'lucide-react'
+import { Boxes, Menu, Search, Wifi, WifiOff } from 'lucide-react'
 import { BeholderEyeIcon, Button } from '../../ui/index.ts'
 
 /**
  * The 58 px bar above the map: menu toggle, where the table is, the DM's
  * publish button, the Command Palette and who you are.
  */
-export function HudTopBar({ sceneName, roomName, preparing, live, canPublish, publish, railOpen, toggleRail, openPalette, online, me, dm }: {
+export function HudTopBar({ sceneName, roomName, preparing, live, canPublish, publish, railOpen, toggleRail, openPalette, openManage, online, me, dm }: {
   sceneName?: string; roomName: string
   /** DM is looking at a scene players cannot see yet. */
   preparing: boolean
@@ -14,6 +14,8 @@ export function HudTopBar({ sceneName, roomName, preparing, live, canPublish, pu
   canPublish: boolean; publish: () => void
   railOpen: boolean; toggleRail: () => void
   openPalette: () => void
+  /** DM only: the "ห้องเก็บของ DM" management screen. */
+  openManage?: () => void
   online: boolean; me: string; dm: boolean
 }) {
   const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
@@ -32,6 +34,9 @@ export function HudTopBar({ sceneName, roomName, preparing, live, canPublish, pu
       </span>
     </div>
     {canPublish && <Button variant="brass" className="primary publish-scene" onClick={publish}>เปิดให้ผู้เล่น</Button>}
+    {openManage && <button type="button" className="hud-manage" aria-label="ห้องเก็บของ DM" title="ห้องเก็บของ DM (M)" aria-keyshortcuts="M" onClick={openManage}>
+      <Boxes size={17} aria-hidden="true" /><span className="hud-search-text">ห้องเก็บของ</span>
+    </button>}
     <button type="button" className="hud-search" aria-label="ค้นหาคำสั่ง" aria-keyshortcuts={mac ? 'Meta+K' : 'Control+K'} onClick={openPalette}>
       <Search size={16} aria-hidden="true" />
       <span className="hud-search-text">ค้นหาคำสั่ง</span>
