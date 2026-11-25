@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { blankSheet, objectLabels } from '../shared/model.ts'
-import type { Library, ObjectDefinition, SavedObject, Sheet, Template } from '../shared/model.ts'
-import { ApiError, api, commandId, json } from './api.ts'
-import { SheetEditor } from './SheetEditor.tsx'
-import { ObjectEditor } from './Objects.tsx'
+import { blankSheet, objectLabels } from '../../../shared/model.ts'
+import type { Library, ObjectDefinition, SavedObject, Sheet, Template } from '../../../shared/model.ts'
+import { ApiError, api, commandId, json } from '../../lib/api.ts'
+import { SheetEditor } from '../sheets/SheetEditor.tsx'
+import { ObjectEditor } from '../objects/Objects.tsx'
 
 const base = '/api/library'
 

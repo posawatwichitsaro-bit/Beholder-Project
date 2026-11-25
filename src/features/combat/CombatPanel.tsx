@@ -1,9 +1,9 @@
 import { useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
-import type { Actor, DamageKind, Roll, Scene, Snapshot } from '../shared/model.ts'
-import { nextLivingTurn } from '../shared/model.ts'
+import type { Actor, DamageKind, Roll, Scene, Snapshot } from '../../../shared/model.ts'
+import { nextLivingTurn } from '../../../shared/model.ts'
 import { AreaAttack, DamageTypeSelect } from './CombatEffects.tsx'
-import type { Area, AreaKind } from '../shared/area.ts'
+import type { Area, AreaKind } from '../../../shared/area.ts'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
 type Props = {

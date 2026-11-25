@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PointerEvent } from 'react'
-import { damageKinds, sizes } from '../shared/model.ts'
-import { areaContains, areaOutline, validArea } from '../shared/area.ts'
-import type { Area, AreaKind, AreaOutline } from '../shared/area.ts'
+import { damageKinds, sizes } from '../../../shared/model.ts'
+import { areaContains, areaOutline, validArea } from '../../../shared/area.ts'
+import type { Area, AreaKind, AreaOutline } from '../../../shared/area.ts'
 import { tokenColor, tokenInitials } from './tokenAppearance.ts'
-import type { Scene, SceneObject, Snapshot, Token } from '../shared/model.ts'
+import type { Scene, SceneObject, Snapshot, Token } from '../../../shared/model.ts'
 
 type Point = { x: number; y: number }
 type Action = { label: string; run: () => void; disabled?: boolean }

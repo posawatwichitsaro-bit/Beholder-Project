@@ -8,6 +8,8 @@ import type { Snapshot } from '../shared/model.ts'
 
 const base = process.env.BEHOLDER_TEST_URL ?? 'http://127.0.0.1:3000'
 const exact = (name: string) => ({ name, exact: true })
+/** Room id from a table URL: `/room/:id` (current) or `/?room=id` (links issued before the router). */
+const roomIdOf = (url: string) => /\/room\/([^/?#]+)/.exec(new URL(url).pathname)?.[1] ?? new URL(url).searchParams.get('room')
 
 test('sign up with a character name, rename in the room and return with a fresh session', { timeout: 60000 }, async t => {
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
@@ -31,7 +33,7 @@ test('sign up with a character name, rename in the room and return with a fresh 
   await openPanel(dm, 'ฉากและแผนที่')
 
   const bookmark = dm.url()
-  const roomPath = base + '/api/rooms/' + new URL(bookmark).searchParams.get('room')
+  const roomPath = base + '/api/rooms/' + roomIdOf(bookmark)
   const original = await (await dm.request.get(roomPath)).json()
   assert.equal(original.me.name, 'Mira')
   assert.equal(original.me.role, 'dm')
@@ -120,7 +122,7 @@ test('manage scenes and reuse an account Object in another room', { timeout: 600
     await page.getByRole('button', exact('สร้างห้อง DM')).click()
     await openPanel(page, 'ฉากและแผนที่')
     await createScene(page, scene)
-    return base + '/api/rooms/' + new URL(page.url()).searchParams.get('room')
+    return base + '/api/rooms/' + roomIdOf(page.url())
   }
   async function placeTent() {
     await page.getByRole('button', exact('วางในฉาก')).click()
@@ -362,7 +364,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   const move = dm.waitForResponse(response => response.url().endsWith('/commands') && response.request().postDataJSON()?.type === 'moveTokens')
   await drag(156, 108, 156, 156)
   assert.equal((await move).status(), 200)
-  const state = await (await dm.request.get(base + '/api/rooms/' + new URL(dm.url()).searchParams.get('room'))).json()
+  const state = await (await dm.request.get(base + '/api/rooms/' + roomIdOf(dm.url()))).json()
   assert.deepEqual(state.scenes[0].tokens.slice(0, 2).map((token: { y: number }) => token.y), [2, 2])
   assert.match(state.actors.find((actor: { name: string }) => actor.name === 'Scout').portrait, /^data:image\//)
   await canvas.click({ position: { x: 163, y: 203 }, button: 'right' })
@@ -416,7 +418,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
     const [red, green, blue] = canvas.getContext('2d')!.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data
     return red > 160 && green > 55 && green < 115 && blue < 85
   })
-  const roomUrl = base + '/api/rooms/' + new URL(dm.url()).searchParams.get('room')
+  const roomUrl = base + '/api/rooms/' + roomIdOf(dm.url())
   const fight = await (await dm.request.get(roomUrl)).json()
   const acting = fight.scenes[0].combat.order[0].actorId
   const target = fight.scenes[0].tokens.find((token: { actorId: string }) => token.actorId !== acting)
