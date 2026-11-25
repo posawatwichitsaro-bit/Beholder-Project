@@ -225,19 +225,24 @@ test('a player places an owned main and a library companion, then drives the mai
   } })).status(), 200)
   await player.reload()
   await openPanel(player, 'ชีตในห้อง')
+  // The first character a player places is their main token; the next one is a companion, no dialog needed.
   await player.getByRole('button', exact('วาง Warden')).click()
-  await player.getByRole('button', exact('Character Token')).click()
   const board = player.locator('canvas')
   await board.click({ position: { x: 155, y: 120 } })
   await player.getByRole('button', { name: /↑ ↓ ← → Warden/ }).waitFor()
   await openPanel(player, 'คลังส่วนตัว')
   await player.getByRole('button', exact('วาง Token')).click()
-  assert.equal(await player.getByRole('button', exact('Character Token')).isDisabled(), true)
-  await player.getByRole('button', exact('Companion Token')).click()
   await board.click({ position: { x: 270, y: 120 } })
   await player.getByText('คลิกช่องเพื่อวาง Token', { exact: true }).waitFor({ state: 'hidden' })
   const before = (await state()).scenes[0].tokens
   assert.deepEqual(before.map(token => token.role), ['character', 'companion'])
+
+  // Selecting a token shows its commands without a right-click; clicking empty map clears it.
+  await board.click({ position: { x: 155, y: 120 } })
+  const wardenBar = player.getByRole('toolbar', { name: 'คำสั่งของ Warden' })
+  await wardenBar.getByRole('button', exact('เปิดชีต')).waitFor()
+  await board.click({ position: { x: 640, y: 520 } })
+  await wardenBar.waitFor({ state: 'hidden' })
 
   await board.click({ position: { x: 260, y: 110 } })
   const step = player.waitForResponse(response => response.url() === path + '/commands' && response.request().postDataJSON()?.type === 'stepCharacter')
@@ -246,6 +251,15 @@ test('a player places an owned main and a library companion, then drives the mai
   const after = (await state()).scenes[0].tokens
   assert.equal(after[0].x, before[0].x + 1)
   assert.deepEqual(after[1], before[1])
+
+  // Dragging empty map pans the board: the main token is found where the view moved it.
+  const frame = (await board.boundingBox())!
+  await player.mouse.move(frame.x + 640, frame.y + 520)
+  await player.mouse.down()
+  await player.mouse.move(frame.x + 736, frame.y + 568, { steps: 6 })
+  await player.mouse.up()
+  await board.click({ position: { x: 36 + (after[0].x + .5) * 48 + 96, y: 36 + (after[0].y + .5) * 48 + 48 } })
+  await wardenBar.waitFor()
 })
 
 async function createScene(page: Page, name: string) {
@@ -339,13 +353,16 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await createSheet(two, 'Mage')
   await createSheet(dm, 'Rat', true)
   const canvas = dm.locator('canvas')
-  for (const [name, position] of [['Scout', { x: 165, y: 115 }], ['Mage', { x: 210, y: 115 }]] as const) {
-    await openPanel(dm, 'ชีตในห้อง')
-    await dm.getByRole('button', exact('วาง ' + name)).click()
-    await dm.getByRole('button', exact('Character Token')).click()
-    await canvas.click({ position })
-    await dm.getByText('คลิกช่องเพื่อวาง Token', { exact: true }).waitFor({ state: 'hidden' })
-  }
+  await openPanel(dm, 'ชีตในห้อง')
+  await dm.getByRole('button', exact('วาง Scout')).click()
+  await canvas.click({ position: { x: 165, y: 115 } })
+  await dm.getByText('คลิกช่องเพื่อวาง Token', { exact: true }).waitFor({ state: 'hidden' })
+  // A sheet card can also be dragged straight onto a cell.
+  await openPanel(dm, 'ชีตในห้อง')
+  const placedMage = dm.waitForResponse(response => response.url().endsWith('/commands') && response.request().postDataJSON()?.type === 'place')
+  await dm.locator('.actor-item').filter({ hasText: 'Mage' }).dragTo(canvas, { targetPosition: { x: 210, y: 115 } })
+  assert.equal((await placedMage).status(), 200)
+  await dm.keyboard.press('Escape')
   await canvas.click({ position: { x: 260, y: 115 }, button: 'right' })
   await dm.getByRole('button', exact('วาง Token ที่นี่')).click()
   await dm.locator('.actor-item').filter({ hasText: 'Rat' }).getByRole('button', exact('วาง')).click()
@@ -377,7 +394,10 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
     await dm.mouse.move(board.x + targetX, board.y + targetY, { steps: 4 })
     await dm.mouse.up()
   }
+  // Shift+drag draws a selection box (a plain drag on empty map pans).
+  await dm.keyboard.down('Shift')
   await drag(120, 76, 227, 134)
+  await dm.keyboard.up('Shift')
   await dm.getByText('เลือก 2 Token', { exact: true }).waitFor()
   const move = dm.waitForResponse(response => response.url().endsWith('/commands') && response.request().postDataJSON()?.type === 'moveTokens')
   await drag(156, 108, 156, 156)
@@ -567,4 +587,23 @@ test('DM searches the SRD, saves a monster template and places the creature with
   assert.match(monster.monsterReference!.statBlock, /Nimble Escape/)
   assert.equal(result.templates[0].sheet.monsterReference?.page, monster.monsterReference!.page)
   assert.equal(result.scenes[0].tokens[0].actorId, monster.id)
+
+  // The DM drags an object to a new cell; selecting it shows its commands.
+  const canvas = page.locator('canvas')
+  await canvas.click({ position: { x: 400, y: 300 }, button: 'right' })
+  await page.getByRole('button', exact('นำเข้า Object ที่นี่')).click()
+  await page.getByLabel('ชื่อ Object').fill('Barrel')
+  await page.getByRole('button', exact('วาง Object')).click()
+  await page.getByRole('dialog', { name: 'นำเข้า Object' }).waitFor({ state: 'hidden' })
+  const barrel = (await (await page.request.get(path)).json() as Snapshot).scenes[0].objects!.find(item => item.name === 'Barrel')!
+  const frame = (await canvas.boundingBox())!
+  const moved = page.waitForResponse(r => r.url() === path + '/commands' && r.request().postDataJSON()?.type === 'moveObject')
+  await page.mouse.move(frame.x + 36 + (barrel.x + .5) * 48, frame.y + 36 + (barrel.y + .5) * 48)
+  await page.mouse.down()
+  await page.mouse.move(frame.x + 36 + (barrel.x + 2.5) * 48, frame.y + 36 + (barrel.y + .5) * 48, { steps: 6 })
+  await page.mouse.up()
+  assert.equal((await moved).status(), 200)
+  const after = (await (await page.request.get(path)).json() as Snapshot).scenes[0].objects!.find(item => item.name === 'Barrel')!
+  assert.deepEqual([after.x, after.y], [barrel.x + 2, barrel.y])
+  await page.getByRole('toolbar', { name: 'คำสั่งของ Barrel' }).getByRole('button', exact('โต้ตอบกับ Object')).waitFor()
 })

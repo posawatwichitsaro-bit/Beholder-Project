@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { abilities, blankSheet, damageKinds } from '../../../shared/model.ts'
 import type { Sheet, Size, Ability, DamageKind } from '../../../shared/model.ts'
+import type { TokenDragProps } from '../board/tokenDrag.ts'
 import { monsterSheet, parseMonsterText } from '../../../shared/monsterManual.ts'
 
 type Monster = {
@@ -33,8 +34,10 @@ function crValue(cr: string) {
   const [top, bottom] = cr.split('/').map(Number)
   return top / (bottom ?? 1)
 }
-export function MonsterManual({ addTemplate, placeMonster }: {
+export function MonsterManual({ addTemplate, placeMonster, dragMonster }: {
   addTemplate: (sheet: Sheet) => Promise<boolean>; placeMonster?: (sheet: Sheet) => void
+  /** Drag props so the monster can be dropped straight onto the board. */
+  dragMonster?: (sheet: Sheet) => TokenDragProps
 }) {
   const [catalog, setCatalog] = useState<Monster[]>([])
   const [query, setQuery] = useState('')
@@ -64,7 +67,7 @@ export function MonsterManual({ addTemplate, placeMonster }: {
       <button onClick={() => setSelected(undefined)}>← กลับไปยังรายการ</button>
       <header><small>{selected.size} · {selected.type}</small><h2>{selected.name}</h2></header>
       <div className="manual-stats">{[['CR',selected.cr],['AC',selected.ac],['HP',selected.hp]].map(([key,val]) => <div key={key}><small>{key}</small><b>{val}</b></div>)}</div>
-      <div className="inline">{placeMonster && <button className="primary" onClick={() => placeMonster(asSheet(selected))}>วางมอนสเตอร์ในฉาก</button>}
+      <div className="inline">{placeMonster && <button className="primary" {...dragMonster?.(asSheet(selected))} onClick={() => placeMonster(asSheet(selected))}>วางมอนสเตอร์ในฉาก</button>}
         <button disabled={busy || saved} onClick={async () => {
           setBusy(true)
           try { setSaved(await addTemplate(asSheet(selected))) } finally { setBusy(false) }

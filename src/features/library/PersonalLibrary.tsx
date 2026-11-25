@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
+import type { TokenDragProps } from '../board/tokenDrag.ts'
 import { blankSheet, objectLabels } from '../../../shared/model.ts'
 import type { Library, ObjectDefinition, SavedObject, Sheet, Template } from '../../../shared/model.ts'
 import { ApiError, api, commandId, json } from '../../lib/api.ts'
@@ -9,13 +10,15 @@ import { ObjectEditor } from '../objects/Objects.tsx'
 const base = '/api/library'
 
 export function PersonalLibrary({ roomName, dm, draft, clearDraft, importSheet, useAccount, section, selectSection,
-  objectDraft, clearObjectDraft, placeObject, placeCharacter, accountForm }: {
+  objectDraft, clearObjectDraft, placeObject, placeCharacter, dragCharacter, accountForm }: {
   roomName: string; dm: boolean; draft?: Sheet; clearDraft: () => void; importSheet: (sheet: Sheet) => Promise<boolean>; useAccount: boolean
   /** Sign-in form shown to guests, since the library belongs to an account. */
   accountForm?: ReactNode
   section: 'sheets' | 'objects'; selectSection: (section: 'sheets' | 'objects') => void
   objectDraft?: ObjectDefinition; clearObjectDraft: () => void; placeObject?: (value: ObjectDefinition) => void
   placeCharacter?: (sheet: Sheet) => void
+  /** Drag props so a saved character can be dropped straight onto the board. */
+  dragCharacter?: (sheet: Sheet) => TokenDragProps
 }) {
   const [library, setLibrary] = useState<Library>()
   const [loading, setLoading] = useState(true)
@@ -126,7 +129,7 @@ export function PersonalLibrary({ roomName, dm, draft, clearDraft, importSheet, 
           {(dm || item.sheet.kind === 'pc') && <button disabled={busy} onClick={() => void run(async () => {
             if (await importSheet(item.sheet)) setMessage('คัดลอกชีตเข้าห้องแล้ว')
           })}>ใช้ในห้องนี้</button>}
-          {placeCharacter && item.sheet.kind === 'pc' && <button className="primary" onClick={() => placeCharacter(item.sheet)}>วาง Token</button>}
+          {placeCharacter && item.sheet.kind === 'pc' && <button className="primary" {...dragCharacter?.(item.sheet)} onClick={() => placeCharacter(item.sheet)}>วาง Token</button>}
           <button onClick={() => setRemove(item)}>ลบ</button>
         </div>
       </article>)}
