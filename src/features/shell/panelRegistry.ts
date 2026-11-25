@@ -6,7 +6,7 @@
  * here and its content in Table. `roles` hides panels a seat cannot use, so
  * players never see DM tools.
  */
-export type PanelId = 'scenes' | 'sheets' | 'actor' | 'objects' | 'combat' | 'dice' | 'manual' | 'library' | 'account'
+export type PanelId = 'scenes' | 'sheets' | 'actor' | 'objects' | 'combat' | 'dice' | 'log' | 'manual' | 'library' | 'account'
 export type PanelGroup = 'board' | 'play' | 'personal'
 export type Role = 'dm' | 'player'
 
@@ -32,6 +32,7 @@ export const panels: readonly PanelDef[] = [
   { id: 'objects', label: 'Object', group: 'board', roles: everyone, shortcut: 'O', inRail: true, keywords: 'object chest item กล่อง ของ' },
   { id: 'combat', label: 'การต่อสู้', group: 'play', roles: everyone, shortcut: 'F', inRail: true, keywords: 'combat initiative turn fight ต่อสู้ เทิร์น' },
   { id: 'dice', label: 'ลูกเต๋า', group: 'play', roles: everyone, shortcut: 'D', inRail: true, keywords: 'dice roll d20 ทอย ผลทอย' },
+  { id: 'log', label: 'บันทึกการผจญภัย', group: 'play', roles: everyone, shortcut: 'L', inRail: true, keywords: 'adventure log chat history message แชท ข้อความ บันทึก ประวัติ' },
   { id: 'manual', label: 'Monster Manual', group: 'play', roles: ['dm'], shortcut: 'N', inRail: true, keywords: 'monster srd bestiary มอนสเตอร์' },
   { id: 'library', label: 'คลังส่วนตัว', group: 'personal', roles: everyone, shortcut: 'B', inRail: true, keywords: 'library saved คลัง' },
   { id: 'account', label: 'ตั้งค่าบัญชี', group: 'personal', roles: everyone, inRail: true, keywords: 'account settings name logout บัญชี ออกจากระบบ' },

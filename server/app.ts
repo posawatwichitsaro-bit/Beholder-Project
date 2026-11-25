@@ -6,7 +6,7 @@ import { mkdir, writeFile, unlink } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { Member, Room, TableSummary } from '../shared/model.ts'
-import { applyCommand, Conflict, Forbidden, snapshot, text, visibleRolls } from './commands.ts'
+import { addLog, applyCommand, Conflict, Forbidden, snapshot, text, visibleRolls } from './commands.ts'
 import type { Command } from './commands.ts'
 import { Invalid } from './rules.ts'
 import type { Database, Query } from './store.ts'
@@ -181,6 +181,7 @@ export async function createApp(database: Database, assetDirectory: string) {
       if (!member) {
         member = { id: randomUUID(), name: account?.name ?? text(req.body?.name), role, profileId: account?.id }
         room.members.push(member)
+        addLog(room, { kind: 'join', text: member.name + ' เข้าร่วมโต๊ะ' + (role === 'dm' ? ' (DM)' : '') })
       }
       if (role === 'dm') {
         delete room.dmInvite

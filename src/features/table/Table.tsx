@@ -12,6 +12,9 @@ import { SheetEditor } from '../sheets/SheetEditor.tsx'
 import { ActorActions } from '../sheets/ActorActions.tsx'
 import { SheetView } from '../sheets/SheetView.tsx'
 import { CharacterWizard } from '../sheets/CharacterWizard.tsx'
+import { AdventureLog } from '../dice/AdventureLog.tsx'
+import { DiceReveal } from '../dice/DiceReveal.tsx'
+import { usePrefs } from '../../state/prefs.ts'
 import { PersonalLibrary } from '../library/PersonalLibrary.tsx'
 import { ObjectEditor, ObjectActions } from '../objects/Objects.tsx'
 import { LootDialog } from '../objects/Inventory.tsx'
@@ -367,6 +370,7 @@ export function Table({ account, changeAccount }: AccountProps) {
         if (ok && (value.type === 'sheetRoll' || value.type === 'castSave')) openPanel('dice', true)
         return ok
       }} /> : <p className="muted">เลือกตัวละครจากชีตในห้องหรือจาก Token บนกระดาน</p>,
+    log: () => <AdventureLog room={room} send={send} />,
     dice: () => <>
       <div className="section-head"><h2>ผลทอย</h2></div>
       {dm && <div className="dice-settings">
@@ -422,6 +426,8 @@ export function Table({ account, changeAccount }: AccountProps) {
       { id: 'private-roll', label: privateRoll ? 'เลิกทอยลับ' : 'ทอยลับ (เฉพาะ DM เห็น)', group: 'DM', keywords: 'private secret roll ลับ', run: () => setPrivateRoll(!privateRoll) }
     ] : []),
     { id: 'roll-d20', label: 'ทอย d20', group: 'ลูกเต๋า', keywords: 'roll dice', run: () => void send({ type: 'roll', formula: '1d20' }) },
+    { id: 'sound', label: usePrefs.getState().sound ? 'ปิดเสียงลูกเต๋า' : 'เปิดเสียงลูกเต๋า', group: 'ลูกเต๋า', keywords: 'sound mute audio เสียง',
+      run: () => usePrefs.getState().setSound(!usePrefs.getState().sound) },
     ...[4, 6, 8, 10, 12, 100].map(die => ({ id: 'roll-d' + die, label: 'ทอย d' + die, group: 'ลูกเต๋า', keywords: 'roll dice', run: () => void send({ type: 'roll', formula: '1d' + die }) })),
     ...(mainToken ? [{ id: 'focus-main', label: 'ไปที่ ' + actorName(mainToken.actorId), group: 'กระดาน', keywords: 'camera center main character ตัวหลัก', run: focusMain }] : []),
     ...(inviteLink ? [{ id: 'invite', label: 'คัดลอกลิงก์เชิญผู้เล่น', group: 'โต๊ะ', keywords: 'invite link share เชิญ', run: () => void copyInvite() }] : []),
@@ -499,6 +505,7 @@ export function Table({ account, changeAccount }: AccountProps) {
           <span><b>{roll.name}</b> · {roll.label}{roll.privateTo ? ' · ลับ' : ''}{roll.outcome ? ' · ' + roll.outcome : ''}</span><strong>{roll.total}</strong>
         </li>)}</ol> : <p>ยังไม่มีการทอย</p>}
       </aside>}
+      <DiceReveal rolls={room.rolls} />
     </section>
     {scene && showTurnRail && <TurnRail scene={scene} room={room} focus={actorId => {
       if (menuOpen) closePanels()
