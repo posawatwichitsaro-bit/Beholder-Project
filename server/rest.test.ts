@@ -81,3 +81,17 @@ test('rests wait until the fight is over; resources save with the sheet and stay
   assert.deepEqual(fighter.resources, [{ name: 'Rage', max: 3, used: 1, short: 'one' }])
   assert.throws(() => applyCommand(room, mira, { type: 'sheet', actorId: 'f', sheet: { ...sheet, resources: [{ name: 'Rage', max: 3, used: 9, short: 'one' }] } }), /นอกช่วง/)
 })
+
+test('a Long Rest also lowers Exhaustion kept as an effect, and ends it at level 0', () => {
+  const { dm, fighter, room } = table()
+  fighter.conditions = ''
+  fighter.effects = [
+    { id: 'e1', condition: 'Exhaustion', level: 2, sourceLabel: 'Forced march' },
+    { id: 'e2', condition: 'Exhaustion', level: 1, sourceLabel: 'Cold night' },
+    { id: 'e3', condition: 'Poisoned', sourceLabel: 'Spider bite' }
+  ]
+  applyCommand(room, dm, { type: 'rest', actorId: 'f', kind: 'long' })
+  assert.deepEqual(fighter.effects.map(effect => [effect.condition, effect.level]), [['Exhaustion', 1], ['Poisoned', undefined]])
+  applyCommand(room, dm, { type: 'rest', actorId: 'f', kind: 'short' })
+  assert.equal(fighter.effects.find(effect => effect.condition === 'Exhaustion')?.level, 1, 'a Short Rest leaves Exhaustion alone')
+})
