@@ -5,7 +5,7 @@ import { BeholderEyeIcon, Button } from '../../ui/index.ts'
  * The 58 px bar above the map: menu toggle, where the table is, the DM's
  * publish button, the Command Palette and who you are.
  */
-export function HudTopBar({ sceneName, roomName, preparing, live, canPublish, publish, railOpen, toggleRail, openPalette, openManage, online, me, dm }: {
+export function HudTopBar({ sceneName, roomName, preparing, live, canPublish, publish, railOpen, toggleRail, openPalette, openManage, bringParty, online, me, dm }: {
   sceneName?: string; roomName: string
   /** DM is looking at a scene players cannot see yet. */
   preparing: boolean
@@ -16,6 +16,8 @@ export function HudTopBar({ sceneName, roomName, preparing, live, canPublish, pu
   openPalette: () => void
   /** DM only: the "ห้องเก็บของ DM" management screen. */
   openManage?: () => void
+  /** DM only: player characters who have a main token elsewhere but none in this scene. */
+  bringParty?: { names: string[]; run: () => void }
   online: boolean; me: string; dm: boolean
 }) {
   const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
@@ -33,6 +35,7 @@ export function HudTopBar({ sceneName, roomName, preparing, live, canPublish, pu
         </span>}
       </span>
     </div>
+    {bringParty && <Button className="bring-party" onClick={bringParty.run} title={'วาง Token ของ ' + bringParty.names.join(', ') + ' ในฉากนี้'}>พาผู้เล่นมา ({bringParty.names.length})</Button>}
     {canPublish && <Button variant="brass" className="primary publish-scene" onClick={publish}>เปิดให้ผู้เล่น</Button>}
     {openManage && <button type="button" className="hud-manage" aria-label="ห้องเก็บของ DM" title="ห้องเก็บของ DM (M)" aria-keyshortcuts="M" onClick={openManage}>
       <Boxes size={17} aria-hidden="true" /><span className="hud-search-text">ห้องเก็บของ</span>

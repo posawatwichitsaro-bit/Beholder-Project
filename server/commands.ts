@@ -487,6 +487,33 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       room.activeSceneId = opened.id
       return {}
     }
+    case 'bringParty': {
+      // Every player character that has a main token in another scene and none here comes along,
+      // keeping the shape the party had (taken from the scene players saw last, if it has them).
+      requireDM(member)
+      const target = scene()
+      const here = new Set(target.tokens.map(token => token.actorId))
+      const others = room.scenes.filter(item => item.id !== target.id)
+      const from = [others.find(item => item.id === room.activeSceneId), ...others].filter(Boolean) as Scene[]
+      const moving: Token[] = []
+      for (const source of from) for (const token of withTokenRoles(source, room.actors)) {
+        const creature = room.actors.find(actor => actor.id === token.actorId)
+        if (token.role === 'character' && creature?.kind === 'pc' && !here.has(creature.id) && !moving.some(item => item.actorId === creature.id)) moving.push(token)
+      }
+      if (!moving.length) throw new Invalid('ไม่มีตัวละครผู้เล่นที่ต้องพามา')
+      const left = Math.min(...moving.map(token => token.x))
+      const top = Math.min(...moving.map(token => token.y))
+      const anchor = { x: command.x === undefined ? 1 : number(command.x, -1000, 1000), y: command.y === undefined ? 1 : number(command.y, -1000, 1000) }
+      const taken = (x: number, y: number) => [...target.tokens].some(token => token.x === x && token.y === y)
+      for (const token of moving) {
+        let x = anchor.x + token.x - left
+        const y = anchor.y + token.y - top
+        while (taken(x, y)) x += 1
+        target.tokens = [...target.tokens, { id: id(), actorId: token.actorId, x, y, role: 'character' }]
+      }
+      addLog(room, { kind: 'scene', sceneId: target.id, text: 'พา ' + moving.map(token => get(room.actors, token.actorId).name).join(', ') + ' มาที่ ' + target.name })
+      return {}
+    }
     case 'reuseMap': {
       requireDM(member)
       const source = get(room.scenes, command.sourceId)
@@ -590,6 +617,17 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       if (template) {
         const ordinal = room.actors.filter(item => item.templateId === template.id).length + 1
         creature.name = template.sheet.name + ' ' + ordinal
+      } else if (sheet && creature.kind === 'monster') {
+        const base = creature.name
+        const same = room.actors.filter(item => item.kind === 'monster' && (item.name === base || new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\d+$').test(item.name)))
+        if (same.length) {
+          const first = same.find(item => item.name === base)
+          if (first) first.name = base + ' 1'
+          const used = new Set(room.actors.map(item => item.name))
+          let ordinal = same.length + 1
+          while (used.has(base + ' ' + ordinal)) ordinal += 1
+          creature.name = base + ' ' + ordinal
+        }
       }
       if (template || sheet) room.actors.push(creature)
       target.tokens = [...tokens, token]

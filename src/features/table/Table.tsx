@@ -427,6 +427,9 @@ export function Table({ account, changeAccount }: AccountProps) {
   }
 
   const roleDefs = panelsFor(role)
+  /** DM: player characters with a main token in another scene but none in the scene on screen. */
+  const partyMissing = dm && scene ? room.actors.filter(item => item.kind === 'pc' && !scene.tokens.some(token => token.actorId === item.id)
+    && room.scenes.some(other => other.id !== scene.id && other.tokens.some(token => token.actorId === item.id && token.role === 'character'))) : []
   /** Player characters with a token in the scene on screen: who a party rest covers. */
   const partyIds = room.actors.filter(item => item.kind === 'pc' && scene?.tokens.some(token => token.actorId === item.id)).map(item => item.id).slice(0, 12)
   const paletteCommands: PaletteCommand[] = [
@@ -446,6 +449,7 @@ export function Table({ account, changeAccount }: AccountProps) {
         { id: 'short-rest-party', label: 'พักสั้นทั้งกลุ่ม (Short Rest)', group: 'DM', keywords: 'rest short party พัก', run: () => void send({ type: 'rest', actorIds: partyIds, kind: 'short' }) },
         { id: 'long-rest-party', label: 'พักยาวทั้งกลุ่ม (Long Rest)', group: 'DM', keywords: 'rest long party พัก นอน', run: () => void send({ type: 'rest', actorIds: partyIds, kind: 'long' }) }
       ] : []),
+      ...(partyMissing.length ? [{ id: 'bring-party', label: 'พาผู้เล่นมาฉากนี้ (' + partyMissing.length + ')', group: 'DM', keywords: 'party move bring scene พา ย้าย กลุ่ม', run: () => void commandHere({ type: 'bringParty' }) }] : []),
       { id: 'private-roll', label: privateRoll ? 'เลิกทอยลับ' : 'ทอยลับ (เฉพาะ DM เห็น)', group: 'DM', keywords: 'private secret roll ลับ', run: () => setPrivateRoll(!privateRoll) }
     ] : []),
     { id: 'roll-d20', label: 'ทอย d20', group: 'ลูกเต๋า', keywords: 'roll dice', run: () => void send({ type: 'roll', formula: '1d20' }) },
@@ -463,7 +467,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     <HudTopBar sceneName={scene?.name} roomName={room.name} preparing={preparing} live={Boolean(scene && scene.id === room.activeSceneId)}
       canPublish={preparing} publish={() => void commandHere({ type: 'activate' })}
       railOpen={railOpen} toggleRail={() => setRailOpen(open => !open)} openPalette={() => setPaletteOpen(true)}
-      openManage={dm ? () => setManageOpen(true) : undefined} online={online} me={room.me.name} dm={dm} />
+      openManage={dm ? () => setManageOpen(true) : undefined} bringParty={partyMissing.length ? { names: partyMissing.map(item => item.name), run: () => void commandHere({ type: 'bringParty' }) } : undefined} online={online} me={room.me.name} dm={dm} />
     <PanelRail items={roleDefs} isPressed={isPressed} choose={choosePanel} open={railOpen} />
     <Dock items={dock.open.map(id => ({ id, title: panelById(id).label, body: bodies[id]() }))}
       pinned={dock.pinned} pin={id => dispatchDock({ type: 'pin', id })} close={id => dispatchDock({ type: 'close', id })} />
