@@ -410,6 +410,8 @@ export function Table({ account, changeAccount }: AccountProps) {
   }
 
   const roleDefs = panelsFor(role)
+  /** Player characters with a token in the scene on screen: who a party rest covers. */
+  const partyIds = room.actors.filter(item => item.kind === 'pc' && scene?.tokens.some(token => token.actorId === item.id)).map(item => item.id).slice(0, 12)
   const paletteCommands: PaletteCommand[] = [
     ...roleDefs.filter(panel => panel.inRail).map(panel => ({
       id: 'panel-' + panel.id, label: 'เปิด ' + panel.label, group: 'แผง · ' + groupLabels[panel.group],
@@ -423,6 +425,10 @@ export function Table({ account, changeAccount }: AccountProps) {
       { id: 'manage', label: 'เปิดห้องเก็บของ DM', group: 'DM', keywords: 'manage token item loot scene จัดการ', shortcut: 'M', run: () => setManageOpen(true) },
       ...(scene?.map ? [{ id: 'calibrate', label: 'ปรับ Grid บนภาพ', group: 'DM', keywords: 'grid calibrate align map ปรับ', run: () => beginCalibration(scene) }] : []),
       { id: 'demo', label: 'เพิ่ม Encounter ด่านร้างริมทาง', group: 'DM', keywords: 'demo encounter goblin', run: addDemo },
+      ...(partyIds.length ? [
+        { id: 'short-rest-party', label: 'พักสั้นทั้งกลุ่ม (Short Rest)', group: 'DM', keywords: 'rest short party พัก', run: () => void send({ type: 'rest', actorIds: partyIds, kind: 'short' }) },
+        { id: 'long-rest-party', label: 'พักยาวทั้งกลุ่ม (Long Rest)', group: 'DM', keywords: 'rest long party พัก นอน', run: () => void send({ type: 'rest', actorIds: partyIds, kind: 'long' }) }
+      ] : []),
       { id: 'private-roll', label: privateRoll ? 'เลิกทอยลับ' : 'ทอยลับ (เฉพาะ DM เห็น)', group: 'DM', keywords: 'private secret roll ลับ', run: () => setPrivateRoll(!privateRoll) }
     ] : []),
     { id: 'roll-d20', label: 'ทอย d20', group: 'ลูกเต๋า', keywords: 'roll dice', run: () => void send({ type: 'roll', formula: '1d20' }) },
