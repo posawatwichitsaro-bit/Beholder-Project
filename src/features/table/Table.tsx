@@ -423,7 +423,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       <div className="dice-buttons">{[4, 6, 8, 10, 12, 20, 100].map(die => <button key={die} onClick={() => void send({ type: 'roll', formula: '1d' + die })}>d{die}</button>)}</div>
       <ol className="rolls">{[...history].reverse().map(roll => <li key={roll.id}>
         <div><small>{roll.name} · {roll.label}</small><br /><span>{roll.formula}{roll.faces.length > 0 && ' · [' + roll.faces.join(', ') + ']'}{roll.modifier ? ' ' + (roll.modifier > 0 ? '+' : '') + roll.modifier : ''}</span>
-          {roll.outcome && <small> · {roll.outcome}</small>}</div><strong>{roll.total}</strong>
+          {roll.outcome && <small> · {roll.outcome}</small>}{roll.applied === false && <small className="roll-waiting"> · รอ DM ยืนยัน</small>}</div><strong>{roll.total}</strong>
         {roll.cast && !roll.cast.resolved && !dm && room.actors.some(item => item.id === roll.targetId) && <div className="inline damage">
           <label><input type="checkbox" checked={saveProficiency[roll.id] ?? false}
             onChange={event => setSaveProficiency({ ...saveProficiency, [roll.id]: event.target.checked })} />Proficient</label>
@@ -568,7 +568,7 @@ export function Table({ account, changeAccount }: AccountProps) {
         <header><button onClick={() => choosePanel('dice')}>ผลทอยของโต๊ะ</button>
           {dm && <button aria-label="ปิดถาดผลเต๋าของฉัน" onClick={() => setHideTray(true)}>×</button>}</header>
         {recentRolls.length ? <ol aria-live="polite">{recentRolls.map(roll => <li key={roll.id}>
-          <span><b>{roll.name}</b> · {roll.label}{roll.privateTo ? ' · ลับ' : ''}{roll.outcome ? ' · ' + roll.outcome : ''}</span><strong>{roll.total}</strong>
+          <span><b>{roll.name}</b> · {roll.label}{roll.privateTo ? ' · ลับ' : ''}{roll.outcome ? ' · ' + roll.outcome : ''}{roll.applied === false ? ' · รอ DM ยืนยัน' : ''}</span><strong>{roll.total}</strong>
         </li>)}</ol> : <p>ยังไม่มีการทอย · กด D เพื่อเปิดลูกเต๋า</p>}
       </aside>}
       <DiceReveal rolls={room.rolls} />

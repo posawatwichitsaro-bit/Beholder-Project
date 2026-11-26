@@ -61,6 +61,7 @@ export function AdventureLog({ room, send }: { room: Snapshot; send: SendCommand
               <span className="log-who">{roll.name}</span> {roll.label}{roll.privateTo ? ' · ลับ' : ''}
               <span className="log-formula"> · {roll.formula}{roll.faces.length > 1 ? ' [' + roll.faces.join(', ') + ']' : ''}</span>
               {roll.outcome && <span className="log-outcome"> · {roll.outcome}</span>}
+              {roll.applied === false && <span className="log-outcome roll-waiting"> · รอ DM ยืนยัน</span>}
               {outcome !== 'normal' && <span className="log-badge">{outcome === 'critical' ? 'Natural 20' : 'Natural 1'}</span>}
             </span>
             <b className="log-total">{roll.total}</b>

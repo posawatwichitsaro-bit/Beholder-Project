@@ -7,7 +7,7 @@ import { d20, deathSave, die, harm, heal, Invalid, parseDice, rollDice } from '.
 import { center, isNear, structureCover } from './cover.ts'
 import { createRoadsideEncounter } from './encounter.ts'
 import { bonusForCheck, calculatedSheet, commonSkills } from '../shared/characterStats.ts'
-import { formatConditions, tickConditions } from '../shared/conditions.ts'
+import { formatConditions, formatSlots, parseSlots, tickConditions } from '../shared/conditions.ts'
 import { advanceEffects, concentrationDc, d20Penalty, effectName, incapacitating, tiedTo } from '../shared/effects.ts'
 import { hitDiceLeft, hitDieHealing, restedSheet } from '../shared/rest.ts'
 import type { ClassResource, Effect, HitDie as RestDie } from '../shared/model.ts'
@@ -201,6 +201,15 @@ function parseResources(value: unknown): ClassResource[] {
     const short = entry.short === 'all' || entry.short === 'one' ? entry.short : 'none'
     return { name: text(entry.name, 40), max, used: number(entry.used ?? 0, 0, max), short }
   })
+}
+/** Spend one spell slot of `level` (1–9) for a cast; 0 or none means a cantrip or a free cast. */
+function spendSlot(caster: Actor, level: unknown) {
+  if (level === undefined || level === 0) return
+  const wanted = number(level, 1, 9)
+  const slots = parseSlots(caster.slots)
+  const slot = slots?.find(entry => entry.level === wanted)
+  if (!slots || !slot || slot.left < 1) throw new Invalid('ไม่มีช่องเวทระดับ ' + wanted + ' เหลือ')
+  caster.slots = formatSlots(slots.map(entry => entry === slot ? { ...entry, left: entry.left - 1 } : entry))
 }
 function parseChecks<K extends string>(value: unknown, keys: readonly K[]) {
   const source = record(value)
@@ -836,6 +845,8 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         const tokenOf = (key: string) => target.tokens.find(token => token.actorId === key) as Token
         const cover = Math.max(manualCover, structureCover(target.objects ?? [], center(tokenOf(creature.id), creature), center(tokenOf(victim.id), victim)))
         if (cover === 99) throw new Invalid('เป้าหมายอยู่หลังที่กำบังเต็ม')
+        // Spend the slot only once the attack is valid (target in scene, not behind full cover).
+        if (rollType === 'spellAttack') spendSlot(creature, command.slotLevel)
         const hitRoll = d20((rollType === 'attack' ? weapon?.bonus ?? creature.attack : creature.spellAttack) + d20Penalty(creature), advantage, disadvantage)
         const critical = hitRoll.natural === 20
         const hit = critical || (hitRoll.natural !== 1 && hitRoll.total >= victim.ac + cover)
@@ -876,7 +887,9 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       if (!abilities.includes(ability)) throw new Invalid('เลือกค่าความสามารถสำหรับ Save')
       const damage = command.formula ? text(command.formula) : undefined
       if (damage) parseDice(damage)
-      return saveRoll('Spell · ' + text(command.label), { total: caster.spellDC, faces: [], formula: ability + ' Save DC', modifier: 0 }, {
+      const label = text(command.label)
+      spendSlot(caster, command.slotLevel)
+      return saveRoll('Spell · ' + label + (command.slotLevel ? ' (ช่องระดับ ' + command.slotLevel + ')' : ''), { total: caster.spellDC, faces: [], formula: ability + ' Save DC', modifier: 0 }, {
         sceneId: target.id, sourceId: caster.id, targetId: victim.id, cast: { ability, dc: caster.spellDC, targetId: victim.id, damage, half: command.half === true }
       })
     }

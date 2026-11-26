@@ -43,3 +43,20 @@ test('a second monster of the same name from the Monster Manual is numbered, and
   applyCommand(room, dm, { type: 'place', sceneId: 'vault', kind: 'monster', sheet: { ...goblin, name: 'Ogre (big)' }, x: 5, y: 1 })
   assert.equal(room.actors.at(-1)!.name, 'Ogre (big)', 'a unique name stays as it is, even with regex characters')
 })
+
+test('a save spell or spell attack cast with a slot level spends that slot; cantrips spend nothing', () => {
+  const { room } = table()
+  const mira: Member = { id: 'p1', name: 'Mira', role: 'player' }
+  const cleric = room.actors.find(actor => actor.id === 'cleric')!
+  cleric.slots = 'L1 1/2, L2 1/1'
+  room.actors.push({ ...blankSheet('monster'), id: 'orc', ownerId: 'dm', name: 'Orc', ac: 1 })
+  room.scenes[0].tokens.push({ id: 'o', actorId: 'orc', x: 6, y: 4 })
+  applyCommand(room, mira, { type: 'castSave', actorId: 'cleric', targetId: 'orc', sceneId: 'gate', ability: 'DEX', label: 'Sacred Flame' })
+  assert.equal(cleric.slots, 'L1 1/2, L2 1/1', 'a cantrip spends no slot')
+  applyCommand(room, mira, { type: 'castSave', actorId: 'cleric', targetId: 'orc', sceneId: 'gate', ability: 'WIS', label: 'Command', slotLevel: 1 })
+  assert.equal(cleric.slots, 'L1 0/2, L2 1/1')
+  assert.match(room.rolls.at(-1)!.label, /Command \(ช่องระดับ 1\)/)
+  assert.throws(() => applyCommand(room, mira, { type: 'castSave', actorId: 'cleric', targetId: 'orc', sceneId: 'gate', ability: 'WIS', label: 'Command', slotLevel: 1 }), /ไม่มีช่องเวทระดับ 1/)
+  applyCommand(room, mira, { type: 'sheetRoll', rollType: 'spellAttack', actorId: 'cleric', targetId: 'orc', sceneId: 'gate', formula: '2d8', slotLevel: 2 })
+  assert.equal(cleric.slots, 'L1 0/2, L2 0/1')
+})
