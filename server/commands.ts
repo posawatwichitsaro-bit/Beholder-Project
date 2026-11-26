@@ -65,12 +65,27 @@ function image(value: unknown) {
 function description(value: unknown) {
   return value ? text(value, 2000) : ''
 }
+const rarities = ['Common', 'Uncommon', 'Rare', 'Very Rare', 'Legendary', 'Artifact', 'Varies']
+/** Facts copied from the SRD item catalog. Optional, so hand-made items and older rooms stay as they are. */
+function catalogFields(item: Record<string, unknown>): Partial<InventoryItem> {
+  if (item.ref === undefined) return {}
+  const ref = text(item.ref)
+  if (!/^srd-5\.2\.1:(equipment|magic):[a-z0-9-]+$/.test(ref)) throw new Invalid('รหัสไอเทมจากคลัง SRD ไม่ถูกต้อง')
+  if (item.rarity !== undefined && !rarities.includes(item.rarity as string)) throw new Invalid('Rarity ไม่ถูกต้อง')
+  const weight = item.weight === undefined ? undefined : Number(item.weight)
+  if (weight !== undefined && !(Number.isFinite(weight) && weight >= 0 && weight <= 100000)) throw new Invalid('น้ำหนักไม่ถูกต้อง')
+  return {
+    ref, category: item.category === undefined ? undefined : text(item.category, 40),
+    rarity: item.rarity as string | undefined, attunement: item.attunement === true ? true : undefined, weight
+  }
+}
 function parseItem(value: unknown, monster: boolean): InventoryItem {
   const item = record(value)
   return {
     id: id(), name: text(item.name), description: description(item.description), image: image(item.image),
     quantity: number(item.quantity ?? 1, 1, 999), tool: item.tool === 'thievesTools' ? 'thievesTools' : undefined,
-    lootTier: monster ? item.lootTier === 'bonus' ? 'bonus' : 'basic' : undefined
+    lootTier: monster ? item.lootTier === 'bonus' ? 'bonus' : 'basic' : undefined,
+    ...catalogFields(item)
   }
 }
 export function parseObjectDefinition(value: unknown): ObjectDefinition {
