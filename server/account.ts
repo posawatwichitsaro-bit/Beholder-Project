@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
-import { passwordMaxLength, passwordMinLength } from '../shared/auth.ts'
 import { Conflict, Forbidden, text } from './commands.ts'
 import { accountCookie, activeProfile, endProfileSession, passwordRecord, validPassword, verifyPassword, profileSecret, startProfileSession } from './profiles.ts'
 import type { AuthThrottle } from './authThrottle.ts'
@@ -21,8 +20,8 @@ export function accountRoutes(database: Database, rename: (query: Query, id: str
     const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
     const { password, mode } = req.body ?? {}
     if (email.length > 254 || !/^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/.test(email) ||
-      (mode !== 'register' && mode !== 'login') || !validPassword(password)) {
-      throw new Invalid(mode === 'register' ? `กรอกอีเมลและรหัสผ่าน ${passwordMinLength}–${passwordMaxLength} ตัวอักษร` : 'กรอกอีเมลและรหัสผ่านให้ถูกต้อง')
+      (mode !== 'register' && mode !== 'login') || !validPassword(password, mode === 'register')) {
+      throw new Invalid(mode === 'register' ? 'กรอกอีเมลและรหัสผ่าน 15–128 ตัวอักษร' : 'กรอกอีเมลและรหัสผ่านให้ถูกต้อง')
     }
     if (!allowAttempt(req, res, 'account', email, mode)) return
 
