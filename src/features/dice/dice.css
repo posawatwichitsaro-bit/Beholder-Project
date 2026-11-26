@@ -72,3 +72,27 @@
 .adventure-log-form input { flex: 1; min-height: 40px; }
 .table .adventure-log-form .primary { display: grid; place-items: center; width: 44px; padding: 0; }
 .roll-waiting { color: var(--bh-brass-bright); font-style: italic; }
+
+/* ---------- Dice roller (dice panel) ---------- */
+.dice-roller { display: grid; gap: var(--bh-space-2); margin-bottom: var(--bh-space-3); }
+.dice-pool { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.dice-pick { position: relative; }
+.table .dice-pick .dice-face {
+  width: 100%; min-height: 52px; display: grid; place-items: center; gap: 0; padding: 4px;
+  border: 1px solid var(--bh-line-strong); border-radius: var(--bh-radius-md); background: var(--bh-surface-2);
+  font: 700 var(--bh-text-lg) var(--bh-font-display); color: var(--bh-text-strong);
+}
+.table .dice-pick .dice-face:hover { background: var(--bh-surface-3); border-color: var(--bh-brass); }
+.table .dice-pick[data-active] .dice-face { border-color: var(--bh-brass-bright); box-shadow: 0 0 0 1px var(--bh-brass) inset; background: #3a2b20; }
+.dice-face b { font: 700 var(--bh-text-xs) var(--bh-font-body); color: var(--bh-brass-bright); }
+.table .dice-pick .dice-less { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; min-height: 0; padding: 0;
+  display: grid; place-items: center; border-radius: 50%; background: var(--bh-crimson); color: var(--bh-crimson-ink); border: 0; }
+.dice-modifier { display: flex; align-items: center; gap: 6px; }
+.dice-modifier span { min-width: 3em; text-align: center; font: 700 var(--bh-text-lg) var(--bh-font-display); color: var(--bh-text-strong); font-variant-numeric: tabular-nums lining-nums; }
+.table .dice-modifier button { width: 34px; height: 34px; min-height: 0; padding: 0; display: grid; place-items: center; }
+.table .dice-modifier .dice-clear { margin-left: auto; }
+.table .dice-go { width: 100%; min-height: 44px; font-size: var(--bh-text-md); }
+.dice-quick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.table .dice-quick button { font-size: var(--bh-text-xs); padding: 6px 4px; }
+.dice-recent { display: flex; flex-wrap: wrap; gap: 4px; }
+.dice-typed summary { cursor: pointer; color: var(--bh-text-muted); font-size: var(--bh-text-sm); }

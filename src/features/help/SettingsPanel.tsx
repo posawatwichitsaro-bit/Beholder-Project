@@ -27,7 +27,7 @@ export function SettingsPanel({ role, replayTour }: { role: Role; replayTour: ()
     <fieldset className="settings-group">
       <legend>การแสดงผล</legend>
       <label className="settings-toggle"><input type="checkbox" checked={prefs.sound} onChange={event => prefs.update({ sound: event.target.checked })} />
-        <span><b>เสียงลูกเต๋า</b><small>เสียงตอนผลทอยปรากฏ</small></span></label>
+        <span><b>เสียงในเกม</b><small>เสียงลูกเต๋า, ถึงเทิร์นของคุณ และจบการต่อสู้</small></span></label>
       <label className="settings-toggle"><input type="checkbox" checked={prefs.reduceMotion} onChange={event => prefs.update({ reduceMotion: event.target.checked })} />
         <span><b>ลดแอนิเมชัน</b><small>ปิดการเคลื่อนไหวและเอฟเฟกต์ (ถ้าเครื่องตั้งไว้แล้วจะลดให้อยู่แล้ว)</small></span></label>
       <label className="settings-toggle"><input type="checkbox" checked={prefs.showGrid} onChange={event => prefs.update({ showGrid: event.target.checked })} />
@@ -36,6 +36,8 @@ export function SettingsPanel({ role, replayTour }: { role: Role; replayTour: ()
     <fieldset className="settings-group">
       <legend>ความช่วยเหลือ</legend>
       <button type="button" onClick={replayTour}>เริ่มทัวร์แนะนำอีกครั้ง</button>
+      <button type="button" disabled={!Object.keys(prefs.layout).length} onClick={() => prefs.update({ layout: {} })}>รีเซ็ตตำแหน่ง UI</button>
+      <small className="settings-note">ลากที่ปุ่ม ⋮ ของแผง ถาดผลเต๋า แถบเทิร์น หรือแถบเครื่องมือ เพื่อย้ายตำแหน่ง (ยกเว้นเมนูด้านขวา)</small>
       <dl className="settings-shortcuts" aria-label="ปุ่มลัด">
         {shortcuts.map(([key, label]) => <div key={key + label}><dt><kbd className="bh-kbd">{key}</kbd></dt><dd>{label}</dd></div>)}
       </dl>

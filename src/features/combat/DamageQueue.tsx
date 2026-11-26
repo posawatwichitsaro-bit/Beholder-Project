@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { DamageKind, Roll, Snapshot } from '../../../shared/model.ts'
 import type { Send } from '../../state/useCommand.ts'
+import { MoveHandle, useMovable } from '../../ui/index.ts'
 import { DamageTypeSelect } from './CombatEffects.tsx'
 
 function QueueItem({ roll, name, send, sceneId }: { roll: Roll; name: string; send: Send; sceneId?: string }) {
@@ -36,10 +37,12 @@ function QueueItem({ roll, name, send, sceneId }: { roll: Roll; name: string; se
  */
 export function DamageQueue({ room, send }: { room: Snapshot; send: Send }) {
   const queue = room.combatQueue ?? []
+  const movable = useMovable('damage-queue')
   if (room.me.role !== 'dm' || !queue.length) return null
   const name = (id?: string) => room.publicActors.find(actor => actor.id === id)?.name ?? 'ตัวละคร'
-  return <section className="damage-queue" aria-label="ผลรอจัดการ">
+  return <section className="damage-queue" aria-label="ผลรอจัดการ" {...movable}>
     <header>
+      <MoveHandle id="damage-queue" label="การ์ดรอการตัดสิน" />
       <h2>รอการตัดสิน · {queue.length}</h2>
       <label className="queue-check"><input type="checkbox" checked={room.settings?.autoDamage === true}
         onChange={event => void send({ type: 'settings', settings: { autoDamage: event.target.checked } })} />หักอัตโนมัติเมื่อโดน</label>

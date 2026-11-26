@@ -6,6 +6,9 @@ import type { Scene, Snapshot } from '../../../shared/model.ts'
 import { CrossedSwordsIcon, HpBar } from '../../ui/index.ts'
 import { tokenInitials } from '../board/tokenAppearance.ts'
 import { ConditionBadges } from './ConditionBadges.tsx'
+import { usePrefs } from '../../state/prefs.ts'
+import { playTurnSound } from '../dice/sound.ts'
+import { MoveHandle, useMovable } from '../../ui/index.ts'
 import type { Send } from '../../state/useCommand.ts'
 
 /**
@@ -18,6 +21,7 @@ export function InitiativeBar({ scene, room, focus, send }: {
   scene: Scene; room: Snapshot; focus: (actorId: string) => void; send: Send
 }) {
   const fight = scene.combat!
+  const movable = useMovable('initiative-bar')
   const dm = room.me.role === 'dm'
   const list = useRef<HTMLOListElement>(null)
   const [roundFlash, setRoundFlash] = useState<number>()
@@ -38,7 +42,8 @@ export function InitiativeBar({ scene, room, focus, send }: {
 
   return <>
     <div className="combat-vignette" aria-hidden="true" />
-    <aside className="initiative-bar" aria-labelledby="turn-initiative-title">
+    <aside className="initiative-bar" aria-labelledby="turn-initiative-title" {...movable}>
+      <MoveHandle id="initiative-bar" label="แถบลำดับเทิร์น" />
       <div className="initiative-emblem">
         <CrossedSwordsIcon size={24} />
         <h2 id="turn-initiative-title" className="bh-visually-hidden">Turn Initiative</h2>
@@ -80,9 +85,21 @@ export function InitiativeBar({ scene, room, focus, send }: {
 export function TurnBanner({ scene, room, send }: { scene: Scene; room: Snapshot; send: Send }) {
   const fight = scene.combat!
   const current = fight.order[fight.turn]
+  const bannerMovable = useMovable('turn-banner')
   const mine = room.me.role !== 'dm' ? room.actors.find(actor => actor.id === current.actorId) : undefined
+  // A chime when your turn starts (once per turn, not on reconnect into the same turn).
+  const turnKey = mine ? scene.id + ':' + fight.round + ':' + fight.turn : ''
+  const heard = useRef('')
+  useEffect(() => {
+    if (!turnKey || heard.current === turnKey) return
+    const first = heard.current === ''
+    heard.current = turnKey
+    // On a fresh load mid-turn stay quiet, except when the fight has just begun with your turn.
+    if ((!first || (fight.round === 1 && fight.turn === 0)) && usePrefs.getState().sound) playTurnSound()
+  }, [turnKey])
   if (!mine) return null
-  return <div className="turn-banner" role="status">
+  return <div className="turn-banner" role="status" {...bannerMovable}>
+    <MoveHandle id="turn-banner" label="ป้ายถึงเทิร์น" />
     <span className="turn-banner-text">ถึงเทิร์นของคุณ, {mine.name}</span>
     <button type="button" onClick={() => void send({ type: 'endTurn', sceneId: scene.id, actorId: mine.id })}>จบเทิร์น</button>
   </div>

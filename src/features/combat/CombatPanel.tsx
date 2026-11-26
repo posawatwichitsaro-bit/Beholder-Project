@@ -3,6 +3,7 @@ import type { FormEvent, ReactNode } from 'react'
 import type { Actor, Scene, Snapshot } from '../../../shared/model.ts'
 import { nextLivingTurn } from '../../../shared/model.ts'
 import { AreaAttack, DamageTypeSelect } from './CombatEffects.tsx'
+import { MoveHandle, useMovable } from '../../ui/index.ts'
 import type { Area, AreaKind } from '../../../shared/area.ts'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
@@ -65,6 +66,7 @@ function TurnActions({ actor, targetId, targets, setTarget, send, advanced, deat
 }
 
 export function CombatPanel({ room, scene, targetId, setTarget, send, close, advanced, shape, preview, chooseArea, clearArea }: Props) {
+  const movable = useMovable('combat-panel')
   // One click to start: everyone on the board is in, or whoever fought here last time.
   const [excluded, setExcluded] = useState<string[]>(() => scene?.lastParticipants
     ? scene.tokens.map(token => token.actorId).filter(id => !scene.lastParticipants!.includes(id)) : [])
@@ -97,8 +99,8 @@ export function CombatPanel({ room, scene, targetId, setTarget, send, close, adv
       if (type === 'end') { setExcluded([]); setSurprised([]) }
     }
   }
-  return <aside className="combat-panel" aria-label="แผงต่อสู้ DM" aria-busy={busy}>
-    <header><div><small>{fight ? 'รอบ ' + fight.round : 'เตรียม Encounter'}</small><h2>{activeActor ? activeActor.name : 'การต่อสู้'}</h2></div>
+  return <aside className="combat-panel" aria-label="แผงต่อสู้ DM" aria-busy={busy} {...movable}>
+    <header><MoveHandle id="combat-panel" label="แผงต่อสู้" /><div><small>{fight ? 'รอบ ' + fight.round : 'เตรียม Encounter'}</small><h2>{activeActor ? activeActor.name : 'การต่อสู้'}</h2></div>
       <div className="inline">
         <button onClick={close} aria-label="ปิดแผงต่อสู้">×</button>
       </div></header>

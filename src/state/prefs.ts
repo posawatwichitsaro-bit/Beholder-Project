@@ -17,6 +17,8 @@ export type PrefValues = {
   showGrid: boolean
   /** First-run tour finished or skipped, per role. */
   tourSeen: Record<Role, boolean>
+  /** Where each movable HUD piece was dragged to, as an offset from its usual place (px). */
+  layout: Record<string, { x: number; y: number }>
 }
 type Prefs = PrefValues & {
   setSound: (on: boolean) => void
@@ -25,7 +27,7 @@ type Prefs = PrefValues & {
 
 const key = 'beholder.prefs'
 export const uiScales = [0.9, 1, 1.1, 1.25] as const
-export const defaultPrefs: PrefValues = { sound: true, uiScale: 1, reduceMotion: false, showGrid: true, tourSeen: { dm: false, player: false } }
+export const defaultPrefs: PrefValues = { sound: true, uiScale: 1, reduceMotion: false, showGrid: true, tourSeen: { dm: false, player: false }, layout: {} }
 
 /** Stored values, checked one by one so a bad or old entry falls back to its default. */
 export function readPrefs(raw: string | null): PrefValues {
@@ -39,19 +41,31 @@ export function readPrefs(raw: string | null): PrefValues {
     uiScale: Number.isFinite(scale) ? Math.min(1.25, Math.max(0.9, scale)) : defaultPrefs.uiScale,
     reduceMotion: flag('reduceMotion', defaultPrefs.reduceMotion),
     showGrid: flag('showGrid', defaultPrefs.showGrid),
-    tourSeen: { dm: tour.dm === true, player: tour.player === true }
+    tourSeen: { dm: tour.dm === true, player: tour.player === true },
+    layout: readLayout(stored.layout)
   }
+}
+
+/** Offsets for known-looking ids only, finite and within ±4000 px. */
+function readLayout(value: unknown): PrefValues['layout'] {
+  if (!value || typeof value !== 'object') return {}
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).flatMap(([id, offset]) => {
+    const point = offset as { x?: unknown; y?: unknown }
+    const ok = /^[a-z-]{1,40}$/.test(id) && typeof point?.x === 'number' && typeof point?.y === 'number' &&
+      Number.isFinite(point.x) && Number.isFinite(point.y) && Math.abs(point.x) <= 4000 && Math.abs(point.y) <= 4000
+    return ok ? [[id, { x: Math.round(point.x as number), y: Math.round(point.y as number) }]] : []
+  }))
 }
 
 function load(): PrefValues {
   try { return readPrefs(localStorage.getItem(key)) }
-  catch { return { ...defaultPrefs, tourSeen: { ...defaultPrefs.tourSeen } } }
+  catch { return { ...defaultPrefs, tourSeen: { ...defaultPrefs.tourSeen }, layout: {} } }
 }
 function persist(prefs: PrefValues) {
   try { localStorage.setItem(key, JSON.stringify(prefs)) }
   catch { /* storage unavailable: keep the setting for this visit only */ }
 }
-const values = ({ sound, uiScale, reduceMotion, showGrid, tourSeen }: PrefValues): PrefValues => ({ sound, uiScale, reduceMotion, showGrid, tourSeen })
+const values = ({ sound, uiScale, reduceMotion, showGrid, tourSeen, layout }: PrefValues): PrefValues => ({ sound, uiScale, reduceMotion, showGrid, tourSeen, layout })
 
 export const usePrefs = create<Prefs>()((set, get) => ({
   ...load(),
