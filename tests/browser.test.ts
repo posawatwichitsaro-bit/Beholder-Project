@@ -136,6 +136,9 @@ test('a new player builds a character step by step and rolls from the sheet', { 
   const wizard = page.getByRole('dialog', { name: 'สร้างตัวละคร' })
   await wizard.getByLabel('ชื่อตัวละคร').fill('Lyra')
   await wizard.getByRole('button', exact('ถัดไป')).click()
+  // Species and background are optional; skipping them keeps the class's plain numbers.
+  await wizard.getByRole('radiogroup', exact('Background')).waitFor()
+  await wizard.getByRole('button', exact('ถัดไป')).click()
   await wizard.getByRole('radio', { name: /^Wizard/ }).click()
   await wizard.getByLabel('เลเวล').fill('3')
   await wizard.getByRole('button', exact('ถัดไป')).click()
@@ -488,6 +491,55 @@ test('a player takes gear from the SRD item catalog, wields the weapon and wears
   assert.equal(vex.ac, 11 + 3, 'Leather Armor: 11 + Dex')
   const potion = vex.inventory!.find(item => item.ref === 'srd-5.2.1:magic:potions-of-healing')!
   assert.deepEqual([potion.name, potion.quantity, potion.rarity], ['Potion of Healing (greater)', 2, 'Uncommon'])
+})
+
+test('a dwarf soldier is built with Point Buy and a background, then levels up with a checklist', { timeout: 45000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await seat(browser, { viewport: { width: 1280, height: 900 } })
+  page.setDefaultTimeout(10000)
+  const opened = await page.request.post(base + '/api/rooms', { data: { name: 'Origins test', member: 'DM' } })
+  const room: Snapshot = await opened.json()
+  const path = base + '/api/rooms/' + room.id
+  await page.goto(base + '/room/' + room.id)
+  await openPanel(page, 'ชีตในห้อง')
+  await page.getByRole('button', exact('+ ตัวละคร')).click()
+  const wizard = page.getByRole('dialog', { name: 'สร้างตัวละคร' })
+  await wizard.getByLabel('ชื่อตัวละคร').fill('Bram')
+  await wizard.getByRole('button', exact('ถัดไป')).click()
+  await wizard.getByRole('radio', { name: /^Dwarf/ }).click()
+  await wizard.getByText(/Dwarven Toughness/).waitFor()
+  await wizard.getByRole('radio', { name: /^Soldier/ }).click()
+  await wizard.getByRole('button', exact('ถัดไป')).click()
+  await wizard.getByRole('radio', { name: /^Fighter/ }).click()
+  await wizard.getByLabel('เลเวล').fill('3')
+  await wizard.getByRole('button', exact('ถัดไป')).click()
+
+  await wizard.getByRole('radio', exact('Point Buy')).click()
+  await wizard.getByText(/ใช้ไป 27 \/ 27/).waitFor()
+  await wizard.getByLabel(/^INT/).fill('10')
+  await wizard.getByText(/เกินงบ/).waitFor()
+  assert.equal(await wizard.getByRole('button', exact('ถัดไป')).isDisabled(), true, 'over budget cannot continue')
+  await wizard.getByLabel(/^INT/).fill('8')
+  await wizard.getByRole('button', exact('ถัดไป')).click()
+  await wizard.getByRole('button', exact('ถัดไป')).click()
+  await wizard.getByText(/Dwarf · Soldier · Fighter 3/).waitFor()
+  await wizard.getByRole('button', exact('สร้างตัวละคร')).click()
+  await wizard.waitFor({ state: 'hidden' })
+  const bram = ((await (await page.request.get(path)).json()) as Snapshot).actors.find(actor => actor.name === 'Bram')!
+  assert.deepEqual([bram.abilities.STR, bram.abilities.CON, bram.speed, bram.size], [17, 15, 30, 'Medium'])
+  assert.equal(bram.maxHp, 12 + 2 * 8 + 3, 'Fighter 3 with CON +2 and Dwarven Toughness')
+  assert.deepEqual(Object.keys(bram.skillChecks ?? {}), ['Athletics', 'Intimidation'])
+
+  await page.getByRole('button', exact('Bram')).click()
+  const sheet = page.getByRole('article', { name: 'ชีต Bram' })
+  await sheet.getByRole('button', exact('เลเวลอัป')).click()
+  const levelling = page.getByRole('dialog', { name: 'เลเวลอัป · Bram' })
+  await levelling.getByText(/Ability Score Improvement/).waitFor()
+  await levelling.getByRole('button', exact('ยืนยันเลเวลอัป')).click()
+  await levelling.waitFor({ state: 'hidden' })
+  const levelled = ((await (await page.request.get(path)).json()) as Snapshot).actors.find(actor => actor.name === 'Bram')!
+  assert.deepEqual([levelled.classLevel, levelled.maxHp], ['Fighter 4', bram.maxHp + 6 + 2 + 1])
 })
 
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */

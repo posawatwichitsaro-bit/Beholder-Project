@@ -1,7 +1,10 @@
 import { abilities, blankSheet } from '../../../shared/model.ts'
-import type { Ability, DamageKind, Sheet } from '../../../shared/model.ts'
-import { abilityModifier, armorPresets, calculatedSheet, hitDiceByClass, proficiencyForLevel } from '../../../shared/characterStats.ts'
-import type { CheckBonus, HitDie } from '../../../shared/characterStats.ts'
+import type { Ability, DamageKind, Sheet, Size } from '../../../shared/model.ts'
+import { abilityModifier, armorPresets, calculatedSheet, commonSkills, hitDiceByClass, proficiencyForLevel } from '../../../shared/characterStats.ts'
+const commonSkillAbility = (skill: Skill): Ability => commonSkills[skill]
+import type { CheckBonus, HitDie, Skill } from '../../../shared/characterStats.ts'
+import { backgrounds, isBackground, isSpecies, species, speciesLine, withBackground } from './origins.ts'
+import type { BackgroundBonus } from './origins.ts'
 
 /** Rules data for the character wizard, from the D&D 5e System Reference Document (SRD 5.2.1). */
 export type ClassName = keyof typeof hitDiceByClass
@@ -80,8 +83,13 @@ export type WizardChoices = {
   name: string
   portrait?: string
   species?: string
+  /** Size when the species allows a choice (Human, Tiefling). */
+  size?: Size
+  background?: string
+  backgroundBonus?: BackgroundBonus
   className: ClassName
   level: number
+  /** Scores before the background increase. */
   abilities: Record<Ability, number>
   armor: keyof typeof armorPresets
   shield: boolean
@@ -104,29 +112,42 @@ export function buildCharacter(choices: WizardChoices): Sheet {
   const level = Math.max(1, Math.min(20, Math.round(choices.level)))
   const info = classInfo[choices.className]
   const proficiency = proficiencyForLevel(level)
-  const attacks = choices.weapons.filter(name => weapons[name]).slice(0, 3).map(name => weaponAttack(name, choices.abilities, proficiency))
-  const unarmed = { name: 'Unarmed Strike', bonus: proficiency + abilityModifier(choices.abilities.STR), damage: String(Math.max(1, 1 + abilityModifier(choices.abilities.STR))) }
+  const scores = withBackground(choices.abilities, choices.background, choices.backgroundBonus)
+  const attacks = choices.weapons.filter(name => weapons[name]).slice(0, 3).map(name => weaponAttack(name, scores, proficiency))
+  const unarmed = { name: 'Unarmed Strike', bonus: proficiency + abilityModifier(scores.STR), damage: String(Math.max(1, 1 + abilityModifier(scores.STR))) }
   const main = attacks[0] ?? unarmed
   const preset = armorPresets[choices.armor]
   const savingThrows: Partial<Record<Ability, CheckBonus>> = {}
   for (const ability of abilities) if (info.saves.includes(ability)) savingThrows[ability] = { ability, training: 1, adjustment: 0 }
+  const origin = isSpecies(choices.species) ? species[choices.species] : undefined
+  const background = isBackground(choices.background) ? backgrounds[choices.background] : undefined
+  const skillChecks: Partial<Record<Skill, CheckBonus>> = {}
+  for (const skill of background?.skills ?? []) skillChecks[skill] = { ability: commonSkillAbility(skill), training: 1, adjustment: 0 }
+  const speciesName = choices.species?.trim()
   const base = blankSheet('pc')
   const sheet: Sheet = {
     ...base,
     name: choices.name.trim(),
     portrait: choices.portrait,
     classLevel: choices.className + ' ' + level,
-    abilities: { ...choices.abilities },
-    speed: 30,
+    abilities: scores,
+    size: origin ? (choices.size && origin.sizes.includes(choices.size) ? choices.size : origin.sizes[0]) : base.size,
+    speed: origin?.speed ?? 30,
+    skills: background ? background.skills.join(', ') : base.skills,
+    ...(background ? { skillChecks } : {}),
     attack: main.bonus,
     damage: main.damage,
     attacks: attacks.slice(1),
     saves: info.saves.join(', '),
     slots: spellSlotsFor(choices.className, level),
     savingThrows,
-    characterDetails: choices.species?.trim() ? { species: choices.species.trim() } : undefined,
+    characterDetails: speciesName || background ? {
+      species: speciesName ? speciesLine(speciesName) : undefined,
+      background: background ? choices.background + ' · ' + background.feat + ' · ' + background.tool : undefined
+    } : undefined,
     calculations: {
-      hp: { classes: [{ die: hitDiceByClass[choices.className] as HitDie, levels: level }], bonus: 0 },
+      // Dwarven Toughness: +1 Hit Point per level.
+      hp: { classes: [{ die: hitDiceByClass[choices.className] as HitDie, levels: level }], bonus: choices.species === 'Dwarf' ? level : 0 },
       armor: { base: preset.base, dex: preset.dex, shield: choices.shield, bonus: 0 },
       initiativeBonus: 0,
       spellAbility: info.spellAbility

@@ -155,3 +155,25 @@
 }
 .table .dialog [role=alert] { color: #8c1e18; }
 .table .dialog footer { border-top: 1px solid var(--bh-parchment-line); }
+
+/* Wizard: origin step, ability methods and the background increase. */
+.wizard-origin { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }
+.wizard-origin legend { padding: 0; margin-bottom: 6px; font: 700 var(--bh-text-md) var(--bh-font-heading); color: var(--bh-ink-strong); }
+.wizard-origin + .wizard-origin { margin-top: 14px; }
+.wizard-methods { display: inline-flex; border: 1px solid var(--bh-parchment-line); border-radius: var(--bh-radius-pill); overflow: hidden; justify-self: start; }
+.wizard-page .wizard-methods button { border: 0; border-radius: 0; background: transparent; color: var(--bh-ink); padding: 6px 14px; font-size: var(--bh-text-sm); }
+.wizard-page .wizard-methods button + button { border-left: 1px solid var(--bh-parchment-line); }
+.wizard-page .wizard-methods button[aria-checked=true] { background: var(--bh-ink); color: var(--bh-text-strong); }
+.wizard-ability b small { font-weight: 400; color: var(--bh-ink-muted); }
+.wizard-bonus { display: grid; gap: 6px; margin: 0; padding: 10px 12px; border: 1px solid var(--bh-parchment-line); border-radius: var(--bh-radius-md); }
+.wizard-bonus legend { padding: 0 4px; font-size: var(--bh-text-sm); color: var(--bh-ink-strong); }
+
+/* Level-up dialog. */
+.level-up { display: grid; gap: 12px; }
+.level-up-hp { display: grid; gap: 6px; margin: 0; padding: 10px 12px; border: 1px solid var(--bh-parchment-line); border-radius: var(--bh-radius-md); }
+.level-up h3 { margin: 0; font: 700 var(--bh-text-md) var(--bh-font-heading); }
+.level-up-checklist { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; font-size: var(--bh-text-sm); }
+.wizard-bonus .wizard-check, .level-up-hp .wizard-check { display: inline-flex; align-items: center; gap: 8px; width: auto; padding: 0; border: 0; background: transparent; }
+.wizard-bonus input[type=radio], .level-up-hp input[type=radio] { appearance: auto; background: none; padding: 0; border: 0; width: 16px; height: 16px; margin: 0; accent-color: var(--bh-crimson); flex: none; }
+.wizard-bonus .wizard-row { gap: 10px; }
+.wizard-bonus .wizard-row > label, .wizard-bonus .wizard-row > label:first-child { flex: 0 0 120px; }

@@ -46,7 +46,9 @@ test('DM and two players share scenes, dice, combat and reconnect state', { time
   const path = base + '/api/rooms/' + initial.id
   const library = base + '/api/library'
   const name = 'Test-' + randomUUID().slice(0, 12)
-  const credentials = { name, password: 'integration-test-pass' }
+  const credentials = { name, password: 'lib-pass' }
+  const tooShort = await fetch(library + '/session', post({ ...credentials, password: 'short-7', mode: 'register' }))
+  assert.equal(tooShort.status, 400)
   const registered = await fetch(library + '/session', post({ ...credentials, mode: 'register' }))
   assert.equal(registered.status, 204)
   const profile = registered.headers.get('set-cookie')!.split(';')[0]

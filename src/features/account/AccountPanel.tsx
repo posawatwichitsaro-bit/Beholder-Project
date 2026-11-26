@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Eye, EyeOff, LogOut } from 'lucide-react'
+import { passwordMaxLength, passwordMinLength } from '../../../shared/auth.ts'
 import type { Account } from '../../../shared/model.ts'
 import { api, json } from '../../lib/api.ts'
 import { Button } from '../../ui/index.ts'
@@ -50,12 +51,12 @@ export function AccountPanel({ account, change, initialMode = 'login' }: {
     {account ? <p className="muted account-email">{account.email}</p> : <>
       <label>อีเมล<input name="email" type="email" required maxLength={254} autoComplete="username" /></label>
       <label>รหัสผ่าน<span className="account-password">
-        <input key={mode} name="password" type={showPassword ? 'text' : 'password'} required minLength={mode === 'register' ? 15 : 8} maxLength={256}
+        <input key={mode} name="password" type={showPassword ? 'text' : 'password'} required minLength={passwordMinLength} maxLength={passwordMaxLength * 2}
           autoComplete={mode === 'register' ? 'new-password' : 'current-password'} />
         <button type="button" className="account-reveal" aria-label={showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'} aria-pressed={showPassword}
           onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}</button>
       </span></label>
-      {mode === 'register' && <small>ใช้รหัสผ่าน 15–128 ตัวอักษร เช่น ประโยคสั้น ๆ ที่จำง่าย</small>}
+      {mode === 'register' && <small>ใช้รหัสผ่าน {passwordMinLength}–{passwordMaxLength} ตัวอักษร เช่น ประโยคสั้น ๆ ที่จำง่าย</small>}
     </>}
     {(account || mode === 'register') && <label>ชื่อตัวละครที่ใช้บนโต๊ะ<input key={account?.name} name="name" required maxLength={40}
       autoComplete="nickname" defaultValue={account?.name} /></label>}

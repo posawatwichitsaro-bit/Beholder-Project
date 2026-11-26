@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
+import { passwordMaxLength, passwordMinLength } from '../../../shared/auth.ts'
 import type { TokenDragProps } from '../board/tokenDrag.ts'
 import { blankSheet, objectLabels } from '../../../shared/model.ts'
 import type { Library, ObjectDefinition, SavedObject, Sheet, Template } from '../../../shared/model.ts'
@@ -92,7 +93,7 @@ export function PersonalLibrary({ roomName, dm, draft, clearDraft, importSheet, 
           })
         }}>
           <label>ชื่อโปรไฟล์<input name="name" autoComplete="username" defaultValue={roomName.slice(0, 40)} required maxLength={40} /></label>
-          <label>รหัสผ่านโปรไฟล์<input name="password" type="password" required minLength={8} maxLength={256} autoComplete="current-password" /></label>
+          <label>รหัสผ่านโปรไฟล์<input name="password" type="password" required minLength={passwordMinLength} maxLength={passwordMaxLength * 2} autoComplete="current-password" /></label>
           <button className="primary" disabled={busy}>เปิดคลังเดิม</button>
         </form>
       </details>
