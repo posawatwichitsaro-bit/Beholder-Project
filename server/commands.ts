@@ -9,7 +9,8 @@ import { createRoadsideEncounter } from './encounter.ts'
 import { bonusForCheck, calculatedSheet, commonSkills } from '../shared/characterStats.ts'
 import { formatConditions, tickConditions } from '../shared/conditions.ts'
 import { advanceEffects, concentrationDc, d20Penalty, effectName, incapacitating, tiedTo } from '../shared/effects.ts'
-import type { Effect } from '../shared/model.ts'
+import { hitDiceLeft, hitDieHealing, restedSheet } from '../shared/rest.ts'
+import type { ClassResource, Effect, HitDie as RestDie } from '../shared/model.ts'
 import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared/characterStats.ts'
 
 export class Forbidden extends Error {}
@@ -190,6 +191,17 @@ function parseCalculations(value: unknown): CharacterCalculations {
   if (input.spellAbility !== undefined) output.spellAbility = readAbility(input.spellAbility)
   return output
 }
+const restDice: RestDie[] = ['d6', 'd8', 'd10', 'd12']
+/** Class resources: up to 12 named counters, each with how much a Short Rest gives back. */
+function parseResources(value: unknown): ClassResource[] {
+  if (!Array.isArray(value) || value.length > 12) throw new Invalid('ทรัพยากรของคลาสมีได้สูงสุด 12 รายการ')
+  return value.map(item => {
+    const entry = record(item)
+    const max = number(entry.max, 1, 999)
+    const short = entry.short === 'all' || entry.short === 'one' ? entry.short : 'none'
+    return { name: text(entry.name, 40), max, used: number(entry.used ?? 0, 0, max), short }
+  })
+}
 function parseChecks<K extends string>(value: unknown, keys: readonly K[]) {
   const source = record(value)
   const result: Partial<Record<K, CheckBonus>> = {}
@@ -282,6 +294,11 @@ export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory
   }
   if (input.skillChecks !== undefined) sheet.skillChecks = parseChecks(input.skillChecks, Object.keys(commonSkills) as Skill[])
   if (input.savingThrows !== undefined) sheet.savingThrows = parseChecks(input.savingThrows, abilities)
+  if (input.resources !== undefined) sheet.resources = parseResources(input.resources)
+  if (input.hitDiceSpent !== undefined) {
+    const spent = record(input.hitDiceSpent)
+    sheet.hitDiceSpent = Object.fromEntries(restDice.flatMap(key => spent[key] === undefined ? [] : [[key, number(spent[key], 0, 20)]]))
+  }
   if (kind === 'pc') {
     if (input.calculations !== undefined) sheet.calculations = parseCalculations(input.calculations)
     sheet = calculatedSheet(sheet)
@@ -894,6 +911,43 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       requireDM(member)
       const input = record(command.settings)
       room.settings = { ...room.settings, autoDamage: input.autoDamage === true }
+      return {}
+    }
+    case 'spendHitDie': {
+      const creature = actor()
+      owns(member, creature)
+      if (room.scenes.some(scene => scene.combat?.order.some(entry => entry.actorId === creature.id))) throw new Invalid('พักระหว่างการต่อสู้ไม่ได้')
+      if (creature.hp < 1 || creature.life !== 'active') throw new Invalid('ต้องมี HP อย่างน้อย 1 จึงพักได้')
+      const size = command.die as RestDie
+      const pool = hitDiceLeft(creature)[size]
+      if (!restDice.includes(size) || !pool?.left) throw new Invalid('ไม่มี Hit Die ' + String(command.die) + ' เหลือ')
+      const face = die(Number(size.slice(1)))
+      const healed = hitDieHealing(face, creature.abilities.CON)
+      const before = creature.hp
+      heal(creature, healed)
+      creature.hitDiceSpent = { ...creature.hitDiceSpent, [size]: (creature.hitDiceSpent?.[size] ?? 0) + 1 }
+      addLog(room, { kind: 'hp', text: creature.name + ' ใช้ Hit Die ' + size + ' ฟื้น ' + (creature.hp - before) + ' HP' })
+      return saveRoll('Hit Die · ' + creature.name, { formula: '1' + size + '+CON', faces: [face], modifier: healed - face, total: healed })
+    }
+    case 'rest': {
+      const kind = command.kind === 'long' ? 'long' : 'short'
+      const ids = Array.isArray(command.actorIds) ? command.actorIds : [command.actorId]
+      if (!ids.length || ids.length > 12) throw new Invalid('เลือกตัวละครที่จะพัก')
+      const resting = ids.map(key => get(room.actors, key))
+      resting.forEach(creature => owns(member, creature))
+      if (resting.some(creature => room.scenes.some(scene => scene.combat?.order.some(entry => entry.actorId === creature.id)))) throw new Invalid('พักระหว่างการต่อสู้ไม่ได้')
+      const skipped = resting.filter(creature => kind === 'long' && (creature.hp < 1 || creature.life !== 'active'))
+      for (const creature of resting) if (!skipped.includes(creature)) Object.assign(creature, restedSheet(creature, kind))
+      const rested = resting.filter(creature => !skipped.includes(creature))
+      if (rested.length) addLog(room, { kind: 'hp', text: rested.map(creature => creature.name).join(', ') + (kind === 'long' ? ' พักยาว (Long Rest)' : ' พักสั้น (Short Rest)') })
+      return { skipped: skipped.map(creature => creature.name) }
+    }
+    case 'useResource': {
+      const creature = actor()
+      owns(member, creature)
+      const resource = creature.resources?.[number(command.index, 0, 11)]
+      if (!resource) throw new Invalid('ทรัพยากรนี้เปลี่ยนแล้ว')
+      resource.used = number(command.used, 0, resource.max)
       return {}
     }
     case 'conditions': {

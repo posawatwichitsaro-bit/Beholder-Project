@@ -46,6 +46,9 @@ export type Sheet = {
   savingThrows?: Partial<Record<Ability, CheckBonus>>
   characterDetails?: { species?: string; background?: string; hitDice?: string; defenses?: string }
   successes: number; failures: number; life: 'active' | 'dying' | 'stable' | 'dead'
+  /** Class resources (Rage, Focus Points…) and Hit Dice spent since the last Long Rest. */
+  resources?: ClassResource[]
+  hitDiceSpent?: Partial<Record<HitDie, number>>
   /** Conditions with a source, an end and saves (see shared/effects.ts); plain ones stay in `conditions`. */
   effects?: Effect[]
 }
@@ -70,6 +73,10 @@ export type Effect = {
   /** Only the DM sees it. */
   hidden?: boolean
 }
+export type HitDie = 'd6' | 'd8' | 'd10' | 'd12'
+/** What a Short Rest gives back: all uses, one use, or nothing (Long Rest only). */
+export type ShortRestRecovery = 'all' | 'one' | 'none'
+export type ClassResource = { name: string; max: number; used: number; short: ShortRestRecovery }
 export type Actor = Sheet & { id: string; ownerId: string; templateId?: string; lootResult?: LootResult }
 export type Template = { id: string; sheet: Sheet }
 export type Library = { name: string; sheets: Template[]; objects: SavedObject[] }
