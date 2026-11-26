@@ -57,7 +57,12 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
     const saved = actor.savingThrows?.[key]
     return saved ? bonusForCheck(actor, saved) : abilityModifier(actor.abilities[key])
   }
-  const skills = (Object.keys(commonSkills) as Skill[]).filter(key => actor.skillChecks?.[key])
+  // Every skill can be rolled; trained ones show their real bonus and stand out.
+  const skills = Object.keys(commonSkills) as Skill[]
+  const skillBonus = (key: Skill) => {
+    const trained = actor.skillChecks?.[key]
+    return trained ? bonusForCheck(actor, trained) : abilityModifier(actor.abilities[commonSkills[key]])
+  }
   const attacks = actor.attacks ?? []
 
   const rollOptions = <div className="sheet-roll-options" role="group" aria-label="ตัวเลือกการทอย">
@@ -139,10 +144,13 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
             </div>
           })}
         </div>
-        {skills.length > 0 ? <div className="sheet-skills" aria-label="ทักษะ">
-          {skills.map(key => <button type="button" key={key} onClick={() => roll('check', { ability: commonSkills[key], skill: key })} aria-label={key + ' check'}>
-            <span>{key}</span><b>{signed(bonusForCheck(actor, actor.skillChecks![key]!))}</b></button>)}
-        </div> : actor.skills && <p className="sheet-note">ทักษะ · {actor.skills}</p>}
+        <div className="sheet-skills" aria-label="ทักษะ">
+          {skills.map(key => <button type="button" key={key} data-trained={actor.skillChecks?.[key] ? 'true' : undefined}
+            onClick={() => roll('check', { ability: commonSkills[key], skill: key })} aria-label={key + ' check'}
+            title={key + ' (' + commonSkills[key] + ')' + (actor.skillChecks?.[key] ? ' · ชำนาญ' : '')}>
+            <span>{key}<small>{commonSkills[key]}</small></span><b>{signed(skillBonus(key))}</b></button>)}
+        </div>
+        {!actor.skillChecks && actor.skills && <p className="sheet-note">ทักษะ · {actor.skills}</p>}
         {actor.hp === 0 && <div className="sheet-death">
           <span>Death saves <b>{actor.successes}</b> สำเร็จ · <b>{actor.failures}</b> ล้มเหลว</span>
           {actor.life === 'dying' && <button type="button" className="primary" onClick={() => roll('death')}>ทอย Death Save</button>}
