@@ -8,8 +8,9 @@ import { center, isNear, structureCover } from './cover.ts'
 import { createRoadsideEncounter } from './encounter.ts'
 import { bonusForCheck, calculatedSheet, commonSkills } from '../shared/characterStats.ts'
 import { formatConditions, tickConditions } from '../shared/conditions.ts'
+import { advanceEffects, concentrationDc, d20Penalty, effectName, incapacitating, tiedTo } from '../shared/effects.ts'
 import { hitDiceLeft, hitDieHealing, restedSheet } from '../shared/rest.ts'
-import type { ClassResource, HitDie as RestDie } from '../shared/model.ts'
+import type { ClassResource, Effect, HitDie as RestDie } from '../shared/model.ts'
 import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared/characterStats.ts'
 
 export class Forbidden extends Error {}
@@ -216,10 +217,16 @@ function damageKind(value: unknown): DamageKind {
   if (typeof value !== 'string' || !Object.hasOwn(damageKinds, value)) throw new Invalid('เลือกประเภทความเสียหาย')
   return value as DamageKind
 }
-function applyDamage(scene: Scene, actor: Actor, amount: number, kind: DamageKind, critical = false) {
+function applyDamage(scene: Scene, actor: Actor, amount: number, kind: DamageKind, critical = false, room?: Room) {
   const before = actor.hp + actor.tempHp
   harm(actor, amount, critical)
   const lost = before - actor.hp - actor.tempHp
+  if (lost > 0 && room) {
+    // Concentration: a CON save after taking damage, or lost outright at 0 HP.
+    const focus = actor.effects?.find(effect => effect.condition === 'Concentration')
+    if (focus && actor.hp === 0) breakConcentration(room, actor, 'HP เหลือ 0')
+    else if (focus) focus.pending = { ability: 'CON', dc: Math.max(focus.pending?.reason === 'concentration' ? focus.pending.dc : 0, concentrationDc(lost)), reason: 'concentration' }
+  }
   if (lost > 0) {
     const at = Date.now()
     scene.damageEvents = [...(scene.damageEvents ?? []).filter(event => at - event.at < 6000),
@@ -318,6 +325,26 @@ export function visibleRolls(room: Room, me: Member) {
     (me.role === 'dm' || !roll.targetId || visible.has(roll.targetId)))
 }
 
+/** End `caster`'s Concentration and every effect tied to it, on anyone. */
+export function breakConcentration(room: Room, caster: Actor, reason: string) {
+  const ended: string[] = []
+  let secret = true
+  for (const creature of room.actors) {
+    const before = creature.effects ?? []
+    const keep = before.filter(effect => !(tiedTo(caster.id, effect) || (creature.id === caster.id && effect.condition === 'Concentration')))
+    if (keep.length === before.length) continue
+    for (const effect of before) if (!keep.includes(effect)) {
+      if (!effect.hidden) secret = false
+      if (effect.condition !== 'Concentration') ended.push(creature.name + ' พ้นจาก ' + effectName(effect))
+    }
+    creature.effects = keep
+  }
+  if (!secret) addLog(room, { kind: 'combat', text: [caster.name + ' เสีย Concentration (' + reason + ')', ...ended].join(' · ') })
+}
+
+/** Effects a player may see: everything except DM-only ones. */
+const visibleEffects = (effects: Effect[] | undefined, dm: boolean) => dm ? effects : effects?.filter(effect => !effect.hidden)
+
 export function snapshot(room: Room, me: Member): Snapshot {
   const publicMember = ({ id, name, role }: Member): Member => ({ id, name, role })
   const dm = me.role === 'dm'
@@ -333,9 +360,9 @@ export function snapshot(room: Room, me: Member): Snapshot {
   return {
     id: room.id, name: room.name, revision: room.revision, me: publicMember(me), members: room.members.map(publicMember),
     activeSceneId: room.activeSceneId, scenes, invite: dm ? room.invite : undefined, dmInvite: dm ? room.dmInvite : undefined,
-    actors: room.actors.filter(actor => dm || actor.ownerId === me.id),
-    publicActors: room.actors.filter(actor => dm || visible.has(actor.id)).map(({ id, name, kind, size, portrait, hp, maxHp, tempHp, life, lootResult, conditions }) =>
-      ({ id, name, kind, size, portrait, hp, maxHp, tempHp, lootResult, conditions, lootable: kind === 'monster' && life === 'dead' })),
+    actors: room.actors.filter(actor => dm || actor.ownerId === me.id).map(actor => dm ? actor : { ...actor, effects: visibleEffects(actor.effects, dm) }),
+    publicActors: room.actors.filter(actor => dm || visible.has(actor.id)).map(({ id, name, kind, size, portrait, hp, maxHp, tempHp, life, lootResult, conditions, effects }) =>
+      ({ id, name, kind, size, portrait, hp, maxHp, tempHp, lootResult, conditions, effects: visibleEffects(effects, dm), lootable: kind === 'monster' && life === 'dead' })),
     templates: dm ? room.templates : [],
     rolls: rolls.slice(-40),
     log: visibleLog(room, me).slice(-80),
@@ -375,6 +402,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
   function advanceTurn(target: Scene, combat: NonNullable<Scene['combat']>) {
     const next = nextLivingTurn(combat, actorId => get(room.actors, actorId).life === 'dead')
     if (!next) throw new Invalid('ไม่มีผู้ร่วมต่อสู้ที่ยังมีเทิร์น')
+    passTurn(target, combat.order[combat.turn]?.actorId, combat.order[next.turn]?.actorId)
     if (next.round > combat.round) {
       addLog(room, { kind: 'combat', sceneId: target.id, text: 'รอบที่ ' + next.round })
       for (const entry of combat.order) {
@@ -386,6 +414,19 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       }
     }
     Object.assign(combat, next)
+  }
+  /** The turn passes from `ended` to `started`: timed effects count down, repeat saves come due. */
+  function passTurn(target: Scene, ended?: string, started?: string) {
+    for (const creature of room.actors) {
+      if (!creature.effects?.length) continue
+      const result = advanceEffects(creature.id, creature.effects, ended, started)
+      creature.effects = result.effects
+      const shown = (list: Effect[]) => list.filter(effect => !effect.hidden).map(effectName)
+      if (shown(result.expired).length) addLog(room, { kind: 'combat', sceneId: target.id, text: creature.name + ' พ้นจาก ' + shown(result.expired).join(', ') })
+      for (const effect of result.prompted) if (!effect.hidden) addLog(room, { kind: 'combat', sceneId: target.id,
+        text: creature.name + ' ต้องทอย ' + effect.pending!.ability + ' save DC ' + effect.pending!.dc + ' เพื่อพ้นจาก ' + effectName(effect) })
+      for (const effect of result.expired) if (effect.condition === 'Concentration') breakConcentration(room, creature, 'หมดเวลา')
+    }
   }
   switch (command.type) {
     case 'dmInvite':
@@ -757,7 +798,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         const tokenOf = (key: string) => target.tokens.find(token => token.actorId === key) as Token
         const cover = Math.max(manualCover, structureCover(target.objects ?? [], center(tokenOf(creature.id), creature), center(tokenOf(victim.id), victim)))
         if (cover === 99) throw new Invalid('เป้าหมายอยู่หลังที่กำบังเต็ม')
-        const hitRoll = d20(rollType === 'attack' ? weapon?.bonus ?? creature.attack : creature.spellAttack, advantage, disadvantage)
+        const hitRoll = d20((rollType === 'attack' ? weapon?.bonus ?? creature.attack : creature.spellAttack) + d20Penalty(creature), advantage, disadvantage)
         const critical = hitRoll.natural === 20
         const hit = critical || (hitRoll.natural !== 1 && hitRoll.total >= victim.ac + cover)
         const context = { sceneId: target.id, sourceId: creature.id, targetId: victim.id }
@@ -771,13 +812,13 @@ export function applyCommand(room: Room, member: Member, command: Command) {
           // Table rule: hits apply at once; the DM can still adjust HP afterwards.
           const damageRoll = room.rolls[room.rolls.length - 1]
           const kind = damageRoll.damageKind ?? 'untyped'
-          const lost = applyDamage(target, victim, Math.max(0, damageRoll.total), kind, critical)
+          const lost = applyDamage(target, victim, Math.max(0, damageRoll.total), kind, critical, room)
           damageRoll.applied = true
           if (lost > 0) addLog(room, { kind: 'hp', text: damageText(victim, lost, kind), sceneId: target.id })
         }
         return receipt
       }
-      if (rollType === 'initiative') return saveRoll('Initiative · ' + creature.name, d20(creature.initiative, advantage, disadvantage))
+      if (rollType === 'initiative') return saveRoll('Initiative · ' + creature.name, d20(creature.initiative + d20Penalty(creature), advantage, disadvantage))
       if (rollType !== 'check' && rollType !== 'save') throw new Invalid('ประเภทการทอยไม่ถูกต้อง')
       if (!abilities.includes(command.ability as typeof abilities[number])) throw new Invalid('เลือกค่าความสามารถ')
       const ability = command.ability as typeof abilities[number]
@@ -785,7 +826,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const trained = rollType === 'save' ? creature.savingThrows?.[ability] : skill ? creature.skillChecks?.[skill] : undefined
       const score = skill && rollType === 'check' ? commonSkills[skill] : ability
       const bonus = trained ? bonusForCheck(creature, trained) : modifier(creature.abilities[score]) + (command.proficient === true ? creature.proficiency : 0)
-      return saveRoll((rollType === 'check' && skill ? skill : ability) + ' ' + rollType + ' · ' + creature.name, d20(bonus, advantage, disadvantage))
+      return saveRoll((rollType === 'check' && skill ? skill : ability) + ' ' + rollType + ' · ' + creature.name, d20(bonus + d20Penalty(creature), advantage, disadvantage))
     }
     case 'castSave': {
       const target = active()
@@ -811,7 +852,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const proficient = command.proficient === true ? victim.proficiency : 0
       const saved = victim.savingThrows?.[roll.cast.ability]
       const bonus = saved ? bonusForCheck(victim, saved) : modifier(victim.abilities[roll.cast.ability]) + proficient
-      const result = d20(bonus, command.advantage === true, command.disadvantage === true)
+      const result = d20(bonus + d20Penalty(victim), command.advantage === true, command.disadvantage === true)
       const passed = result.total >= roll.cast.dc
       roll.cast.resolved = true
       const context = { sceneId: target.id, sourceId: roll.sourceId, targetId: victim.id }
@@ -919,7 +960,88 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         if (name.includes(',') || name.includes(':')) throw new Invalid('ชื่อ Condition ไม่ถูกต้อง')
         return { name, rounds: entry.rounds === undefined ? undefined : number(entry.rounds, 1, 99) }
       }))
+      if (creature.effects?.some(effect => effect.condition === 'Concentration') && incapacitating.some(name => creature.conditions.split(/,\s*/).some(part => part.split(':')[0] === name))) {
+        breakConcentration(room, creature, 'ทำอะไรไม่ได้')
+      }
       return {}
+    }
+    case 'addEffect': {
+      // The DM, or a player applying it with a creature they control (casting Hold Person, say).
+      const source = command.sourceId ? get(room.actors, command.sourceId) : undefined
+      const targets = (Array.isArray(command.targetIds) ? command.targetIds : []).map(key => get(room.actors, key))
+      if (!targets.length || targets.length > 12) throw new Invalid('เลือกเป้าหมาย 1–12 ตัว')
+      if (member.role !== 'dm') {
+        if (command.hidden === true) throw new Forbidden('Condition ลับใช้ได้เฉพาะ DM')
+        if (source) owns(member, source)
+        else targets.forEach(creature => owns(member, creature))
+      }
+      const condition = text(command.condition, 40)
+      if (condition.includes(',') || condition.includes(':')) throw new Invalid('ชื่อ Condition ไม่ถูกต้อง')
+      const ends = command.ends === undefined ? undefined : (() => {
+        const value = record(command.ends)
+        const actorId = get(room.actors, value.actorId).id
+        return { at: value.at === 'start' ? 'start' as const : 'end' as const, actorId, turns: number(value.turns ?? 1, 1, 100) }
+      })()
+      const save = command.save === undefined ? undefined : (() => {
+        const value = record(command.save)
+        return { ability: readAbility(value.ability), dc: number(value.dc, 1, 40), at: value.at === 'start' ? 'start' as const : 'end' as const }
+      })()
+      const concentration = command.concentration === true && Boolean(source)
+      const label = command.sourceLabel ? text(command.sourceLabel, 60) : undefined
+      if (concentration && source) {
+        // One Concentration at a time: a new spell ends the old one.
+        const current = source.effects?.find(effect => effect.condition === 'Concentration')
+        if (current && current.sourceLabel !== label) breakConcentration(room, source, 'เริ่มตั้งสมาธิใหม่')
+        if (!source.effects?.some(effect => effect.condition === 'Concentration')) {
+          source.effects = [...(source.effects ?? []), { id: id(), condition: 'Concentration', sourceId: source.id, sourceLabel: label, hidden: command.hidden === true || undefined }]
+        }
+      }
+      for (const creature of targets) {
+        if ((creature.effects?.length ?? 0) >= 30) throw new Invalid(creature.name + ' มี Condition มากเกินไป')
+        const effect: Effect = {
+          id: id(), condition, level: condition === 'Exhaustion' ? number(command.level ?? 1, 1, 6) : undefined,
+          sourceId: source?.id, sourceLabel: label, concentration: concentration || undefined, ends, save, hidden: command.hidden === true || undefined
+        }
+        creature.effects = [...(creature.effects ?? []), effect]
+        if (incapacitating.includes(condition) && creature.effects.some(entry => entry.condition === 'Concentration')) breakConcentration(room, creature, 'ทำอะไรไม่ได้')
+      }
+      if (command.hidden !== true) addLog(room, { kind: 'combat', text: targets.map(creature => creature.name).join(', ') + ' ติด ' + condition + (label ? ' จาก ' + label : '') })
+      return {}
+    }
+    case 'removeEffect': {
+      const creature = actor()
+      const effect = get(creature.effects ?? [], command.effectId)
+      const source = effect.sourceId ? room.actors.find(item => item.id === effect.sourceId) : undefined
+      if (member.role !== 'dm' && creature.ownerId !== member.id && source?.ownerId !== member.id) throw new Forbidden('คุณไม่ได้ควบคุมตัวนี้')
+      if (effect.condition === 'Concentration') { breakConcentration(room, creature, 'เลิกตั้งสมาธิ'); return {} }
+      creature.effects = (creature.effects ?? []).filter(entry => entry.id !== effect.id)
+      if (!effect.hidden) addLog(room, { kind: 'combat', text: creature.name + ' พ้นจาก ' + effectName(effect) })
+      return {}
+    }
+    case 'effectSave': {
+      const creature = actor()
+      const effect = get(creature.effects ?? [], command.effectId)
+      if (!effect.pending) throw new Conflict('ไม่มีการทอยเซฟที่รออยู่')
+      if (command.skip === true) {
+        requireDM(member)
+        effect.pending = undefined
+        return {}
+      }
+      owns(member, creature)
+      const { ability, dc, reason } = effect.pending
+      const trained = creature.savingThrows?.[ability]
+      const bonus = (trained ? bonusForCheck(creature, trained) : modifier(creature.abilities[ability])) + d20Penalty(creature)
+      const result = d20(bonus, command.advantage === true, command.disadvantage === true)
+      const passed = result.total >= dc
+      effect.pending = undefined
+      const label = reason === 'concentration' ? 'Concentration' : effectName(effect)
+      const receipt = saveRoll(ability + ' save · ' + creature.name + ' · ' + label, result, { outcome: (passed ? 'ผ่าน' : 'พลาด') + ' DC ' + dc, ...(effect.hidden ? { privateTo: member.id } : {}) })
+      if (reason === 'concentration' && !passed) breakConcentration(room, creature, 'พลาด CON save')
+      if (reason === 'repeat' && passed) {
+        creature.effects = (creature.effects ?? []).filter(entry => entry.id !== effect.id)
+        if (!effect.hidden) addLog(room, { kind: 'combat', text: creature.name + ' พ้นจาก ' + effectName(effect) + ' (ผ่าน ' + ability + ' save)' })
+      }
+      return receipt
     }
     case 'next':
     case 'end':
@@ -950,7 +1072,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       if (roll.targetId !== creature.id || roll.applied === undefined || (roll.sceneId && roll.sceneId !== target.id)) throw new Invalid('ผลทอยนี้ใช้กับเป้าหมายไม่ได้')
       if (!roll.applied) {
         const kind = damageKind(command.damageKind)
-        const lost = applyDamage(target, creature, number(command.amount, 0, 9999), kind, roll.critical)
+        const lost = applyDamage(target, creature, number(command.amount, 0, 9999), kind, roll.critical, room)
         roll.applied = true
         if (lost > 0) addLog(room, { kind: 'hp', text: damageText(creature, lost, kind), sceneId: target.id })
       }
@@ -982,7 +1104,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       })
       if (new Set(effects.map(entry => entry.actor.id)).size !== effects.length) throw new Invalid('เลือกเป้าหมายซ้ำ')
       const result = rollDice(text(command.formula))
-      const hits = effects.map(entry => ({ actor: entry.actor, lost: applyDamage(target, entry.actor, Math.max(0, Math.floor(result.total * entry.multiplier)), kind) }))
+      const hits = effects.map(entry => ({ actor: entry.actor, lost: applyDamage(target, entry.actor, Math.max(0, Math.floor(result.total * entry.multiplier)), kind, false, room) }))
       const hurt = hits.filter(hit => hit.lost > 0)
       if (hurt.length) addLog(room, { kind: 'hp', sceneId: target.id, text: 'AoE ' + damageKinds[kind][0] + ' · ' +
         hurt.map(hit => hit.actor.name + ' −' + hit.lost + (hit.actor.hp === 0 ? ' ล้มลง' : '')).join(', ') })
@@ -1008,7 +1130,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const amount = number(command.amount, 1, 9999)
       if (command.mode === 'damage') {
         const kind = damageKind(command.damageKind)
-        const lost = applyDamage(where, creature, amount, kind)
+        const lost = applyDamage(where, creature, amount, kind, false, room)
         if (lost > 0) addLog(room, { kind: 'hp', text: damageText(creature, lost, kind), sceneId: where.id })
       } else if (command.mode === 'heal') {
         heal(creature, amount)

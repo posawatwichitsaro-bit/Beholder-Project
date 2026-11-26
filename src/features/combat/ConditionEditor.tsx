@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Minus, Plus, X } from 'lucide-react'
-import type { Actor } from '../../../shared/model.ts'
+import type { Actor, Effect } from '../../../shared/model.ts'
+import { activeConditions } from '../../../shared/effects.ts'
 import { conditionBase, conditionInfo, conditionThai, exhaustionEffects, isSrdCondition, parseConditions, rankConditions, srdConditions } from '../../../shared/conditions.ts'
 import type { ActiveCondition } from '../../../shared/conditions.ts'
 import type { Send } from '../../state/useCommand.ts'
@@ -54,8 +55,8 @@ export function ConditionEditor({ actor, send }: { actor: Actor; send: Send }) {
 }
 
 /** What each active condition does, most limiting first. Read-only; anyone who can see the creature can read it. */
-export function ConditionDetails({ conditions }: { conditions: string }) {
-  const list = rankConditions(parseConditions(conditions))
+export function ConditionDetails({ creature }: { creature: { conditions: string; effects?: Effect[] } }) {
+  const list = rankConditions(activeConditions(creature))
   if (!list.length) return <p className="muted">ไม่มี Condition</p>
   return <ul className="condition-details">{list.map(item => {
     const { base, level } = conditionBase(item.name)
@@ -69,25 +70,4 @@ export function ConditionDetails({ conditions }: { conditions: string }) {
       </span>
     </li>
   })}</ul>
-}
-
-/**
- * Conditions of one creature, opened from its token: what each one does, and
- * for the owner or DM the same editor as on the sheet.
- */
-export function ConditionPanel({ name, conditions, actor, send, close }: {
-  name: string; conditions: string; actor?: Actor; send: Send; close: () => void
-}) {
-  useEffect(() => {
-    function key(event: KeyboardEvent) { if (event.key === 'Escape') { event.preventDefault(); close() } }
-    window.addEventListener('keydown', key)
-    return () => window.removeEventListener('keydown', key)
-  }, [close])
-  return <div className="scrim" onClick={event => { if (event.target === event.currentTarget) close() }}>
-    <section className="dialog compact condition-panel bh-on-parchment" role="dialog" aria-modal="true" aria-label={'Condition · ' + name}>
-      <header><h2>Condition · {name}</h2><button type="button" aria-label="ปิด" onClick={close}>×</button></header>
-      <ConditionDetails conditions={actor?.conditions ?? conditions} />
-      {actor ? <ConditionEditor actor={actor} send={send} /> : <p className="muted">เจ้าของตัวละครหรือ DM เป็นผู้แก้ Condition</p>}
-    </section>
-  </div>
 }

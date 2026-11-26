@@ -10,7 +10,7 @@ import { CombatPanel } from '../combat/CombatPanel.tsx'
 import { DamageTypeSelect } from '../combat/CombatEffects.tsx'
 import { InitiativeBar, TurnBanner } from '../combat/InitiativeBar.tsx'
 import { DamageQueue } from '../combat/DamageQueue.tsx'
-import { ConditionPanel } from '../combat/ConditionEditor.tsx'
+import { EffectsPanel, PendingSaves } from '../combat/EffectsPanel.tsx'
 import { SheetEditor } from '../sheets/SheetEditor.tsx'
 import { ActorActions } from '../sheets/ActorActions.tsx'
 import { SheetView } from '../sheets/SheetView.tsx'
@@ -531,6 +531,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       }} />}
       {scene?.combat && scene.id === room.activeSceneId && <TurnBanner scene={scene} room={room} send={commandHere} />}
       <DamageQueue room={room} send={send} />
+      <PendingSaves room={room} send={commandHere} />
       {calibratingScene && <GridCalibrator key={calibratingScene.id} scene={calibratingScene} rect={calibrating?.rect} preview={setGridPreview} cancel={endCalibration}
         save={async fit => {
           const ok = await send({ type: 'scene', sceneId: calibratingScene.id, name: calibratingScene.name, ...fit })
@@ -556,8 +557,8 @@ export function Table({ account, changeAccount }: AccountProps) {
       copyScene={item => setSceneOperation({ mode: 'copy', scene: item })}
       deleteScene={item => setSceneOperation({ mode: 'delete', scene: item })} />}
     {touring && <Tour key={role} role={role} close={endTour} />}
-    {conditionCreature && <ConditionPanel key={conditionCreature.id} name={conditionCreature.name} conditions={conditionCreature.conditions}
-      actor={room.actors.find(item => item.id === conditionCreature.id)} send={commandHere} close={() => setConditionTarget(undefined)} />}
+    {conditionCreature && <EffectsPanel key={conditionCreature.id} room={room} creature={conditionCreature} send={commandHere} close={() => setConditionTarget(undefined)}
+      sources={(dm ? room.publicActors : room.actors).filter(item => scene?.tokens.some(token => token.actorId === item.id)).map(item => ({ id: item.id, name: item.name }))} />}
     {paletteOpen && <CommandPalette commands={paletteCommands} close={() => setPaletteOpen(false)} />}
     {(modal === 'createScene' || editingScene) && <SceneForm scene={editingScene} save={send} cancel={() => setModal(undefined)} />}
     {sceneOperation && <SceneOperationForm key={sceneOperation.mode + sceneOperation.scene.id} operation={sceneOperation}

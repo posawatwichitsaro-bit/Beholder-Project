@@ -620,6 +620,69 @@ test('the DM opens token conditions from the board, sets Poisoned and steps Exha
   await panel.waitFor({ state: 'detached' })
 })
 
+test('Hold Person from the board: a repeat save comes due at the end of the target turn, and damage asks for Concentration', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  page.setDefaultTimeout(10000)
+  const opened = await page.request.post(base + '/api/rooms', { data: { name: 'Effects test', member: 'DM' } })
+  const room: Snapshot = await opened.json()
+  const path = base + '/api/rooms/' + room.id
+  const state = async () => (await (await page.request.get(path)).json()) as Snapshot
+  const command = async (body: Record<string, unknown>) => {
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: (await state()).revision } })
+    assert.equal(response.status(), 200, await response.text())
+  }
+  await command({ type: 'scene', name: 'Crypt', cell: 48, originX: 0, originY: 0 })
+  await command({ type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Kael', hp: 30, maxHp: 30 } })
+  await command({ type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Lyra', hp: 30, maxHp: 30 } })
+  await page.goto(base + '/room/' + room.id)
+  for (const [name, x] of [['Kael', 210], ['Lyra', 330]] as const) {
+    await openPanel(page, 'ชีตในห้อง')
+    await page.getByRole('button', exact('วาง ' + name)).click()
+    await page.locator('canvas').click({ position: { x, y: 160 } })
+    await page.waitForFunction(async ([url, count]) => (await (await fetch(url)).json()).scenes[0].tokens.length === count, [path, name === 'Kael' ? 1 : 2] as const)
+  }
+  const actorId = async (name: string) => (await state()).actors.find(actor => actor.name === name)!.id
+  const kael = await actorId('Kael')
+  const lyra = await actorId('Lyra')
+  await command({ type: 'combat', sceneId: (await state()).activeSceneId, participants: [kael, lyra] })
+
+  await page.locator('canvas').click({ position: { x: 210, y: 160 }, button: 'right' })
+  await page.locator('.context-popover').getByRole('button', exact('Condition')).click()
+  const panel = page.getByRole('dialog', exact('Condition · Kael'))
+  await panel.getByText('เพิ่ม Condition แบบมีที่มา', { exact: true }).click()
+  await panel.getByLabel('Condition ที่จะเพิ่ม').selectOption('Paralyzed')
+  await panel.getByLabel('ผู้ทำ', { exact: true }).selectOption(lyra)
+  await panel.getByLabel('มาจาก (เวท / ความสามารถ)').fill('Hold Person')
+  await panel.getByLabel(/ทอยเซฟซ้ำตอนจบเทิร์น/).check()
+  await panel.getByLabel('DC', { exact: true }).fill('1')
+  await panel.getByLabel('ผูกกับ Concentration ของผู้ทำ').check()
+  await panel.getByRole('button', exact('เพิ่ม Paralyzed')).click()
+  await panel.getByText(/จาก Hold Person · Lyra · ผูกกับ Concentration · ทอย WIS save DC 1/).waitFor()
+  let snap = await state()
+  assert.ok(snap.actors.find(actor => actor.id === lyra)!.effects!.some(effect => effect.condition === 'Concentration'))
+  await page.keyboard.press('Escape')
+  await panel.waitFor({ state: 'detached' })
+
+  // Pass turns until Kael's turn ends; then the save waits for whoever controls Kael.
+  for (let turn = 0; turn < 3 && !(await state()).actors.find(actor => actor.id === kael)!.effects!.some(effect => effect.pending); turn++) {
+    await command({ type: 'next', sceneId: snap.activeSceneId })
+  }
+  const waiting = page.getByRole('region', exact('รอทอยเซฟ'))
+  await waiting.getByText(/WIS save DC 1 · Paralyzed \(Hold Person\)/).waitFor()
+  await waiting.getByRole('button', exact('ทอย')).click()
+  await waiting.waitFor({ state: 'detached' })
+  snap = await state()
+  assert.equal(snap.actors.find(actor => actor.id === kael)!.effects!.length, 0, 'DC 1 always passes; Paralyzed ends')
+
+  // Damage on the caster asks for a Concentration check: DC 10 for 12 damage.
+  await command({ type: 'adjustHp', sceneId: snap.activeSceneId, actorId: lyra, amount: 12, mode: 'damage' })
+  await waiting.getByText(/CON save DC 10 · Concentration/).waitFor()
+  await waiting.getByRole('button', exact('ข้าม')).click()
+  await waiting.waitFor({ state: 'detached' })
+})
+
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')
