@@ -128,6 +128,21 @@ label.queue-check { display: inline-flex; align-items: center; gap: 6px; color: 
 }
 @media (prefers-reduced-motion: reduce) { .combat-vignette, .initiative-entry[aria-current=step] .initiative-portrait { animation: none; } }
 
+/* Rest tab: Hit Dice, class resources and the two rests. */
+.rest-panel { display: grid; gap: var(--bh-space-3); }
+.rest-panel section { display: grid; gap: var(--bh-space-2); }
+.rest-panel h3 { margin: 0; font-family: var(--bh-font-heading); font-size: var(--bh-text-md); color: var(--bh-ink-strong); }
+.rest-dice { display: grid; gap: 6px; }
+.rest-die { display: grid; grid-template-columns: 40px 48px 1fr; align-items: center; gap: 8px; }
+.rest-die b { font: 700 1.05rem var(--bh-font-display); color: var(--bh-crimson); }
+.table .sheet-view .rest-die button, .table .sheet-view .rest-actions button { display: inline-flex; align-items: center; gap: 6px; justify-self: start; }
+.rest-resource { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
+.rest-resource-name { display: grid; }
+.rest-resource-name small { color: var(--bh-ink-muted); font-size: 11px; }
+.rest-stepper { display: inline-flex; gap: 4px; }
+.rest-actions { display: flex; flex-wrap: wrap; gap: var(--bh-space-2); }
+.table .sheet-view .rest-sync { justify-self: start; font-size: var(--bh-text-xs); }
+
 /* Condition marks: dark leather with a brass rim; the icon shape carries the meaning, the name is in the label. */
 .condition-badges { display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; }
 .condition-badge {

@@ -490,6 +490,43 @@ test('a player takes gear from the SRD item catalog, wields the weapon and wears
   assert.deepEqual([potion.name, potion.quantity, potion.rarity], ['Potion of Healing (greater)', 2, 'Uncommon'])
 })
 
+test('a character spends a Hit Die, uses a class resource and takes a Long Rest', { timeout: 45000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  page.setDefaultTimeout(10000)
+  const opened = await page.request.post(base + '/api/rooms', { data: { name: 'Rest test', member: 'DM' } })
+  const room: Snapshot = await opened.json()
+  const path = base + '/api/rooms/' + room.id
+  const hero = { ...blankSheet(), name: 'Kael', classLevel: 'Fighter 3', hp: 10, maxHp: 30, abilities: { STR: 16, DEX: 12, CON: 14, INT: 10, WIS: 10, CHA: 10 } }
+  assert.equal((await page.request.post(path + '/commands', { data: { type: 'sheet', kind: 'pc', sheet: hero, commandId: randomUUID(), revision: room.revision } })).status(), 200)
+  const kael = async () => ((await (await page.request.get(path)).json()) as Snapshot).actors.find(actor => actor.name === 'Kael')!
+  await page.goto(base + '/room/' + room.id)
+  await openPanel(page, 'ชีตในห้อง')
+  await page.getByRole('button', exact('Kael')).click()
+  const sheet = page.getByRole('article', { name: 'ชีต Kael' })
+  await sheet.getByRole('tab', exact('Rest')).click()
+
+  await sheet.getByRole('button', { name: /^เพิ่มทรัพยากรตามคลาส/ }).click()
+  await sheet.getByRole('button', exact('Second Wind ที่ 1 (ยังใช้ได้)')).click()
+  await sheet.getByRole('button', exact('Second Wind ที่ 2 (ใช้แล้ว)')).waitFor()
+  await sheet.getByRole('button', exact('Action Surge ที่ 1 (ยังใช้ได้)')).click()
+  await sheet.getByRole('button', exact('Action Surge ที่ 1 (ใช้แล้ว)')).waitFor()
+  await sheet.getByRole('button', exact('ใช้ Hit Die d10')).click()
+  await sheet.getByText('2/3', { exact: true }).waitFor()
+  const rested = await kael()
+  assert.ok(rested.hp > 10, 'a Hit Die heals')
+  assert.deepEqual(rested.resources?.map(entry => [entry.name, entry.used]), [['Second Wind', 1], ['Action Surge', 1]])
+
+  await sheet.getByRole('button', exact('พักสั้น (Short Rest)')).click()
+  await sheet.getByRole('button', exact('Action Surge ที่ 1 (ยังใช้ได้)')).waitFor()
+  await sheet.getByRole('button', exact('พักยาว (Long Rest)')).click()
+  await sheet.getByText('3/3', { exact: true }).waitFor()
+  const after = await kael()
+  assert.deepEqual([after.hp, after.hitDiceSpent, after.resources?.map(entry => entry.used)], [30, {}, [0, 0]])
+  await page.locator('.rolls, .dice-tray').getByText(/Hit Die · Kael/).first().waitFor()
+})
+
 test('the DM opens token conditions from the board, sets Poisoned and steps Exhaustion', { timeout: 45000 }, async t => {
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
   t.after(() => browser.close())
