@@ -683,6 +683,60 @@ test('Hold Person from the board: a repeat save comes due at the end of the targ
   await waiting.waitFor({ state: 'detached' })
 })
 
+test('a player clicks a monster to target it and attacks from the token bar; the sheet keeps the same target', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  const player = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  for (const page of [dm, player]) page.setDefaultTimeout(10000)
+  const opened = await dm.request.post(base + '/api/rooms', { data: { name: 'Target test', member: 'DM' } })
+  const room: Snapshot = await opened.json()
+  const path = base + '/api/rooms/' + room.id
+  const state = async (page: Page) => (await (await page.request.get(path)).json()) as Snapshot
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: (await state(page)).revision } })
+    assert.equal(response.status(), 200, await response.text())
+  }
+  await command(dm, { type: 'scene', name: 'Road', cell: 48, originX: 0, originY: 0 })
+  await player.goto(base + '/?invite=' + room.invite + '&room=' + room.id)
+  await player.getByLabel('ชื่อที่ใช้บนโต๊ะ').fill('Vex player')
+  await player.getByRole('button', exact('เข้าร่วม')).click()
+  await player.getByRole('button', exact('เมนูโต๊ะ')).waitFor()
+  await command(player, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Vex', attack: 5, damage: '1d8+3',
+    attacks: [{ name: 'Shortbow', bonus: 4, damage: '1d6+2', damageKind: 'piercing' }] } })
+  await openPanel(player, 'ชีตในห้อง')
+  await player.getByRole('button', exact('วาง Vex')).click()
+  await player.locator('canvas').click({ position: { x: 210, y: 160 } })
+  await player.waitForFunction(async url => (await (await fetch(url)).json()).scenes[0].tokens.length === 1, path)
+  const vexToken = (await state(dm)).scenes[0].tokens[0]
+  await command(dm, { type: 'place', sceneId: (await state(dm)).scenes[0].id, kind: 'monster',
+    sheet: { ...blankSheet('monster'), name: 'Bandit', hp: 11, maxHp: 11, ac: 12 }, x: vexToken.x + 2, y: vexToken.y })
+  await command(dm, { type: 'place', sceneId: (await state(dm)).scenes[0].id, kind: 'monster',
+    sheet: { ...blankSheet('monster'), name: 'Wolf', hp: 11, maxHp: 11, ac: 13 }, x: vexToken.x + 6, y: vexToken.y + 4 })
+  const bandit = (await state(dm)).actors.find(actor => actor.name === 'Bandit')!.id
+
+  // The sheet's target list puts foes first, nearest first, with the distance.
+  await openPanel(player, 'ชีตในห้อง')
+  await player.getByRole('button', exact('Vex')).click()
+  const sheet = player.getByRole('article', { name: 'ชีต Vex' })
+  await sheet.getByRole('tab', exact('Actions')).click()
+  const picker = sheet.getByLabel('เป้าหมายการโจมตี')
+  await picker.locator('option', { hasText: 'Bandit · 10 ft.' }).waitFor({ state: 'attached' })
+  assert.equal(await picker.inputValue(), bandit, 'the nearest foe is picked by default')
+
+  // Clicking the monster on the board targets it; the player's own sheet stays open.
+  const cell = (await state(player)).scenes[0].cell
+  await player.locator('canvas').click({ position: { x: 210 + 2 * cell, y: 160 } })
+  const bar = player.getByRole('toolbar', exact('คำสั่งของ Bandit'))
+  await bar.waitFor()
+  await sheet.waitFor()
+  await bar.getByRole('button', { name: /^โจมตีด้วย Vex \(\+5\)/ }).click()
+  await player.waitForFunction(async ([url, target]) => (await (await fetch(url)).json()).rolls.some((roll: { label: string; targetId?: string }) =>
+    roll.label.startsWith('attack · Vex') && roll.targetId === target), [path, bandit] as const)
+  await bar.getByRole('button', { name: /^Shortbow \(\+4\)/ }).waitFor()
+  assert.equal(await picker.inputValue(), bandit, 'the sheet follows the board target')
+})
+
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')

@@ -85,6 +85,15 @@ function lowerExhaustion(conditions: string) {
   }).join(', ')
 }
 
+/** Exhaustion kept as an effect (with a source) also drops one level; at 0 it ends. */
+function lowerExhaustionEffects(effects: NonNullable<Sheet['effects']>) {
+  return effects.flatMap(effect => {
+    if (effect.condition !== 'Exhaustion') return [effect]
+    const level = (effect.level ?? 1) - 1
+    return level > 0 ? [{ ...effect, level }] : []
+  })
+}
+
 /** What changes on the sheet after a rest. Hit Dice for a Short Rest are spent one at a time, separately. */
 export function restedSheet<T extends Sheet>(sheet: T, kind: 'short' | 'long'): T {
   const resources = (sheet.resources ?? []).map(resource => ({
@@ -97,6 +106,7 @@ export function restedSheet<T extends Sheet>(sheet: T, kind: 'short' | 'long'): 
   if (kind === 'short') return { ...sheet, resources, ...(restoreSlots ? { slots: formatSlots(slots.map(slot => ({ ...slot, left: slot.max }))) } : {}) }
   return {
     ...sheet, resources, hp: sheet.maxHp, tempHp: 0, hitDiceSpent: {}, conditions: lowerExhaustion(sheet.conditions),
+    ...(sheet.effects ? { effects: lowerExhaustionEffects(sheet.effects) } : {}),
     life: 'active', successes: 0, failures: 0,
     ...(restoreSlots ? { slots: formatSlots(slots.map(slot => ({ ...slot, left: slot.max }))) } : {})
   }

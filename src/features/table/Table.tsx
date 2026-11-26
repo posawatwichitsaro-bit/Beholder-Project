@@ -52,6 +52,7 @@ type TokenPlacement = { sceneId: string; source: TokenSource; role?: TokenRole }
 const arrowSteps: Record<string, Point> = {
   ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }
 }
+const signedBonus = (value: number) => (value >= 0 ? '+' : '') + value
 const wideScreen = () => typeof matchMedia === 'undefined' || matchMedia('(min-width: 761px)').matches
 const typingTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && Boolean(target.closest('input, select, textarea, [contenteditable]'))
@@ -84,6 +85,10 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [placementPoint, setPlacementPoint] = useState<Point>()
   const [focusScene, setFocusScene] = useState('')
   const [selected, setSelected] = useState('')
+  /** The token picked on the board. Separate from `selected` (the sheet shown) so clicking an enemy keeps your own sheet open. */
+  const [boardSelected, setBoardSelected] = useState('')
+  /** A player's attack target, set by clicking a creature on the board or picking it on the sheet. */
+  const [attackTarget, setAttackTarget] = useState('')
   const [modal, setModal] = useState<'createScene' | { sceneId: string }>()
   const [sceneOperation, setSceneOperation] = useState<SceneOperation>()
   const [sheet, setSheet] = useState<{ initial: Sheet; actor?: Actor; template?: Template; asTemplate?: boolean; report?: string[] }>()
@@ -149,6 +154,14 @@ export function Table({ account, changeAccount }: AccountProps) {
     : dock.open.includes(id) || (id === 'sheets' && dock.open.includes('actor'))
 
   const mainTokenId = mainToken?.id
+  const ownedHere = !dm ? room.actors.filter(item => scene?.tokens.some(token => token.actorId === item.id)) : []
+  const attacker = ownedHere.find(item => item.id === combat?.order[combat.turn]?.actorId)
+    ?? ownedHere.find(item => item.id === mainToken?.actorId) ?? ownedHere[0]
+  function attackWith(target: string, weaponIndex?: number) {
+    if (!attacker) return
+    setAttackTarget(target)
+    void commandHere({ type: 'sheetRoll', rollType: 'attack', actorId: attacker.id, targetId: target, weaponIndex })
+  }
   const keyboardSceneId = !dm ? scene?.id : undefined
   useEffect(() => {
     if (!mainTokenId || !keyboardSceneId) return
@@ -227,6 +240,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   const commandHere = (command: Command) => send({ ...command, sceneId: scene?.id })
   function showActor(id: string) {
     setSelected(id)
+    setBoardSelected(id)
     openPanel('actor')
   }
   function saveToLibrary(value: Sheet) {
@@ -374,7 +388,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       </div>}
       {!combat && <EmptyState title="ยังไม่มีการต่อสู้ในฉากนี้" hint="เมื่อ DM เริ่มการต่อสู้ ลำดับเทิร์นจะขึ้นที่ด้านบนของกระดาน และจะมีป้ายบอกเมื่อถึงเทิร์นของคุณ" />}
     </>,
-    actor: () => actor ? <SheetView key={actor.id} actor={actor} scene={scene} room={room}
+    actor: () => actor ? <SheetView key={actor.id} actor={actor} scene={scene} room={room} preferredTarget={attackTarget} chooseTarget={setAttackTarget}
       edit={() => setSheet({ initial: actor, actor })} copy={() => saveToLibrary(actor)}
       send={async value => {
         const ok = await send(value)
@@ -454,7 +468,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     <Dock items={dock.open.map(id => ({ id, title: panelById(id).label, body: bodies[id]() }))}
       pinned={dock.pinned} pin={id => dispatchDock({ type: 'pin', id })} close={id => dispatchDock({ type: 'close', id })} />
     <section className="workspace" aria-label="ฉากปัจจุบัน">
-      {scene ? <Board key={scene.id} scene={scene} room={room} selected={selected} targetId={combatOpen ? combatTarget : undefined}
+      {scene ? <Board key={scene.id} scene={scene} room={room} selected={boardSelected} targetId={combatOpen ? combatTarget : attackTarget || undefined}
         mainTokenId={mainTokenId}
         calibrate={calibratingScene ? rect => setCalibrating({ sceneId: calibratingScene.id, rect }) : undefined}
         gridOverride={calibratingScene ? gridPreview : undefined}
@@ -463,7 +477,12 @@ export function Table({ account, changeAccount }: AccountProps) {
         select={value => {
           if (combatOpen && combat) {
             setCombatTarget(value === combat.order[combat.turn].actorId ? '' : value)
-          } else setSelected(value)
+            return
+          }
+          setBoardSelected(value)
+          // Your own creature opens its sheet; anyone else's becomes the attack target and your sheet stays.
+          if (!value || room.actors.some(item => item.id === value)) setSelected(value)
+          if (value && !dm && !room.actors.some(item => item.id === value)) setAttackTarget(value)
         }}
         move={(tokenIds, delta) => void commandHere({ type: 'moveTokens', tokenIds, dx: delta.x, dy: delta.y })}
         drop={dropToken}
@@ -485,7 +504,16 @@ export function Table({ account, changeAccount }: AccountProps) {
           ]
           const accessible = room.actors.find(item => item.id === token.actorId)
           const lootable = room.publicActors.find(item => item.id === token.actorId && item.lootable)
+          const foe = room.publicActors.find(item => item.id === token.actorId && item.kind === 'monster' && item.hp > 0)
+          // A player attacks a monster straight from its token: main attack plus up to two more.
+          const attackActions = !dm && attacker && foe ? [
+            { label: 'โจมตีด้วย ' + attacker.name + ' (' + signedBonus(attacker.attack) + ')', run: () => attackWith(foe.id) },
+            ...(attacker.attacks ?? []).slice(0, 2).map((attack, index) => ({
+              label: attack.name + ' (' + signedBonus(attack.bonus) + ')', run: () => attackWith(foe.id, index)
+            }))
+          ] : []
           return [
+            ...attackActions,
             ...(lootable ? [{ label: lootable.lootResult ? 'ดูผลค้นศพ' : 'ค้นศพ / Loot', run: () => setLootTarget(token.actorId) }] : []),
             ...(accessible ? [{ label: 'เปิดชีต', run: () => showActor(accessible.id) }] : []),
             { label: 'Condition', run: () => setConditionTarget(token.actorId) },

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowBigUpDash, Copy, HeartPulse, Pencil, Shield, Footprints, Sparkles, Swords, Zap } from 'lucide-react'
 import { abilities } from '../../../shared/model.ts'
 import type { Ability, Actor, Scene, Snapshot } from '../../../shared/model.ts'
@@ -22,8 +22,11 @@ const signed = (value: number) => (value >= 0 ? '+' : '') + value
  * a weapon to attack with it. The roll options (advantage, proficiency, target,
  * cover) sit above and apply to the next roll. Editing opens SheetEditor.
  */
-export function SheetView({ actor, scene, room, send, edit, copy }: {
+export function SheetView({ actor, scene, room, send, edit, copy, preferredTarget, chooseTarget }: {
   actor: Actor; scene?: Scene; room: Snapshot; send: Send; edit: () => void; copy: () => void
+  /** The creature picked on the board; it becomes this sheet's target when it is in the scene. */
+  preferredTarget?: string
+  chooseTarget?: (id: string) => void
 }) {
   const dm = room.me.role === 'dm'
   const [tab, setTab] = useState<Tab>('overview')
@@ -37,8 +40,10 @@ export function SheetView({ actor, scene, room, send, edit, copy }: {
   const [saveAbility, setSaveAbility] = useState<Ability>('DEX')
   const [half, setHalf] = useState(false)
   const [healing, setHealing] = useState(1)
-  const targets = room.publicActors.filter(item => item.id !== actor.id && scene?.tokens.some(token => token.actorId === item.id))
-  const targetId = targets.some(item => item.id === target) ? target : targets[0]?.id
+  const targets = sortTargets(actor, room, scene)
+  useEffect(() => { if (preferredTarget) setTarget(preferredTarget) }, [preferredTarget])
+  // Default: what you picked (here or on the board), else the nearest foe, else anyone.
+  const targetId = targets.some(item => item.id === target) ? target : targets.find(item => item.foe)?.id ?? targets[0]?.id
   const onBoard = Boolean(scene?.tokens.some(token => token.actorId === actor.id))
 
   function roll(rollType: string, extra: { ability?: Ability; skill?: Skill; weaponIndex?: number } = {}) {
@@ -63,11 +68,14 @@ export function SheetView({ actor, scene, room, send, edit, copy }: {
     <label className="sheet-toggle"><input type="checkbox" checked={proficient} onChange={event => setProficient(event.target.checked)} />Proficient</label>
   </div>
   const targeting = <div className="sheet-targeting">
-    <label>เป้าหมาย<select value={targetId ?? ''} onChange={event => setTarget(event.target.value)}>
+    <label>เป้าหมาย<select aria-label="เป้าหมายการโจมตี" value={targetId ?? ''} onChange={event => { setTarget(event.target.value); chooseTarget?.(event.target.value) }}>
       {targets.length === 0 && <option value="">ไม่มีเป้าหมายในฉาก</option>}
-      {targets.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+      {targets.some(item => item.foe) && <optgroup label="ศัตรู">{targets.filter(item => item.foe).map(item =>
+        <option key={item.id} value={item.id}>{item.name}{item.feet !== undefined ? ' · ' + item.feet + ' ft.' : ''}{item.down ? ' · หมดสติ' : ''}</option>)}</optgroup>}
+      {targets.some(item => !item.foe) && <optgroup label="พันธมิตร">{targets.filter(item => !item.foe).map(item =>
+        <option key={item.id} value={item.id}>{item.name}{item.feet !== undefined ? ' · ' + item.feet + ' ft.' : ''}</option>)}</optgroup>}
     </select></label>
-    <label>ที่กำบังของเป้าหมาย<select value={cover} onChange={event => setCover(Number(event.target.value))}>
+    <label>ที่กำบังของเป้าหมาย<select aria-label="ที่กำบังของเป้าหมาย" value={cover} onChange={event => setCover(Number(event.target.value))}>
       <option value={0}>ไม่มี Cover</option><option value={2}>Half Cover (+2)</option><option value={5}>¾ Cover (+5)</option>
     </select></label>
   </div>
@@ -205,4 +213,18 @@ export function SheetView({ actor, scene, room, send, edit, copy }: {
     </div>
     {levelling && <LevelUpDialog actor={actor} send={send} close={() => setLevelling(false)} />}
   </article>
+}
+
+/**
+ * Everyone this sheet could target in the scene: foes (the other side) first,
+ * nearest first, with the distance in feet (5 ft. per square, diagonals count as one).
+ */
+function sortTargets(actor: Actor, room: Snapshot, scene?: Scene) {
+  const own = scene?.tokens.find(token => token.actorId === actor.id)
+  return room.publicActors.flatMap(item => {
+    const token = scene?.tokens.find(entry => entry.actorId === item.id)
+    if (item.id === actor.id || !token) return []
+    const feet = own ? 5 * Math.max(Math.abs(token.x - own.x), Math.abs(token.y - own.y)) : undefined
+    return [{ id: item.id, name: item.name, foe: (item.kind === 'monster') !== (actor.kind === 'monster'), down: item.hp === 0, feet }]
+  }).sort((a, b) => Number(b.foe) - Number(a.foe) || Number(a.down) - Number(b.down) || (a.feet ?? 0) - (b.feet ?? 0) || a.name.localeCompare(b.name))
 }
