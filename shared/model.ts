@@ -60,6 +60,8 @@ export type LootResult = { passed: boolean; total: number; searcher: string; fou
 export type InventoryItem = {
   id: string; name: string; description: string; image?: string
   quantity?: number; tool?: 'thievesTools'; lootTier?: 'basic' | 'bonus'
+  /** Set when the item came from the SRD item catalog: the template id and a few facts shown with it. */
+  ref?: string; category?: string; rarity?: string; attunement?: boolean; weight?: number
 }
 export type ObjectKind = 'container' | 'prop' | 'structure' | 'item'
 export const objectLabels: Record<ObjectKind, string> = {

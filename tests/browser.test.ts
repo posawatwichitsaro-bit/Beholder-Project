@@ -447,6 +447,49 @@ test('first visit shows the role tour once; display settings stay on this device
   await page.locator('.tour').waitFor({ state: 'detached' })
 })
 
+test('a player takes gear from the SRD item catalog, wields the weapon and wears the armor', { timeout: 45000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  page.setDefaultTimeout(10000)
+  const opened = await page.request.post(base + '/api/rooms', { data: { name: 'Armory test', member: 'DM' } })
+  const room: Snapshot = await opened.json()
+  const path = base + '/api/rooms/' + room.id
+  const hero = { ...blankSheet(), name: 'Vex', abilities: { STR: 10, DEX: 16, CON: 12, INT: 10, WIS: 10, CHA: 10 }, proficiency: 2, ac: 10 }
+  assert.equal((await page.request.post(path + '/commands', { data: { type: 'sheet', kind: 'pc', sheet: hero, commandId: randomUUID(), revision: room.revision } })).status(), 200)
+  const actorOf = async () => ((await (await page.request.get(path)).json()) as Snapshot).actors.find(actor => actor.name === 'Vex')!
+  await page.goto(base + '/room/' + room.id)
+  await openPanel(page, 'ชีตในห้อง')
+  await page.getByRole('button', exact('Vex')).click()
+  const sheet = page.getByRole('article', { name: 'ชีต Vex' })
+  await sheet.getByRole('tab', exact('Inventory')).click()
+
+  const catalog = sheet.getByRole('region', exact('คลังไอเทม SRD'))
+  for (const [search, name] of [['rapier', 'Rapier'], ['leather', 'Leather Armor'], ['healing', 'Potions of Healing']] as const) {
+    await sheet.getByRole('button', exact('เลือกจากคลัง SRD')).click()
+    await catalog.getByLabel('ค้นหาไอเทม').fill(search)
+    await catalog.getByRole('button', { name: new RegExp('^' + name) }).click()
+    if (name === 'Potions of Healing') {
+      await catalog.getByLabel('รุ่น').selectOption('Potion of Healing (greater)')
+      await catalog.getByLabel('จำนวน').fill('2')
+    }
+    await catalog.getByRole('button', exact('เพิ่มลง Inventory')).click()
+    await catalog.getByRole('button', exact('ปิดคลัง')).click()
+  }
+  await sheet.getByText('Inventory (3)', { exact: true }).waitFor()
+  await sheet.getByText('Uncommon', { exact: true }).waitFor()
+
+  await sheet.getByRole('button', exact('ใช้เป็นการโจมตี')).click()
+  await sheet.getByRole('button', exact('อยู่ในการโจมตีแล้ว')).waitFor()
+  await sheet.getByRole('button', exact('สวมใส่')).click()
+  await page.waitForFunction(async url => (await (await fetch(url)).json()).actors[0].ac === 14, path)
+  const vex = await actorOf()
+  assert.deepEqual(vex.attacks?.[0] && { ...vex.attacks[0], notes: undefined }, { name: 'Rapier', bonus: 5, damage: '1d8+3', damageKind: 'piercing', notes: undefined })
+  assert.equal(vex.ac, 11 + 3, 'Leather Armor: 11 + Dex')
+  const potion = vex.inventory!.find(item => item.ref === 'srd-5.2.1:magic:potions-of-healing')!
+  assert.deepEqual([potion.name, potion.quantity, potion.rarity], ['Potion of Healing (greater)', 2, 'Uncommon'])
+})
+
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')

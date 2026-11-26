@@ -4,6 +4,7 @@ import { abilities, sizes } from '../../../shared/model.ts'
 import type { ItemProficiency, Sheet } from '../../../shared/model.ts'
 import { PictureInput } from './PictureInput.tsx'
 import { ItemFields, LootSettingsFields, blankItem } from '../objects/Inventory.tsx'
+import { ItemCatalogPicker } from '../items/ItemCatalogPicker.tsx'
 import { CharacterCalculationFields } from './CharacterCalculations.tsx'
 import { abilityModifier, calculatedSheet } from '../../../shared/characterStats.ts'
 
@@ -15,6 +16,7 @@ export function SheetEditor({ initial, save, cancel, copy, editInventory = true,
   const [sheet, set] = useState(initial)
   const [loadingImage, setLoadingImage] = useState(false)
   const [loadingPdf, setLoadingPdf] = useState(false)
+  const [browsing, setBrowsing] = useState(false)
   const [importError, setImportError] = useState('')
   const [importReport, setImportReport] = useState<string[] | undefined>(report)
   const attacks = sheet.attacks ?? []
@@ -105,8 +107,11 @@ export function SheetEditor({ initial, save, cancel, copy, editInventory = true,
         <ItemFields item={item} monster={sheet.kind === 'monster'} update={value => set({ ...sheet, inventory: items.map((entry, at) => index === at ? value : entry) })} />
         <button type="button" onClick={() => set({ ...sheet, inventory: items.filter((_, at) => index !== at) })}>นำไอเทมออก</button>
       </div>)}
-      <button type="button" disabled={items.length >= 100}
-        onClick={() => set({ ...sheet, inventory: [...items, blankItem(sheet.kind === 'monster' && items.length > 0)] })}>+ ไอเทม</button>
+      {browsing ? <ItemCatalogPicker actionLabel="ใส่ในชีตนี้" close={() => setBrowsing(false)}
+        choose={item => { set({ ...sheet, inventory: [...items, { ...blankItem(sheet.kind === 'monster' && items.length > 0), ...item }] }); return true }} />
+        : <div className="inline"><button type="button" disabled={items.length >= 100}
+          onClick={() => set({ ...sheet, inventory: [...items, blankItem(sheet.kind === 'monster' && items.length > 0)] })}>+ ไอเทม</button>
+          <button type="button" disabled={items.length >= 100} onClick={() => setBrowsing(true)}>เลือกจากคลัง SRD</button></div>}
     </details>}
     {attacks.length > 0 && <div className="item-list">{attacks.map((attack, index) => <div className="attack-row" key={index}>
       <label>ชื่ออาวุธหรือการโจมตี<input required value={attack.name} onChange={e => editAttack(index, { name: e.target.value })} /></label>

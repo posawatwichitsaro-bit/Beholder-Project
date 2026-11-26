@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { Actor, InventoryItem, LootSkill, Snapshot } from '../../../shared/model.ts'
 import { commandId } from '../../lib/api.ts'
+import { armorFromCatalog, weaponAttack } from '../../../shared/itemCatalog.ts'
+import { ItemCatalogPicker, loadItemCatalog } from '../items/ItemCatalogPicker.tsx'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
 
@@ -24,11 +26,17 @@ export const blankItem = (bonus = false): InventoryItem => ({
   id: commandId(), name: '', quantity: 1, description: '', lootTier: bonus ? 'bonus' : 'basic'
 })
 
+/** Catalog items start with a one-line rules summary; the list shows just that line. */
+const firstLine = (text: string) => text.split(/\r?\n/)[0]
+
 export function ItemName({ item, loot = false }: { item: InventoryItem; loot?: boolean }) {
   return <div className="item-name">
     <span className={loot && item.lootTier === 'bonus' ? 'bonus-loot' : undefined}>{item.name}{(item.quantity ?? 1) > 1 && ' ×' + item.quantity}</span>
+    {(item.rarity || item.attunement) && <span className="item-badges">
+      {item.rarity && <span data-rarity={item.rarity}>{item.rarity}</span>}{item.attunement && <span>Attunement</span>}
+    </span>}
     {(item.description || item.tool || loot) && <small>{[
-      loot && (item.lootTier === 'bonus' ? 'โบนัส' : 'พื้นฐาน'), item.tool && 'Thieves’ Tools', item.description
+      loot && (item.lootTier === 'bonus' ? 'โบนัส' : 'พื้นฐาน'), item.tool && 'Thieves’ Tools', firstLine(item.description)
     ].filter(Boolean).join(' · ')}</small>}
   </div>
 }
@@ -37,13 +45,38 @@ export function ItemName({ item, loot = false }: { item: InventoryItem; loot?: b
 export function InventoryPanel({ actor, send, expanded = false }: { actor: Actor; send: Send; expanded?: boolean }) {
   const [draft, setDraft] = useState<InventoryItem>()
   const [remove, setRemove] = useState<string>()
+  const [browsing, setBrowsing] = useState(false)
+  const [equipError, setEquipError] = useState('')
   const monster = actor.kind === 'monster'
   const items = actor.inventory ?? []
   const Wrapper = expanded ? 'section' : 'details'
   const Title = expanded ? 'h3' : 'summary'
+  /** Turn a catalog weapon into a sheet attack, or wear catalog armor / a shield, through the normal sheet update. */
+  async function equip(item: InventoryItem, as: 'attack' | 'armor') {
+    setEquipError('')
+    try {
+      const template = (await loadItemCatalog()).find(entry => entry.id === item.ref)
+      if (!template) throw new Error('ไม่พบไอเทมนี้ในคลัง SRD')
+      const { id: _id, ownerId: _owner, templateId: _template, lootResult: _loot, ...sheet } = actor
+      if (as === 'attack') {
+        const attack = weaponAttack(template, actor)
+        if (!attack) throw new Error('ไอเทมนี้ใช้เป็นการโจมตีไม่ได้')
+        await send({ type: 'sheet', actorId: actor.id, sheet: { ...sheet, attacks: [...(actor.attacks ?? []), { ...attack, name: item.name }] } })
+      } else {
+        const armor = armorFromCatalog(template, actor.calculations?.armor)
+        if (!armor) throw new Error('ไอเทมนี้สวมใส่ไม่ได้')
+        await send({ type: 'sheet', actorId: actor.id, sheet: { ...sheet, calculations: { ...actor.calculations, armor } } })
+      }
+    } catch (error) { setEquipError((error as Error).message) }
+  }
   return <Wrapper className={'inventory' + (expanded ? ' inventory-expanded' : '')}><Title>Inventory ({items.length})</Title>
     {items.length ? <ul>{items.map(item => <li key={item.id}>
       {item.image && <img src={item.image} alt="" />}<ItemName item={item} loot={monster} />
+      {!monster && item.ref?.includes(':equipment:') && item.category === 'weapon' && <button type="button"
+        disabled={actor.attacks?.some(attack => attack.name === item.name)} title="เพิ่มเป็นการโจมตีบนชีต (คิด Proficiency ให้แล้ว)"
+        onClick={() => void equip(item, 'attack')}>{actor.attacks?.some(attack => attack.name === item.name) ? 'อยู่ในการโจมตีแล้ว' : 'ใช้เป็นการโจมตี'}</button>}
+      {!monster && item.ref?.includes(':equipment:') && (item.category === 'armor' || item.category === 'shield') && <button type="button"
+        title="คำนวณ AC จากชิ้นนี้" onClick={() => void equip(item, 'armor')}>{item.category === 'shield' ? 'ถือโล่' : 'สวมใส่'}</button>}
       {remove === item.id ? <><button onClick={() => void send({ type: 'inventoryRemove', actorId: actor.id, itemId: item.id }).then(ok => {
         if (ok) setRemove(undefined)
       })}>ยืนยันนำออก</button><button onClick={() => setRemove(undefined)}>ยกเลิก</button></>
@@ -55,7 +88,13 @@ export function InventoryPanel({ actor, send, expanded = false }: { actor: Actor
     }}>
       <ItemFields item={draft} update={setDraft} monster={monster} />
       <div className="inline"><button className="primary">เก็บใน Inventory</button><button type="button" onClick={() => setDraft(undefined)}>ยกเลิก</button></div>
-    </form> : !actor.lootResult && <button onClick={() => setDraft(blankItem(monster && items.length > 0))}>+ ไอเทม</button>}
+    </form> : browsing ? <ItemCatalogPicker close={() => setBrowsing(false)}
+      choose={item => send({ type: 'inventoryAdd', actorId: actor.id, item: { ...item, lootTier: monster && items.length > 0 ? 'bonus' : 'basic' } })} />
+      : !actor.lootResult && <div className="inline">
+        <button onClick={() => setDraft(blankItem(monster && items.length > 0))}>+ ไอเทม</button>
+        <button onClick={() => setBrowsing(true)}>เลือกจากคลัง SRD</button>
+      </div>}
+    {equipError && <p role="alert">{equipError}</p>}
   </Wrapper>
 }
 

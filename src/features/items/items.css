@@ -1,0 +1,52 @@
+/* SRD item catalog picker and item badges. */
+.item-catalog {
+  display: grid; gap: var(--bh-space-2); margin-top: var(--bh-space-2); padding: var(--bh-space-3);
+  border: 1px solid var(--bh-line-strong); border-radius: var(--bh-radius-md); background: var(--bh-bg);
+}
+/* A dark leather island, also when it sits inside a parchment sheet. */
+.item-catalog, .item-catalog label, .item-catalog .item-description { color: var(--bh-text); }
+.item-catalog button, .bh-on-parchment .item-catalog button { color: var(--bh-text); background: var(--bh-surface-2); border: 1px solid var(--bh-line); }
+.item-catalog button:hover, .bh-on-parchment .item-catalog button:hover { background: var(--bh-surface-3); color: var(--bh-text-strong); }
+.item-catalog button.primary, .bh-on-parchment .item-catalog button.primary { background: var(--bh-crimson); color: var(--bh-crimson-ink); border-color: transparent; }
+.item-catalog select { color: var(--bh-text); background: var(--bh-surface); border: 1px solid var(--bh-line); }
+.item-catalog-head { display: flex; align-items: center; justify-content: space-between; gap: var(--bh-space-2); }
+.item-catalog-head b { font-family: var(--bh-font-heading); color: var(--bh-brass-bright); }
+.item-catalog-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--bh-space-1); }
+.item-catalog-filters select { min-width: 0; }
+.item-catalog-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; max-height: 320px; overflow: auto; }
+.item-catalog-list button {
+  width: 100%; display: grid; gap: 1px; text-align: left; padding: 6px 9px;
+  background: var(--bh-surface-2); border-color: var(--bh-line);
+}
+.item-catalog-list button:hover { background: var(--bh-surface-3); }
+.item-catalog-list small, .item-catalog .muted { color: var(--bh-text-muted); font-size: var(--bh-text-xs); }
+.item-catalog-detail { display: grid; gap: var(--bh-space-2); }
+.item-catalog-detail h4 { margin: 0; font-family: var(--bh-font-heading); font-size: var(--bh-text-lg); color: var(--bh-text-strong); }
+.item-summary { margin: 0; color: var(--bh-brass-bright); font-size: var(--bh-text-sm); }
+.item-description { margin: 0; max-height: 220px; overflow: auto; white-space: pre-line; font-size: var(--bh-text-sm); line-height: 1.6; }
+.item-catalog footer { font-size: var(--bh-text-xs); }
+.item-catalog a { color: var(--bh-brass-bright); }
+
+.item-badges { display: inline-flex; flex-wrap: wrap; gap: 4px; margin: 0; }
+.item-badges span {
+  font-size: var(--bh-text-xs); padding: 0 6px; border-radius: var(--bh-radius-pill);
+  border: 1px solid var(--bh-line-strong); color: var(--bh-text-muted);
+}
+/* Rarity reads by name first; colour is a second cue. */
+.item-badges [data-rarity='Uncommon'] { border-color: #4f8a4a; color: #a9dca0; }
+.item-badges [data-rarity='Rare'] { border-color: #4a6fa8; color: #a9c4ef; }
+.item-badges [data-rarity='Very Rare'] { border-color: #7a4a9a; color: #d6b2f0; }
+.item-badges [data-rarity='Legendary'] { border-color: #b07a2a; color: #f2c879; }
+.item-badges [data-rarity='Artifact'] { border-color: #a83a3a; color: #f0a8a8; }
+.inventory li > button { flex: none; }
+/* The sheet styles every plain button as parchment; inside the catalog island keep them dark. */
+.table .sheet-view .item-catalog button:not(.primary), .table .sheet-view .item-catalog button:not(.primary):hover:not(:disabled) {
+  color: var(--bh-text); background: var(--bh-surface-2); border-color: var(--bh-line);
+}
+/* On parchment (the sheet's inventory list) the badges use dark ink versions. */
+.bh-on-parchment .inventory .item-badges span { color: var(--bh-ink-muted); border-color: var(--bh-parchment-line); }
+.bh-on-parchment .inventory .item-badges [data-rarity='Uncommon'] { color: #2f6a2a; border-color: #2f6a2a; }
+.bh-on-parchment .inventory .item-badges [data-rarity='Rare'] { color: #2a4f8a; border-color: #2a4f8a; }
+.bh-on-parchment .inventory .item-badges [data-rarity='Very Rare'] { color: #5a2a7a; border-color: #5a2a7a; }
+.bh-on-parchment .inventory .item-badges [data-rarity='Legendary'] { color: #7a4a0a; border-color: #7a4a0a; }
+.bh-on-parchment .inventory .item-badges [data-rarity='Artifact'] { color: #8a1e1e; border-color: #8a1e1e; }
