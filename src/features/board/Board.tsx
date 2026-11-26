@@ -9,9 +9,10 @@ import type { Scene, SceneObject, Snapshot, Token } from '../../../shared/model.
 import { clampZoom, dragThreshold, longPressMs, pinchView, wheelIntent, zoomAround } from './gestures.ts'
 import type { Point } from './gestures.ts'
 import { carriesToken, readTokenDrag } from './tokenDrag.ts'
-import { parseConditions } from '../../../shared/conditions.ts'
+import { conditionGlyph, parseConditions, rankConditions } from '../../../shared/conditions.ts'
 import type { TokenDragPayload } from './tokenDrag.ts'
 import { usePrefs } from '../../state/prefs.ts'
+import { ConditionBadges } from '../combat/ConditionBadges.tsx'
 
 type Action = { label: string; run: () => void; disabled?: boolean }
 type Props = {
@@ -358,24 +359,33 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       ctx.font = '700 ' + Math.max(7, Math.min(width / 3, 25)) + 'px "Cormorant Garamond", Sarabun, serif'
       if (!portrait || !portrait.complete || !portrait.naturalWidth) ctx.fillText(actor ? tokenInitials(actor.name) : '?', x, y)
       if (actor && width >= 16) hpBar(ctx, x - radius, y + radius - 4, 2 * radius, actor.hp, actor.maxHp, actor.tempHp, actor.kind === 'monster')
-      const conditionCount = actor?.conditions ? parseConditions(actor.conditions).length : 0
-      if (conditionCount && width >= 20) {
-        // A purple badge at the top right: how many conditions this creature has.
-        const badge = Math.max(7, Math.min(11, width / 6))
-        const bx = x + radius * .75
-        const by = y - radius * .75
-        ctx.beginPath()
-        ctx.arc(bx, by, badge, 0, Math.PI * 2)
-        ctx.fillStyle = '#4a2f55'
-        ctx.fill()
-        ctx.strokeStyle = '#e8cdf7'
-        ctx.lineWidth = 1.5
-        ctx.stroke()
-        ctx.fillStyle = '#f5e6ff'
-        ctx.font = '700 ' + Math.round(badge * 1.2) + 'px Sarabun, system-ui'
+      const conditions = actor?.conditions ? rankConditions(parseConditions(actor.conditions)) : []
+      if (conditions.length && width >= 20) {
+        // Leather-and-brass marks above the token: the two most limiting conditions, then "+N".
+        // Zoomed far out there is only room for one mark with the count.
+        const size = Math.max(11, Math.min(18, width / 3.2))
+        const room = width >= 40 ? 2 : 1
+        const marks = conditions.slice(0, room).map(item => conditionGlyph(item.name))
+        if (conditions.length > room) marks.push('+' + (conditions.length - room))
+        const gap = 2
+        const total = marks.length * size + (marks.length - 1) * gap
+        let mx = x - total / 2
+        const my = y - radius - size * .6
+        ctx.font = '700 ' + Math.round(size * .55) + 'px Sarabun, system-ui'
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
-        ctx.fillText(String(conditionCount), bx, by + .5)
+        for (const mark of marks) {
+          ctx.beginPath()
+          ctx.roundRect(mx, my - size / 2, size, size, size * .25)
+          ctx.fillStyle = mark.startsWith('+') ? '#3a2b20' : '#2a1f18'
+          ctx.fill()
+          ctx.strokeStyle = '#c79a5b'
+          ctx.lineWidth = 1.25
+          ctx.stroke()
+          ctx.fillStyle = '#f6e7cc'
+          ctx.fillText(mark, mx + size / 2, my + .5)
+          mx += size + gap
+        }
       }
     }
     if (ruler) {
@@ -670,7 +680,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
         <Crosshair size={14} aria-hidden="true" />
         <b>{barActor?.name ?? barObject?.name}</b>
         {barActor && <span className="selection-bar-hp">{barActor.hp}/{barActor.maxHp} HP{barSheet ? ' · AC ' + barSheet.ac : ''}</span>}
-        {barActor?.conditions && <span className="selection-bar-conditions">{parseConditions(barActor.conditions).map(item => item.name).join(', ')}</span>}
+        {barActor?.conditions && <span className="selection-bar-conditions"><ConditionBadges conditions={barActor.conditions} max={4} /></span>}
       </span>
       {barActions.map(action => <button key={action.label} type="button" disabled={action.disabled} onClick={action.run}>{action.label}</button>)}
     </div>}
