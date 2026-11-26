@@ -9,6 +9,7 @@
     "start": "node server/index.ts",
     "test": "node --test server/*.test.ts src/**/*.test.ts",
     "test:browser": "node --test tests/browser.test.ts",
+    "playtest": "node tests/playtest.ts",
     "import:dndbeyond": "node scripts/import-dndbeyond.ts",
     "check": "tsc --noEmit"
   },

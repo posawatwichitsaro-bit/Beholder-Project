@@ -113,12 +113,10 @@ label.queue-check { display: inline-flex; align-items: center; gap: 6px; color: 
 .slot-text small { flex-basis: 100%; color: var(--bh-ink-muted); font-size: 11px; }
 .pending-note { display: block; color: var(--bh-brass-bright); }
 
-/* On narrower screens the initiative bar needs the top edge: board tools step down beneath it. */
-@media (max-width: 1200px) {
-  .in-combat .board-tools { top: 112px; }
-  .in-combat .scale { top: 160px; }
-  .in-combat .damage-queue { top: 200px; }
-}
+/* During combat the initiative bar owns the top edge: board tools, scale and the DM queue step down beneath it. */
+.in-combat .board-tools { top: 150px; }
+.in-combat .scale { top: 198px; }
+.in-combat .damage-queue { top: 236px; max-height: calc(100% - 300px); }
 @media (max-width: 760px) {
   .initiative-bar { top: 8px; max-width: calc(100% - 16px); padding: 6px 8px; }
   .initiative-emblem .initiative-label { display: none; }

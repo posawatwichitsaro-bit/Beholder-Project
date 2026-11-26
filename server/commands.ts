@@ -7,7 +7,7 @@ import { d20, deathSave, die, harm, heal, Invalid, parseDice, rollDice } from '.
 import { center, isNear, structureCover } from './cover.ts'
 import { createRoadsideEncounter } from './encounter.ts'
 import { bonusForCheck, calculatedSheet, commonSkills } from '../shared/characterStats.ts'
-import { formatConditions, tickConditions } from '../shared/conditions.ts'
+import { formatConditions, formatSlots, parseSlots, tickConditions } from '../shared/conditions.ts'
 import { advanceEffects, concentrationDc, d20Penalty, effectName, incapacitating, tiedTo } from '../shared/effects.ts'
 import { hitDiceLeft, hitDieHealing, restedSheet } from '../shared/rest.ts'
 import type { ClassResource, Effect, HitDie as RestDie } from '../shared/model.ts'
@@ -201,6 +201,15 @@ function parseResources(value: unknown): ClassResource[] {
     const short = entry.short === 'all' || entry.short === 'one' ? entry.short : 'none'
     return { name: text(entry.name, 40), max, used: number(entry.used ?? 0, 0, max), short }
   })
+}
+/** Spend one spell slot of `level` (1–9) for a cast; 0 or none means a cantrip or a free cast. */
+function spendSlot(caster: Actor, level: unknown) {
+  if (level === undefined || level === 0) return
+  const wanted = number(level, 1, 9)
+  const slots = parseSlots(caster.slots)
+  const slot = slots?.find(entry => entry.level === wanted)
+  if (!slots || !slot || slot.left < 1) throw new Invalid('ไม่มีช่องเวทระดับ ' + wanted + ' เหลือ')
+  caster.slots = formatSlots(slots.map(entry => entry === slot ? { ...entry, left: entry.left - 1 } : entry))
 }
 function parseChecks<K extends string>(value: unknown, keys: readonly K[]) {
   const source = record(value)
@@ -487,6 +496,33 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       room.activeSceneId = opened.id
       return {}
     }
+    case 'bringParty': {
+      // Every player character that has a main token in another scene and none here comes along,
+      // keeping the shape the party had (taken from the scene players saw last, if it has them).
+      requireDM(member)
+      const target = scene()
+      const here = new Set(target.tokens.map(token => token.actorId))
+      const others = room.scenes.filter(item => item.id !== target.id)
+      const from = [others.find(item => item.id === room.activeSceneId), ...others].filter(Boolean) as Scene[]
+      const moving: Token[] = []
+      for (const source of from) for (const token of withTokenRoles(source, room.actors)) {
+        const creature = room.actors.find(actor => actor.id === token.actorId)
+        if (token.role === 'character' && creature?.kind === 'pc' && !here.has(creature.id) && !moving.some(item => item.actorId === creature.id)) moving.push(token)
+      }
+      if (!moving.length) throw new Invalid('ไม่มีตัวละครผู้เล่นที่ต้องพามา')
+      const left = Math.min(...moving.map(token => token.x))
+      const top = Math.min(...moving.map(token => token.y))
+      const anchor = { x: command.x === undefined ? 1 : number(command.x, -1000, 1000), y: command.y === undefined ? 1 : number(command.y, -1000, 1000) }
+      const taken = (x: number, y: number) => [...target.tokens].some(token => token.x === x && token.y === y)
+      for (const token of moving) {
+        let x = anchor.x + token.x - left
+        const y = anchor.y + token.y - top
+        while (taken(x, y)) x += 1
+        target.tokens = [...target.tokens, { id: id(), actorId: token.actorId, x, y, role: 'character' }]
+      }
+      addLog(room, { kind: 'scene', sceneId: target.id, text: 'พา ' + moving.map(token => get(room.actors, token.actorId).name).join(', ') + ' มาที่ ' + target.name })
+      return {}
+    }
     case 'reuseMap': {
       requireDM(member)
       const source = get(room.scenes, command.sourceId)
@@ -590,6 +626,17 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       if (template) {
         const ordinal = room.actors.filter(item => item.templateId === template.id).length + 1
         creature.name = template.sheet.name + ' ' + ordinal
+      } else if (sheet && creature.kind === 'monster') {
+        const base = creature.name
+        const same = room.actors.filter(item => item.kind === 'monster' && (item.name === base || new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\d+$').test(item.name)))
+        if (same.length) {
+          const first = same.find(item => item.name === base)
+          if (first) first.name = base + ' 1'
+          const used = new Set(room.actors.map(item => item.name))
+          let ordinal = same.length + 1
+          while (used.has(base + ' ' + ordinal)) ordinal += 1
+          creature.name = base + ' ' + ordinal
+        }
       }
       if (template || sheet) room.actors.push(creature)
       target.tokens = [...tokens, token]
@@ -798,6 +845,8 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         const tokenOf = (key: string) => target.tokens.find(token => token.actorId === key) as Token
         const cover = Math.max(manualCover, structureCover(target.objects ?? [], center(tokenOf(creature.id), creature), center(tokenOf(victim.id), victim)))
         if (cover === 99) throw new Invalid('เป้าหมายอยู่หลังที่กำบังเต็ม')
+        // Spend the slot only once the attack is valid (target in scene, not behind full cover).
+        if (rollType === 'spellAttack') spendSlot(creature, command.slotLevel)
         const hitRoll = d20((rollType === 'attack' ? weapon?.bonus ?? creature.attack : creature.spellAttack) + d20Penalty(creature), advantage, disadvantage)
         const critical = hitRoll.natural === 20
         const hit = critical || (hitRoll.natural !== 1 && hitRoll.total >= victim.ac + cover)
@@ -838,7 +887,9 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       if (!abilities.includes(ability)) throw new Invalid('เลือกค่าความสามารถสำหรับ Save')
       const damage = command.formula ? text(command.formula) : undefined
       if (damage) parseDice(damage)
-      return saveRoll('Spell · ' + text(command.label), { total: caster.spellDC, faces: [], formula: ability + ' Save DC', modifier: 0 }, {
+      const label = text(command.label)
+      spendSlot(caster, command.slotLevel)
+      return saveRoll('Spell · ' + label + (command.slotLevel ? ' (ช่องระดับ ' + command.slotLevel + ')' : ''), { total: caster.spellDC, faces: [], formula: ability + ' Save DC', modifier: 0 }, {
         sceneId: target.id, sourceId: caster.id, targetId: victim.id, cast: { ability, dc: caster.spellDC, targetId: victim.id, damage, half: command.half === true }
       })
     }

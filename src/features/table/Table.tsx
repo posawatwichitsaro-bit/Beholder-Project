@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { blankSheet, objectDefinition, objectLabels, tokenRoleLabels } from '../../../shared/model.ts'
-import type { Actor, ObjectDefinition, Roll, Scene, Sheet, Template, TokenRole } from '../../../shared/model.ts'
+import type { Actor, ObjectDefinition, Roll, Scene, Sheet, Snapshot, Template, TokenRole } from '../../../shared/model.ts'
 import type { Area, AreaKind } from '../../../shared/area.ts'
 import { AccountPanel } from '../account/AccountPanel.tsx'
 import { MonsterManual } from '../manual/MonsterManual.tsx'
@@ -51,6 +51,19 @@ type Point = { x: number; y: number }
 type TokenPlacement = { sceneId: string; source: TokenSource; role?: TokenRole }
 const arrowSteps: Record<string, Point> = {
   ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }
+}
+/** The closest living creature on the other side from whoever's turn it is: the DM's default target. */
+function nearestFoe(room: Snapshot, scene?: Scene) {
+  const fight = scene?.combat
+  const actingId = fight?.order[fight.turn]?.actorId
+  const acting = room.publicActors.find(item => item.id === actingId)
+  const from = scene?.tokens.find(token => token.actorId === actingId)
+  if (!scene || !acting || !from) return undefined
+  return scene.tokens.flatMap(token => {
+    const other = room.publicActors.find(item => item.id === token.actorId)
+    return other && other.hp > 0 && (other.kind === 'monster') !== (acting.kind === 'monster')
+      ? [{ id: other.id, distance: Math.max(Math.abs(token.x - from.x), Math.abs(token.y - from.y)) }] : []
+  }).sort((a, b) => a.distance - b.distance)[0]?.id
 }
 const signedBonus = (value: number) => (value >= 0 ? '+' : '') + value
 const wideScreen = () => typeof matchMedia === 'undefined' || matchMedia('(min-width: 761px)').matches
@@ -130,6 +143,12 @@ export function Table({ account, changeAccount }: AccountProps) {
   const send = sendCommand
 
   useRoomConnection(room.id)
+  // Notices fade after a few seconds; errors stay until dismissed.
+  useEffect(() => {
+    if (!notice || error) return
+    const timer = setTimeout(() => { if (!useRoomStore.getState().error) useRoomStore.getState().setNotice('') }, 6000)
+    return () => clearTimeout(timer)
+  }, [notice, error])
   // First visit as this role on this device: show the tour once.
   useEffect(() => { if (!usePrefs.getState().tourSeen[role]) setTouring(true) }, [role])
   function endTour() {
@@ -195,7 +214,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   }
   function clearArea() { setAreaKind(undefined); setAreaPreview(undefined) }
   useEffect(() => { setOlder([]); setHistoryEnded(false) }, [room.activeSceneId])
-  useEffect(() => { setCombatTarget(''); clearArea() }, [scene?.id, combat?.round, combat?.turn])
+  useEffect(() => { setCombatTarget(nearestFoe(room, scene) ?? ''); clearArea() }, [scene?.id, combat?.round, combat?.turn])
   useEffect(() => { if (!combatOpen) clearArea() }, [combatOpen])
   const shortcutState = useRef({ role, choosePanel })
   shortcutState.current = { role, choosePanel }
@@ -390,11 +409,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     </>,
     actor: () => actor ? <SheetView key={actor.id} actor={actor} scene={scene} room={room} preferredTarget={attackTarget} chooseTarget={setAttackTarget}
       edit={() => setSheet({ initial: actor, actor })} copy={() => saveToLibrary(actor)}
-      send={async value => {
-        const ok = await send(value)
-        if (ok && (value.type === 'sheetRoll' || value.type === 'castSave')) openPanel('dice', true)
-        return ok
-      }} /> : <EmptyState title="ยังไม่ได้เลือกตัวละคร" hint="เลือกจากชีตในห้อง (T) หรือคลิก Token บนกระดาน" />,
+      send={send} /> : <EmptyState title="ยังไม่ได้เลือกตัวละคร" hint="เลือกจากชีตในห้อง (T) หรือคลิก Token บนกระดาน" />,
     log: () => <AdventureLog room={room} send={send} />,
     dice: () => <>
       <div className="section-head"><h2>ผลทอย</h2></div>
@@ -408,7 +423,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       <div className="dice-buttons">{[4, 6, 8, 10, 12, 20, 100].map(die => <button key={die} onClick={() => void send({ type: 'roll', formula: '1d' + die })}>d{die}</button>)}</div>
       <ol className="rolls">{[...history].reverse().map(roll => <li key={roll.id}>
         <div><small>{roll.name} · {roll.label}</small><br /><span>{roll.formula}{roll.faces.length > 0 && ' · [' + roll.faces.join(', ') + ']'}{roll.modifier ? ' ' + (roll.modifier > 0 ? '+' : '') + roll.modifier : ''}</span>
-          {roll.outcome && <small> · {roll.outcome}</small>}</div><strong>{roll.total}</strong>
+          {roll.outcome && <small> · {roll.outcome}</small>}{roll.applied === false && <small className="roll-waiting"> · รอ DM ยืนยัน</small>}</div><strong>{roll.total}</strong>
         {roll.cast && !roll.cast.resolved && !dm && room.actors.some(item => item.id === roll.targetId) && <div className="inline damage">
           <label><input type="checkbox" checked={saveProficiency[roll.id] ?? false}
             onChange={event => setSaveProficiency({ ...saveProficiency, [roll.id]: event.target.checked })} />Proficient</label>
@@ -427,6 +442,9 @@ export function Table({ account, changeAccount }: AccountProps) {
   }
 
   const roleDefs = panelsFor(role)
+  /** DM: player characters with a main token in another scene but none in the scene on screen. */
+  const partyMissing = dm && scene ? room.actors.filter(item => item.kind === 'pc' && !scene.tokens.some(token => token.actorId === item.id)
+    && room.scenes.some(other => other.id !== scene.id && other.tokens.some(token => token.actorId === item.id && token.role === 'character'))) : []
   /** Player characters with a token in the scene on screen: who a party rest covers. */
   const partyIds = room.actors.filter(item => item.kind === 'pc' && scene?.tokens.some(token => token.actorId === item.id)).map(item => item.id).slice(0, 12)
   const paletteCommands: PaletteCommand[] = [
@@ -446,6 +464,7 @@ export function Table({ account, changeAccount }: AccountProps) {
         { id: 'short-rest-party', label: 'พักสั้นทั้งกลุ่ม (Short Rest)', group: 'DM', keywords: 'rest short party พัก', run: () => void send({ type: 'rest', actorIds: partyIds, kind: 'short' }) },
         { id: 'long-rest-party', label: 'พักยาวทั้งกลุ่ม (Long Rest)', group: 'DM', keywords: 'rest long party พัก นอน', run: () => void send({ type: 'rest', actorIds: partyIds, kind: 'long' }) }
       ] : []),
+      ...(partyMissing.length ? [{ id: 'bring-party', label: 'พาผู้เล่นมาฉากนี้ (' + partyMissing.length + ')', group: 'DM', keywords: 'party move bring scene พา ย้าย กลุ่ม', run: () => void commandHere({ type: 'bringParty' }) }] : []),
       { id: 'private-roll', label: privateRoll ? 'เลิกทอยลับ' : 'ทอยลับ (เฉพาะ DM เห็น)', group: 'DM', keywords: 'private secret roll ลับ', run: () => setPrivateRoll(!privateRoll) }
     ] : []),
     { id: 'roll-d20', label: 'ทอย d20', group: 'ลูกเต๋า', keywords: 'roll dice', run: () => void send({ type: 'roll', formula: '1d20' }) },
@@ -463,7 +482,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     <HudTopBar sceneName={scene?.name} roomName={room.name} preparing={preparing} live={Boolean(scene && scene.id === room.activeSceneId)}
       canPublish={preparing} publish={() => void commandHere({ type: 'activate' })}
       railOpen={railOpen} toggleRail={() => setRailOpen(open => !open)} openPalette={() => setPaletteOpen(true)}
-      openManage={dm ? () => setManageOpen(true) : undefined} online={online} me={room.me.name} dm={dm} />
+      openManage={dm ? () => setManageOpen(true) : undefined} bringParty={partyMissing.length ? { names: partyMissing.map(item => item.name), run: () => void commandHere({ type: 'bringParty' }) } : undefined} online={online} me={room.me.name} dm={dm} />
     <PanelRail items={roleDefs} isPressed={isPressed} choose={choosePanel} open={railOpen} />
     <Dock items={dock.open.map(id => ({ id, title: panelById(id).label, body: bodies[id]() }))}
       pinned={dock.pinned} pin={id => dispatchDock({ type: 'pin', id })} close={id => dispatchDock({ type: 'close', id })} />
@@ -549,7 +568,7 @@ export function Table({ account, changeAccount }: AccountProps) {
         <header><button onClick={() => choosePanel('dice')}>ผลทอยของโต๊ะ</button>
           {dm && <button aria-label="ปิดถาดผลเต๋าของฉัน" onClick={() => setHideTray(true)}>×</button>}</header>
         {recentRolls.length ? <ol aria-live="polite">{recentRolls.map(roll => <li key={roll.id}>
-          <span><b>{roll.name}</b> · {roll.label}{roll.privateTo ? ' · ลับ' : ''}{roll.outcome ? ' · ' + roll.outcome : ''}</span><strong>{roll.total}</strong>
+          <span><b>{roll.name}</b> · {roll.label}{roll.privateTo ? ' · ลับ' : ''}{roll.outcome ? ' · ' + roll.outcome : ''}{roll.applied === false ? ' · รอ DM ยืนยัน' : ''}</span><strong>{roll.total}</strong>
         </li>)}</ol> : <p>ยังไม่มีการทอย · กด D เพื่อเปิดลูกเต๋า</p>}
       </aside>}
       <DiceReveal rolls={room.rolls} />

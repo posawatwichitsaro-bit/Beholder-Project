@@ -180,3 +180,10 @@
 /* Six tabs on a narrow sheet: keep each label on one line and scroll sideways if needed. */
 .sheet-view .bh-tabs { overflow-x: auto; scrollbar-width: thin; }
 .sheet-view .bh-tab { white-space: nowrap; flex: none; }
+
+/* All 18 skills: trained ones in ink, the rest muted; the ability sits under the name. */
+.table .sheet-skills button span { display: grid; text-align: start; }
+.table .sheet-skills button small { font-size: 10px; color: var(--bh-ink-muted); }
+.table .sheet-skills button:not([data-trained]) { color: var(--bh-ink-muted); border-style: dashed; }
+.table .sheet-skills button[data-trained] { font-weight: 700; border-color: var(--bh-ink-muted); }
+.table .sheet-skills button:hover small { color: inherit; }

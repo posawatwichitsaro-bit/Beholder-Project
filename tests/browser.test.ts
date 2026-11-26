@@ -160,8 +160,9 @@ test('a new player builds a character step by step and rolls from the sheet', { 
   await sheet.getByText('20/20', { exact: true }).waitFor()
   await sheet.getByRole('button', exact('Advantage')).click()
   await sheet.getByRole('button', exact('INT check')).click()
-  await page.getByRole('region', exact('ลูกเต๋า')).waitFor()
-  await page.locator('.rolls').getByText(/INT check · Lyra/).waitFor()
+  // The result shows in the table's dice tray; the sheet stays open instead of being squeezed by the dice panel.
+  await page.getByRole('complementary', { name: 'ถาดผลเต๋า' }).getByText(/INT check/).waitFor()
+  assert.equal(await page.getByRole('region', exact('ลูกเต๋า')).count(), 0)
   await sheet.getByRole('tab', exact('Actions')).click()
   await sheet.getByRole('button', exact('Damage การโจมตีหลัก')).waitFor()
 

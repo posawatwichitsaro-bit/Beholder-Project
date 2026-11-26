@@ -115,6 +115,8 @@
 .with-combat .hud-rail { right: var(--combat-width); }
 .with-combat .hud-dock { right: calc(var(--combat-width) + var(--hud-rail) + var(--hud-gap)); }
 .table .toast { z-index: var(--bh-z-toast); right: calc(var(--hud-rail) + var(--hud-gap)); background: var(--bh-parchment); color: var(--bh-ink); border-color: var(--bh-brass); }
+/* Toasts float above the dice tray instead of covering it. */
+.table .toast { bottom: 150px; }
 
 /* ---------- Command Palette ---------- */
 .hud-palette-scrim { align-items: start; padding-top: 12vh; }
