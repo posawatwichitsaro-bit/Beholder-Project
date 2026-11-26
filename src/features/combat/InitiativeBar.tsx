@@ -5,6 +5,7 @@ import { nextLivingTurn } from '../../../shared/model.ts'
 import type { Scene, Snapshot } from '../../../shared/model.ts'
 import { CrossedSwordsIcon, HpBar } from '../../ui/index.ts'
 import { tokenInitials } from '../board/tokenAppearance.ts'
+import { ConditionBadges } from './ConditionBadges.tsx'
 import type { Send } from '../../state/useCommand.ts'
 
 /**
@@ -63,6 +64,7 @@ export function InitiativeBar({ scene, room, focus, send }: {
             <span className="initiative-portrait" aria-hidden="true">{actor.portrait ? <img src={actor.portrait} alt="" /> : tokenInitials(actor.name)}</span>
             <HpBar hp={actor.hp} max={actor.maxHp} side={side} label={'HP ของ ' + actor.name} height={4} />
             <span className="initiative-name">{actor.name}</span>
+            {actor.conditions && <ConditionBadges conditions={actor.conditions} max={2} size={11} />}
             <b className="initiative-score">{initiative}</b>
           </button>
         </li>
