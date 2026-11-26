@@ -10,8 +10,9 @@ import { InventoryPanel } from '../objects/Inventory.tsx'
 import { ConditionEditor } from '../combat/ConditionEditor.tsx'
 import { SlotTracker } from './SlotTracker.tsx'
 import { LevelUpDialog } from './LevelUpDialog.tsx'
+import { RestPanel } from './RestPanel.tsx'
 
-type Tab = 'overview' | 'actions' | 'spells' | 'inventory' | 'notes'
+type Tab = 'overview' | 'actions' | 'spells' | 'rest' | 'inventory' | 'notes'
 type Mode = 'normal' | 'advantage' | 'disadvantage'
 const signed = (value: number) => (value >= 0 ? '+' : '') + value
 
@@ -110,7 +111,7 @@ export function SheetView({ actor, scene, room, send, edit, copy }: {
 
     <Tabs label="หน้าชีต" value={tab} onChange={setTab} items={[
       { id: 'overview', label: 'ภาพรวม' }, { id: 'actions', label: 'Actions' }, { id: 'spells', label: 'Spells' },
-      { id: 'inventory', label: 'Inventory' }, { id: 'notes', label: 'Notes' }
+      ...(actor.kind === 'pc' ? [{ id: 'rest' as const, label: 'Rest' }] : []), { id: 'inventory', label: 'Inventory' }, { id: 'notes', label: 'Notes' }
     ]} />
 
     <div className="sheet-page" role="tabpanel">
@@ -187,6 +188,7 @@ export function SheetView({ actor, scene, room, send, edit, copy }: {
         <SlotTracker key={actor.slots} actor={actor} send={send} />
       </>}
 
+      {tab === 'rest' && <RestPanel actor={actor} send={send} inCombat={room.scenes.some(item => item.combat?.order.some(entry => entry.actorId === actor.id))} />}
       {tab === 'inventory' && <InventoryPanel key={actor.id} actor={actor} send={send} expanded />}
 
       {tab === 'notes' && <div className="sheet-notes">

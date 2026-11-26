@@ -542,6 +542,84 @@ test('a dwarf soldier is built with Point Buy and a background, then levels up w
   assert.deepEqual([levelled.classLevel, levelled.maxHp], ['Fighter 4', bram.maxHp + 6 + 2 + 1])
 })
 
+test('a character spends a Hit Die, uses a class resource and takes a Long Rest', { timeout: 45000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  page.setDefaultTimeout(10000)
+  const opened = await page.request.post(base + '/api/rooms', { data: { name: 'Rest test', member: 'DM' } })
+  const room: Snapshot = await opened.json()
+  const path = base + '/api/rooms/' + room.id
+  const hero = { ...blankSheet(), name: 'Kael', classLevel: 'Fighter 3', hp: 10, maxHp: 30, abilities: { STR: 16, DEX: 12, CON: 14, INT: 10, WIS: 10, CHA: 10 } }
+  assert.equal((await page.request.post(path + '/commands', { data: { type: 'sheet', kind: 'pc', sheet: hero, commandId: randomUUID(), revision: room.revision } })).status(), 200)
+  const kael = async () => ((await (await page.request.get(path)).json()) as Snapshot).actors.find(actor => actor.name === 'Kael')!
+  await page.goto(base + '/room/' + room.id)
+  await openPanel(page, 'ชีตในห้อง')
+  await page.getByRole('button', exact('Kael')).click()
+  const sheet = page.getByRole('article', { name: 'ชีต Kael' })
+  await sheet.getByRole('tab', exact('Rest')).click()
+
+  await sheet.getByRole('button', { name: /^เพิ่มทรัพยากรตามคลาส/ }).click()
+  await sheet.getByRole('button', exact('Second Wind ที่ 1 (ยังใช้ได้)')).click()
+  await sheet.getByRole('button', exact('Second Wind ที่ 2 (ใช้แล้ว)')).waitFor()
+  await sheet.getByRole('button', exact('Action Surge ที่ 1 (ยังใช้ได้)')).click()
+  await sheet.getByRole('button', exact('Action Surge ที่ 1 (ใช้แล้ว)')).waitFor()
+  await sheet.getByRole('button', exact('ใช้ Hit Die d10')).click()
+  await sheet.getByText('2/3', { exact: true }).waitFor()
+  const rested = await kael()
+  assert.ok(rested.hp > 10, 'a Hit Die heals')
+  assert.deepEqual(rested.resources?.map(entry => [entry.name, entry.used]), [['Second Wind', 1], ['Action Surge', 1]])
+
+  await sheet.getByRole('button', exact('พักสั้น (Short Rest)')).click()
+  await sheet.getByRole('button', exact('Action Surge ที่ 1 (ยังใช้ได้)')).waitFor()
+  await sheet.getByRole('button', exact('พักยาว (Long Rest)')).click()
+  await sheet.getByText('3/3', { exact: true }).waitFor()
+  const after = await kael()
+  assert.deepEqual([after.hp, after.hitDiceSpent, after.resources?.map(entry => entry.used)], [30, {}, [0, 0]])
+  await page.locator('.rolls, .dice-tray').getByText(/Hit Die · Kael/).first().waitFor()
+})
+
+test('the DM opens token conditions from the board, sets Poisoned and steps Exhaustion', { timeout: 45000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  page.setDefaultTimeout(10000)
+  const opened = await page.request.post(base + '/api/rooms', { data: { name: 'Condition test', member: 'DM' } })
+  const room: Snapshot = await opened.json()
+  const path = base + '/api/rooms/' + room.id
+  const command = async (body: Record<string, unknown>) => {
+    const revision = ((await (await page.request.get(path)).json()) as Snapshot).revision
+    assert.equal((await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision } })).status(), 200)
+  }
+  await command({ type: 'scene', name: 'Cave', cell: 48, originX: 0, originY: 0 })
+  await command({ type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Mira' } })
+  await page.goto(base + '/room/' + room.id)
+  await openPanel(page, 'ชีตในห้อง')
+  await page.getByRole('button', exact('วาง Mira')).click()
+  await page.locator('canvas').click({ position: { x: 210, y: 160 } })
+  await page.waitForFunction(async url => (await (await fetch(url)).json()).scenes[0].tokens.length === 1, path)
+
+  await page.locator('canvas').click({ position: { x: 210, y: 160 }, button: 'right' })
+  await page.locator('.context-popover').getByRole('button', exact('Condition')).click()
+  const panel = page.getByRole('dialog', exact('Condition · Mira'))
+  await panel.getByText('ไม่มี Condition', { exact: true }).waitFor()
+  await panel.getByRole('button', exact('Condition')).click()
+  await panel.getByRole('button', { name: /^Poisoned/ }).click()
+  await panel.locator('.condition-chip').filter({ hasText: 'Poisoned' }).waitFor()
+  await panel.getByRole('button', { name: /^Exhaustion/ }).click()
+  await panel.locator('.condition-chip').filter({ hasText: 'Exhaustion 1' }).waitFor()
+  await panel.getByRole('button', exact('เพิ่มระดับ Exhaustion')).click()
+  await panel.locator('.condition-chip').filter({ hasText: 'Exhaustion 2' }).waitFor()
+  await panel.getByText('-4 D20 Tests · -10 ft. Speed', { exact: true }).waitFor()
+  const mira = ((await (await page.request.get(path)).json()) as Snapshot).actors.find(actor => actor.name === 'Mira')!
+  assert.equal(mira.conditions, 'Poisoned, Exhaustion 2')
+
+  // The most limiting condition is listed first, with what it does.
+  await panel.locator('.condition-details li').first().getByText(/^Poisoned/).waitFor()
+  await page.keyboard.press('Escape')
+  await panel.waitFor({ state: 'detached' })
+})
+
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')

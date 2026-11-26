@@ -10,6 +10,7 @@ import { CombatPanel } from '../combat/CombatPanel.tsx'
 import { DamageTypeSelect } from '../combat/CombatEffects.tsx'
 import { InitiativeBar, TurnBanner } from '../combat/InitiativeBar.tsx'
 import { DamageQueue } from '../combat/DamageQueue.tsx'
+import { ConditionPanel } from '../combat/ConditionEditor.tsx'
 import { SheetEditor } from '../sheets/SheetEditor.tsx'
 import { ActorActions } from '../sheets/ActorActions.tsx'
 import { SheetView } from '../sheets/SheetView.tsx'
@@ -75,6 +76,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [objectDraft, setObjectDraft] = useState<ObjectDefinition>()
   const [librarySection, setLibrarySection] = useState<'sheets' | 'objects'>('sheets')
   const [hpTarget, setHpTarget] = useState<string>()
+  const [conditionTarget, setConditionTarget] = useState<string>()
   const [objectImport, setObjectImport] = useState<{ sceneId: string; point: Point }>()
   const [objectTarget, setObjectTarget] = useState<string>()
   const [lootTarget, setLootTarget] = useState<string>()
@@ -111,6 +113,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   const editingScene = typeof modal === 'object' ? room.scenes.find(item => item.id === modal.sceneId) : undefined
   const actor = room.actors.find(item => item.id === selected)
   const hpActor = room.actors.find(item => item.id === hpTarget)
+  const conditionCreature = room.publicActors.find(item => item.id === conditionTarget)
   const sceneObject = scene?.objects?.find(item => item.id === objectTarget)
   const lootMonster = room.publicActors.find(item => item.id === lootTarget && item.lootable && scene?.tokens.some(token => token.actorId === item.id))
   const combat = scene?.combat
@@ -410,6 +413,8 @@ export function Table({ account, changeAccount }: AccountProps) {
   }
 
   const roleDefs = panelsFor(role)
+  /** Player characters with a token in the scene on screen: who a party rest covers. */
+  const partyIds = room.actors.filter(item => item.kind === 'pc' && scene?.tokens.some(token => token.actorId === item.id)).map(item => item.id).slice(0, 12)
   const paletteCommands: PaletteCommand[] = [
     ...roleDefs.filter(panel => panel.inRail).map(panel => ({
       id: 'panel-' + panel.id, label: 'เปิด ' + panel.label, group: 'แผง · ' + groupLabels[panel.group],
@@ -423,6 +428,10 @@ export function Table({ account, changeAccount }: AccountProps) {
       { id: 'manage', label: 'เปิดห้องเก็บของ DM', group: 'DM', keywords: 'manage token item loot scene จัดการ', shortcut: 'M', run: () => setManageOpen(true) },
       ...(scene?.map ? [{ id: 'calibrate', label: 'ปรับ Grid บนภาพ', group: 'DM', keywords: 'grid calibrate align map ปรับ', run: () => beginCalibration(scene) }] : []),
       { id: 'demo', label: 'เพิ่ม Encounter ด่านร้างริมทาง', group: 'DM', keywords: 'demo encounter goblin', run: addDemo },
+      ...(partyIds.length ? [
+        { id: 'short-rest-party', label: 'พักสั้นทั้งกลุ่ม (Short Rest)', group: 'DM', keywords: 'rest short party พัก', run: () => void send({ type: 'rest', actorIds: partyIds, kind: 'short' }) },
+        { id: 'long-rest-party', label: 'พักยาวทั้งกลุ่ม (Long Rest)', group: 'DM', keywords: 'rest long party พัก นอน', run: () => void send({ type: 'rest', actorIds: partyIds, kind: 'long' }) }
+      ] : []),
       { id: 'private-roll', label: privateRoll ? 'เลิกทอยลับ' : 'ทอยลับ (เฉพาะ DM เห็น)', group: 'DM', keywords: 'private secret roll ลับ', run: () => setPrivateRoll(!privateRoll) }
     ] : []),
     { id: 'roll-d20', label: 'ทอย d20', group: 'ลูกเต๋า', keywords: 'roll dice', run: () => void send({ type: 'roll', formula: '1d20' }) },
@@ -479,6 +488,7 @@ export function Table({ account, changeAccount }: AccountProps) {
           return [
             ...(lootable ? [{ label: lootable.lootResult ? 'ดูผลค้นศพ' : 'ค้นศพ / Loot', run: () => setLootTarget(token.actorId) }] : []),
             ...(accessible ? [{ label: 'เปิดชีต', run: () => showActor(accessible.id) }] : []),
+            { label: 'Condition', run: () => setConditionTarget(token.actorId) },
             ...(accessible?.kind === 'pc' && token.role ? [{
               label: token.role === 'character' ? 'ตั้งเป็น Companion Token' : 'ตั้งเป็น Character Token',
               run: () => void commandHere({ type: 'tokenRole', tokenId: token.id, role: token.role === 'character' ? 'companion' : 'character' })
@@ -546,6 +556,8 @@ export function Table({ account, changeAccount }: AccountProps) {
       copyScene={item => setSceneOperation({ mode: 'copy', scene: item })}
       deleteScene={item => setSceneOperation({ mode: 'delete', scene: item })} />}
     {touring && <Tour key={role} role={role} close={endTour} />}
+    {conditionCreature && <ConditionPanel key={conditionCreature.id} name={conditionCreature.name} conditions={conditionCreature.conditions}
+      actor={room.actors.find(item => item.id === conditionCreature.id)} send={commandHere} close={() => setConditionTarget(undefined)} />}
     {paletteOpen && <CommandPalette commands={paletteCommands} close={() => setPaletteOpen(false)} />}
     {(modal === 'createScene' || editingScene) && <SceneForm scene={editingScene} save={send} cancel={() => setModal(undefined)} />}
     {sceneOperation && <SceneOperationForm key={sceneOperation.mode + sceneOperation.scene.id} operation={sceneOperation}

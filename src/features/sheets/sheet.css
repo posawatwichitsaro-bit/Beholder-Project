@@ -81,10 +81,10 @@
 /* Controls on the sheet page */
 .sheet-view label { color: var(--bh-ink-muted); font-size: var(--bh-text-xs); }
 .sheet-view input, .sheet-view select { background: #f8efdc; border-color: var(--bh-parchment-line); color: var(--bh-ink); }
-.table .sheet-view button:not(.sheet-icon):not(.sheet-ability-check):not(.sheet-ability-save):not([role=tab]):not(.primary) {
+.table .sheet-view button:not(.sheet-icon):not(.sheet-ability-check):not(.sheet-ability-save):not([role=tab]):not(.primary):not(.slot-pip) {
   background: transparent; border-color: var(--bh-parchment-line); color: var(--bh-ink);
 }
-.table .sheet-view button:not(.sheet-icon):not(.sheet-ability-check):not(.sheet-ability-save):not([role=tab]):not(.primary):hover:not(:disabled) {
+.table .sheet-view button:not(.sheet-icon):not(.sheet-ability-check):not(.sheet-ability-save):not([role=tab]):not(.primary):not(.slot-pip):hover:not(:disabled) {
   background: var(--bh-ink); color: var(--bh-text-strong); border-color: var(--bh-ink);
 }
 .table .sheet-view .sheet-segment button[aria-pressed=true] { background: var(--bh-ink); color: var(--bh-text-strong); }
@@ -177,3 +177,6 @@
 .wizard-bonus input[type=radio], .level-up-hp input[type=radio] { appearance: auto; background: none; padding: 0; border: 0; width: 16px; height: 16px; margin: 0; accent-color: var(--bh-crimson); flex: none; }
 .wizard-bonus .wizard-row { gap: 10px; }
 .wizard-bonus .wizard-row > label, .wizard-bonus .wizard-row > label:first-child { flex: 0 0 120px; }
+/* Six tabs on a narrow sheet: keep each label on one line and scroll sideways if needed. */
+.sheet-view .bh-tabs { overflow-x: auto; scrollbar-width: thin; }
+.sheet-view .bh-tab { white-space: nowrap; flex: none; }
