@@ -1,5 +1,13 @@
 import { abilities, blankSheet, damageKinds, sizes } from './model.ts'
 import type { Ability, DamageKind, Sheet, Size } from './model.ts'
+import { abilityModifier, commonSkills } from './characterStats.ts'
+import type { CheckBonus, Skill } from './characterStats.ts'
+
+export const detailLabels = {
+  senses: 'Senses', languages: 'Languages', skills: 'Skills', immunities: 'Immunities',
+  resistances: 'Resistances', vulnerabilities: 'Vulnerabilities', gear: 'Gear'
+} as const
+export type MonsterDetails = Partial<Record<keyof typeof detailLabels, string>>
 
 export type ManualMonster = {
   id: string
@@ -16,6 +24,15 @@ export type ManualMonster = {
   attacks: NonNullable<Sheet['attacks']>
   statBlock: string
   page?: number
+  /** From the SRD catalog (schema v1); hand-pasted monsters may leave these out. */
+  savingThrows?: Partial<Record<Ability, number>>
+  proficiencyBonus?: number
+  hitDice?: string
+  movement?: string
+  details?: MonsterDetails
+  /** Stat block parts by heading: Traits, Actions, Bonus Actions, Reactions, Legendary Actions. */
+  sections?: Record<string, string>
+  url?: string
 }
 
 export function crNumber(cr: string) {
@@ -23,18 +40,79 @@ export function crNumber(cr: string) {
   return numerator / denominator
 }
 
+const signed = (value: number) => (value < 0 ? '' : '+') + value
+
+/** A stated bonus as proficiency steps (1, 2, half or none) plus whatever is left over. */
+function trainedBonus(ability: Ability, score: number, total: number, proficiency: number): CheckBonus {
+  const extra = total - abilityModifier(score)
+  const training = [1, 2, .5].find(step => Math.floor(proficiency * step) === extra) ?? 0
+  return { ability, training, adjustment: extra - Math.floor(proficiency * training) }
+}
+
+/** "Perception +4, Stealth +6" → trained skill checks, for the skills Beholder rolls. */
+export function readSkills(text: string, scores: Record<Ability, number>, proficiency: number) {
+  const checks: Partial<Record<Skill, CheckBonus>> = {}
+  for (const [, name, bonus] of text.replace(/[−–]/g, '-').matchAll(/([A-Za-z][A-Za-z ]*?)\s*([+-]\d+)/g)) {
+    const skill = (Object.keys(commonSkills) as Skill[]).find(key => key.toLowerCase() === name.trim().toLowerCase())
+    if (skill) checks[skill] = trainedBonus(commonSkills[skill], scores[commonSkills[skill]], Number(bonus), proficiency)
+  }
+  return checks
+}
+
 export function monsterSheet(monster: ManualMonster): Sheet {
   const attack = monster.attacks[0]
+  const proficiency = monster.proficiencyBonus ?? Math.max(2, 2 + Math.floor((crNumber(monster.cr) - 1) / 4))
+  // Only saves that differ from the plain modifier are trained; the rest roll the modifier as before.
+  const saves = monster.savingThrows
+  const trainedSaves = abilities.filter(key => saves?.[key] !== undefined && saves[key] !== abilityModifier(monster.abilities[key]))
+  const skillText = monster.details?.skills ?? monster.statBlock.match(/^Skills[ \t]+(.+)$/im)?.[1] ?? ''
+  const defenses = (['immunities', 'resistances', 'vulnerabilities'] as const)
+    .flatMap(key => monster.details?.[key] ? [detailLabels[key] + ' ' + monster.details[key]] : []).join(' · ')
+  const skillChecks = skillText ? readSkills(skillText, monster.abilities, proficiency) : {}
   return {
     ...blankSheet('monster'), name: monster.name, size: monster.size, speed: monster.speed,
     ac: monster.ac, hp: monster.hp, maxHp: monster.hp, initiative: monster.initiative,
-    abilities: { ...monster.abilities }, proficiency: Math.max(2, 2 + Math.floor((crNumber(monster.cr) - 1) / 4)),
+    abilities: { ...monster.abilities }, proficiency,
     classLevel: [monster.type, 'CR ' + monster.cr, monster.alignment].filter(Boolean).join(' · '),
-    skills: monster.statBlock.match(/^Skills[ \t]+(.+)$/im)?.[1].slice(0, 2000) ?? '',
-    saves: monster.statBlock.match(/^Saving Throws[ \t]+(.+)$/im)?.[1].slice(0, 2000) ?? '',
+    skills: skillText.slice(0, 2000),
+    saves: (saves ? trainedSaves.map(key => key + ' ' + signed(saves[key]!)).join(', ')
+      : monster.statBlock.match(/^Saving Throws[ \t]+(.+)$/im)?.[1] ?? '').slice(0, 2000),
+    ...(trainedSaves.length ? { savingThrows: Object.fromEntries(trainedSaves.map(key =>
+      [key, trainedBonus(key, monster.abilities[key], saves![key]!, proficiency)])) } : {}),
+    ...(Object.keys(skillChecks).length ? { skillChecks } : {}),
+    ...(monster.hitDice || defenses ? { characterDetails: { hitDice: monster.hitDice, defenses: defenses.slice(0, 500) || undefined } } : {}),
     attacks: monster.attacks.map(entry => ({ ...entry })), attack: attack?.bonus ?? 0, damage: attack?.damage ?? '0',
-    monsterReference: { statBlock: monster.statBlock, page: monster.page }
+    monsterReference: {
+      statBlock: monster.statBlock, page: monster.page,
+      ...(monster.id.startsWith('srd-') ? { id: monster.id } : {}), ...(monster.url ? { url: monster.url } : {})
+    }
   }
+}
+
+function optionalText(value: unknown, max: number) {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : undefined
+}
+
+/** "walk 30 ft., fly 60 ft. (hover)" from the catalog's movement entries. */
+function readMovement(value: unknown) {
+  if (!Array.isArray(value)) return undefined
+  const parts = value.flatMap(entry => {
+    if (!entry || typeof entry !== 'object') return []
+    const move = entry as { modes?: unknown; feet?: unknown; hover?: unknown; note?: unknown }
+    const modes = Array.isArray(move.modes) ? move.modes.filter(mode => typeof mode === 'string').join('/') : ''
+    if (!modes || typeof move.feet !== 'number') return []
+    return [modes + ' ' + move.feet + ' ft.' + (move.hover ? ' (hover)' : '') + (typeof move.note === 'string' && move.note ? ' ' + move.note : '')]
+  })
+  return parts.length ? parts.join(', ') : undefined
+}
+
+/** The SRD catalog file: schema v1 `{ schemaVersion: 1, monsters: [...] }`, or the older bare array. */
+export function catalogMonsters(document: unknown): ManualMonster[] {
+  const list = Array.isArray(document) ? document
+    : document && typeof document === 'object' && (document as { schemaVersion?: unknown }).schemaVersion === 1
+      ? (document as { monsters?: unknown }).monsters : undefined
+  if (!Array.isArray(list)) throw new Error('ไฟล์คู่มือมอนสเตอร์ไม่ใช่รูปแบบที่รองรับ')
+  return list.map(entry => readMonster(entry)).sort((a, b) => a.name.localeCompare(b.name))
 }
 
 function record(value: unknown) {
@@ -74,7 +152,36 @@ export function readMonster(input: unknown): ManualMonster {
       damage, damageKind: kind as DamageKind }
   })
   const statBlock = data.statBlock === undefined ? '' : stringField(data.statBlock, 'statBlock', 32000)
+  const saveSource = data.savingThrows && typeof data.savingThrows === 'object' ? data.savingThrows as Record<string, unknown> : {}
+  const savingThrows = Object.fromEntries(abilities.flatMap(key => {
+    const value = saveSource[key]
+    return typeof value === 'number' && Number.isInteger(value) && Math.abs(value) <= 99 ? [[key, value]] : []
+  })) as Partial<Record<Ability, number>>
+  const detailSource = data.details && typeof data.details === 'object' ? data.details as Record<string, unknown> : {}
+  const details = Object.fromEntries((Object.keys(detailLabels) as (keyof typeof detailLabels)[]).flatMap(key => {
+    const value = optionalText(detailSource[key], 500)
+    return value ? [[key, value]] : []
+  })) as MonsterDetails
+  const sectionSource = data.sections && typeof data.sections === 'object' && !Array.isArray(data.sections) ? data.sections as Record<string, unknown> : {}
+  const sections = Object.fromEntries(Object.entries(sectionSource).flatMap(([key, value]) => {
+    const body = optionalText(value, 16000)
+    return body && key.length <= 60 ? [[key, body]] : []
+  }))
+  const source = data.source && typeof data.source === 'object' ? data.source as Record<string, unknown> : {}
+  const url = optionalText(source.basicRulesMonsterUrl, 300)
+  const page = typeof data.page === 'number' ? data.page : typeof source.pdfPage === 'number' ? source.pdfPage : undefined
+  const proficiencyBonus = data.proficiencyBonus
+  const hitDice = optionalText(data.hitDice, 60)
+  const movement = readMovement(data.movement)
   return {
+    ...(page !== undefined && page >= 258 && page <= 364 ? { page } : {}),
+    ...(Object.keys(savingThrows).length ? { savingThrows } : {}),
+    ...(typeof proficiencyBonus === 'number' && Number.isInteger(proficiencyBonus) && proficiencyBonus >= 2 && proficiencyBonus <= 9 ? { proficiencyBonus } : {}),
+    ...(hitDice ? { hitDice } : {}),
+    ...(movement ? { movement } : {}),
+    ...(Object.keys(details).length ? { details } : {}),
+    ...(Object.keys(sections).length ? { sections } : {}),
+    ...(url?.startsWith('https://www.dndbeyond.com/') ? { url } : {}),
     id: String(data.id ?? name), name, size: size as Size, type: stringField(data.type, 'type', 120),
     alignment: data.alignment ? stringField(data.alignment, 'alignment', 120) : '', cr,
     ac: numberField(data.ac, 'AC', 0, 999), hp: numberField(data.hp, 'HP', 1, 9999),

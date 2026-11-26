@@ -211,7 +211,10 @@ export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory
   sheet.portrait = image(input.portrait)
   if (kind === 'monster' && input.monsterReference !== undefined) {
     const reference = record(input.monsterReference)
-    sheet.monsterReference = { statBlock: text(reference.statBlock, 32000), page: reference.page === undefined ? undefined : number(reference.page, 258, 364) }
+    const url = reference.url === undefined ? undefined : text(reference.url, 300)
+    if (url && !url.startsWith('https://www.dndbeyond.com/')) throw new Invalid('ลิงก์อ้างอิงมอนสเตอร์ต้องเป็นหน้า D&D Beyond')
+    sheet.monsterReference = { statBlock: text(reference.statBlock, 32000), page: reference.page === undefined ? undefined : number(reference.page, 258, 364),
+      id: reference.id === undefined ? undefined : text(reference.id, 120), url }
   }
   const proficiencies = input.itemProficiency === undefined ? {} : record(input.itemProficiency)
   sheet.itemProficiency = {
@@ -248,14 +251,15 @@ export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory
   } else sheet.attacks = []
   const scores = record(input.abilities)
   for (const ability of abilities) sheet.abilities[ability] = number(scores[ability], 1, 30)
+  // Trained saves and skills, hit dice and defenses: player characters and SRD monsters both carry them.
+  if (input.characterDetails !== undefined) {
+    const details = record(input.characterDetails)
+    sheet.characterDetails = Object.fromEntries(['species', 'background', 'hitDice', 'defenses'].map(key =>
+      [key, details[key] ? text(details[key], 500) : undefined]))
+  }
+  if (input.skillChecks !== undefined) sheet.skillChecks = parseChecks(input.skillChecks, Object.keys(commonSkills) as Skill[])
+  if (input.savingThrows !== undefined) sheet.savingThrows = parseChecks(input.savingThrows, abilities)
   if (kind === 'pc') {
-    if (input.characterDetails !== undefined) {
-      const details = record(input.characterDetails)
-      sheet.characterDetails = Object.fromEntries(['species', 'background', 'hitDice', 'defenses'].map(key =>
-        [key, details[key] ? text(details[key], 500) : undefined]))
-    }
-    if (input.skillChecks !== undefined) sheet.skillChecks = parseChecks(input.skillChecks, Object.keys(commonSkills) as Skill[])
-    if (input.savingThrows !== undefined) sheet.savingThrows = parseChecks(input.savingThrows, abilities)
     if (input.calculations !== undefined) sheet.calculations = parseCalculations(input.calculations)
     sheet = calculatedSheet(sheet)
   }
