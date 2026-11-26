@@ -35,4 +35,6 @@ export function pinchView(start: { a: Point; b: Point; camera: Point; zoom: numb
 
 /** Pointer travel below this counts as a click / tap, not a drag. */
 export const dragThreshold = 5
+/** Mouse: hold still this long on empty map before dragging to draw a selection box instead of panning. */
+export const holdToSelectMs = 280
 export const longPressMs = 550

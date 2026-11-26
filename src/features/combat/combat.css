@@ -194,3 +194,17 @@ label.queue-check { display: inline-flex; align-items: center; gap: 6px; color: 
   background: transparent; color: var(--bh-ink); border: 1px solid var(--bh-parchment-line);
 }
 .table .pending-save button:not(.primary):hover, .table .effect-actions button:not(.primary):hover { background: var(--bh-ink); color: var(--bh-text-strong); }
+
+/* ---------- Encounter end ---------- */
+.encounter-end { position: absolute; inset: 0; z-index: 6; pointer-events: none; display: grid; place-items: center; overflow: hidden;
+  background: radial-gradient(circle at 50% 45%, #e0b87822, transparent 60%); animation: encounter-end-fade 3.6s var(--bh-ease) forwards; }
+.encounter-end-card { display: grid; justify-items: center; gap: 4px; padding: 18px 36px; border-radius: var(--bh-radius-lg);
+  background: #1f1612ee; border: 1px solid var(--bh-brass); box-shadow: 0 0 40px #e0b87855, var(--bh-shadow-3); color: var(--bh-brass-bright);
+  animation: encounter-end-rise .7s var(--bh-ease) both; }
+.encounter-end-card b { font: 700 var(--bh-text-2xl) var(--bh-font-display); color: var(--bh-text-strong); letter-spacing: .02em; }
+.encounter-end-card small { color: var(--bh-text-muted); }
+.encounter-end-embers span { position: absolute; bottom: -10px; width: 6px; height: 6px; border-radius: 50%;
+  background: radial-gradient(circle, #ffd08a, #e07a4a 60%, transparent 70%); animation: encounter-end-ember 2.8s ease-out both; }
+@keyframes encounter-end-rise { from { opacity: 0; transform: translateY(24px) scale(.94); } to { opacity: 1; transform: none; } }
+@keyframes encounter-end-fade { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes encounter-end-ember { from { transform: translateY(0); opacity: 0; } 15% { opacity: 1; } to { transform: translateY(-70vh) translateX(20px); opacity: 0; } }

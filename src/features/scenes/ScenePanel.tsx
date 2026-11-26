@@ -12,9 +12,9 @@ const dragType = 'application/x-beholder-scene'
  * drags cards to reorder (↑/↓ stay for keyboard use), opens a prepared scene
  * to the table from its card, and manages the selected scene below the list.
  */
-export function ScenePanel({ room, scene, send, commandHere, switchView, addDemo, createScene, editGrid, calibrateGrid, copyScene, deleteScene, uploadMap, inviteLink, dmInviteLink, copyInvite }: {
+export function ScenePanel({ room, scene, send, commandHere, switchView, createScene, editGrid, calibrateGrid, copyScene, deleteScene, uploadMap, inviteLink, dmInviteLink, copyInvite }: {
   room: Snapshot; scene?: Scene; send: Send; commandHere: (command: Command) => Promise<boolean>
-  switchView: (id: string) => void; addDemo: () => void; createScene: () => void; editGrid: (scene: Scene) => void; calibrateGrid: (scene: Scene) => void
+  switchView: (id: string) => void; createScene: () => void; editGrid: (scene: Scene) => void; calibrateGrid: (scene: Scene) => void
   copyScene: (scene: Scene) => void; deleteScene: (scene: Scene) => void; uploadMap: (scene: Scene, file: File) => void
   inviteLink?: string; dmInviteLink?: string; copyInvite: () => void
 }) {
@@ -64,7 +64,7 @@ export function ScenePanel({ room, scene, send, commandHere, switchView, addDemo
         </li>
       })}
     </ol>
-    {!room.scenes.length && <p className="muted">{dm ? 'ยังไม่มีฉาก · กด + หรือเพิ่ม Encounter ตัวอย่างด้านล่าง' : 'ยังไม่มีฉาก'}</p>}
+    {!room.scenes.length && <p className="muted">{dm ? 'ยังไม่มีฉาก · กด + เพื่อสร้างฉากแรก' : 'ยังไม่มีฉาก'}</p>}
     {dm && room.scenes.length > 1 && <p className="scene-hint">ลากการ์ดเพื่อเรียงลำดับ · กด <Eye size={12} aria-hidden="true" /> เพื่อเปิดฉากนั้นให้ผู้เล่น</p>}
 
     {dm && scene && <section className="scene-settings" aria-label={'ตั้งค่าฉาก ' + scene.name}>
@@ -86,7 +86,6 @@ export function ScenePanel({ room, scene, send, commandHere, switchView, addDemo
         {room.scenes.filter(item => item.id !== scene.id && item.map).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select>}
     </section>}
-    {dm && <button className="demo-button" onClick={addDemo}>เพิ่ม Encounter ด่านร้างริมทาง</button>}
 
     {inviteLink && <details className="invite"><summary>เชิญผู้เล่น</summary><input aria-label="ลิงก์เชิญ" readOnly value={inviteLink} onFocus={event => event.target.select()} />
       <button onClick={copyInvite}>คัดลอก</button></details>}

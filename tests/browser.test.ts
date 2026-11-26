@@ -364,10 +364,7 @@ test('DM reorders scene cards, lines the grid up on the map and tidies up in the
   assert.equal((await room()).scenes.find(scene => scene.name === 'Hall')!.cell, cell)
 
   // The management screen lists tokens, items and scenes across the whole table.
-  await page.keyboard.press('Control+k')
-  await page.getByRole('combobox').fill('Encounter')
-  await page.keyboard.press('Enter')
-  await page.getByRole('heading', exact('ด่านร้างริมทาง')).waitFor()
+  assert.equal((await page.request.post(roomUrl + '/commands', { data: { type: 'demoEncounter', commandId: randomUUID(), revision: (await room()).revision } })).status(), 200)
   await page.getByRole('button', exact('ห้องเก็บของ DM')).click()
   const manage = page.getByRole('dialog', exact('ห้องเก็บของ DM'))
   await manage.getByRole('row').filter({ hasText: 'ยามด่าน' }).waitFor()
@@ -423,8 +420,11 @@ test('first visit shows the role tour once; display settings stay on this device
   await page.getByRole('heading', exact('ยินดีต้อนรับสู่โต๊ะของคุณ')).waitFor()
   await page.keyboard.press('Escape')
   await page.locator('.tour').waitFor({ state: 'detached' })
-  // The empty board says what to do next.
-  await page.getByRole('button', exact('ลองด้วย Encounter ตัวอย่าง')).click()
+  // The empty board says what to do next; the sample encounter itself now comes from the API.
+  await page.getByText('สร้างฉากเพื่อเริ่มจัดกระดาน', { exact: true }).waitFor()
+  const tourRoom = base + '/api/rooms/' + roomIdOf(page.url())
+  const revision = ((await (await page.request.get(tourRoom)).json()) as Snapshot).revision
+  assert.equal((await page.request.post(tourRoom + '/commands', { data: { type: 'demoEncounter', commandId: randomUUID(), revision } })).status(), 200)
   await page.getByRole('heading', exact('ด่านร้างริมทาง')).waitFor()
 
   await openPanel(page, 'ตั้งค่าการแสดงผล')
@@ -934,7 +934,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await dm.locator('#table-drawer').waitFor({ state: 'hidden' })
   await canvas.click({ position: { x: 260, y: 115 }, button: 'right' })
   await dm.getByRole('button', exact('ปรับ HP')).click()
-  await dm.getByLabel('จำนวน').fill('3')
+  await dm.getByLabel('จำนวน').fill('-3')
   await dm.getByRole('button', exact('ยืนยันการปรับ HP')).click()
   await dm.locator('.scrim').waitFor({ state: 'hidden' })
   await canvas.click({ position: { x: 260, y: 115 }, button: 'right' })
@@ -1063,7 +1063,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await two.locator('.floating-damage[aria-label$="เย็น"]').first().waitFor({ state: 'attached' })
   await canvas.click({ position: { x: 260, y: 115 }, button: 'right' })
   await dm.getByRole('button', exact('ปรับ HP')).click()
-  await dm.getByLabel('จำนวน', { exact: true }).fill('99')
+  await dm.getByLabel('จำนวน', { exact: true }).fill('-99')
   await dm.getByRole('button', exact('ยืนยันการปรับ HP')).click()
   await dm.locator('.scrim').waitFor({ state: 'hidden' })
   await canvas.click({ position: { x: 260, y: 115 }, button: 'right' })

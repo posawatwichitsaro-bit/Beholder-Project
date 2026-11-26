@@ -3,7 +3,7 @@ import { abilities, blankSheet, damageKinds, nextLivingTurn, sizes } from '../sh
 import type { Actor, DamageKind, InventoryItem, LogEntry, LootSkill, Member, ObjectDefinition, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token, TokenRole } from '../shared/model.ts'
 import { areaContains, areaLabels, areaOutline, validArea } from '../shared/area.ts'
 import type { Area } from '../shared/area.ts'
-import { d20, deathSave, die, harm, heal, Invalid, parseDice, rollDice } from './rules.ts'
+import { d20, deathSave, die, harm, heal, Invalid, parseDice, rollDice, rollPool } from './rules.ts'
 import { center, isNear, structureCover } from './cover.ts'
 import { createRoadsideEncounter } from './encounter.ts'
 import { bonusForCheck, calculatedSheet, commonSkills } from '../shared/characterStats.ts'
@@ -812,8 +812,17 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       target.tokens = withTokenRoles(target, room.actors).filter(item => item.id !== token.id)
       return {}
     }
-    case 'roll':
-      return saveRoll(command.label ? text(command.label) : 'ทอยเต๋า', rollDice(text(command.formula)))
+    case 'roll': {
+      const formula = text(command.formula)
+      const label = command.label ? text(command.label) : 'ทอยเต๋า'
+      // A plain d20 with Advantage or Disadvantage rolls two and keeps one, like sheet rolls do.
+      const d20Only = /^1?d20([+-]\d{1,3})?$/i.exec(formula.replace(/\s/g, ''))
+      if (d20Only && (command.advantage === true || command.disadvantage === true)) {
+        return saveRoll(label + (command.advantage === true ? ' · Advantage' : ' · Disadvantage'),
+          d20(Number(d20Only[1] ?? 0), command.advantage === true, command.disadvantage === true))
+      }
+      return saveRoll(label, rollPool(formula))
+    }
     case 'sheetRoll': {
       const creature = actor()
       owns(member, creature)

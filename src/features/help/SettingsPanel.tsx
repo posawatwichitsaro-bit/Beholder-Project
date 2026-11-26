@@ -27,7 +27,7 @@ export function SettingsPanel({ role, replayTour }: { role: Role; replayTour: ()
     <fieldset className="settings-group">
       <legend>การแสดงผล</legend>
       <label className="settings-toggle"><input type="checkbox" checked={prefs.sound} onChange={event => prefs.update({ sound: event.target.checked })} />
-        <span><b>เสียงลูกเต๋า</b><small>เสียงตอนผลทอยปรากฏ</small></span></label>
+        <span><b>เสียงในเกม</b><small>เสียงลูกเต๋า, ถึงเทิร์นของคุณ และจบการต่อสู้</small></span></label>
       <label className="settings-toggle"><input type="checkbox" checked={prefs.reduceMotion} onChange={event => prefs.update({ reduceMotion: event.target.checked })} />
         <span><b>ลดแอนิเมชัน</b><small>ปิดการเคลื่อนไหวและเอฟเฟกต์ (ถ้าเครื่องตั้งไว้แล้วจะลดให้อยู่แล้ว)</small></span></label>
       <label className="settings-toggle"><input type="checkbox" checked={prefs.showGrid} onChange={event => prefs.update({ showGrid: event.target.checked })} />

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { blankSheet } from '../shared/model.ts'
-import { d20, deathSave, harm, heal, rollDice } from './rules.ts'
+import { d20, deathSave, harm, heal, rollDice, rollPool } from './rules.ts'
 
 test('critical doubles only dice and Advantage/Disadvantage cancel', () => {
   assert.deepEqual(rollDice('1d8+3', () => 4, true), { formula: '1d8+3', faces: [4, 4], modifier: 3, total: 11 })
@@ -23,4 +23,14 @@ test('temporary HP absorbs damage and recovery resets death saves', () => {
   assert.deepEqual([actor.life, actor.hp, actor.failures], ['active', 1, 0])
   heal(actor, 100)
   assert.equal(actor.hp, actor.maxHp)
+})
+
+test('free rolls take mixed dice pools; sheet damage formulas stay single-group', () => {
+  const faces = [3, 5, 2]
+  let index = 0
+  assert.deepEqual(rollPool('2d6 + 1d4 + 3', () => faces[index++]), { formula: '2d6 + 1d4 + 3', faces: [3, 5, 2], modifier: 3, total: 13 })
+  assert.deepEqual(rollPool('1d20-2', () => 10), { formula: '1d20-2', faces: [10], modifier: -2, total: 8 })
+  assert.equal(rollPool('d8-1d4', () => 4).total, 0)
+  for (const bad of ['', '2d7', '1d6++1', 'abc', '60d6+41d6']) assert.throws(() => rollPool(bad), bad)
+  assert.throws(() => rollDice('1d6+1d8'))
 })

@@ -66,3 +66,27 @@
   .table:has(> .hud-dock:not([hidden])) .selection-bar { left: 50%; max-width: calc(100% - 32px); }
   .selection-bar { bottom: 52px; border-radius: var(--bh-radius-lg); }
 }
+
+/* DM quick HP field in the token bar: 8 heals, -15 damages. */
+.quick-hp input { width: 64px; height: 30px; padding: 0 8px; border-radius: var(--bh-radius-pill); border: 1px solid var(--bh-parchment-line); background: var(--bh-parchment-2); color: var(--bh-ink); font-variant-numeric: tabular-nums; }
+
+/* ---------- Attack animations ---------- */
+.strike-bolt, .strike-slash { position: absolute; z-index: 1; pointer-events: none; }
+/* Ranged: a glowing bolt flies from the attacker to the target, then bursts (or fizzles on a miss). */
+.strike-bolt { width: 26px; height: 4px; margin: -2px 0 0 -13px; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, #ffd08a 40%, #fff3e0); box-shadow: 0 0 8px #ffb070;
+  transform: rotate(var(--angle)); animation: strike-fly .45s cubic-bezier(.3, .1, .5, 1) forwards; }
+.strike-bolt::after { content: ''; position: absolute; right: -10px; top: -8px; width: 20px; height: 20px; border-radius: 50%; opacity: 0;
+  background: radial-gradient(circle, #fff3e0, #ff9e5a 45%, transparent 70%); animation: strike-burst .5s .4s ease-out forwards; }
+.strike-bolt[data-outcome=miss]::after { background: radial-gradient(circle, #cfd6dc88, transparent 65%); }
+@keyframes strike-fly { from { translate: 0 0; opacity: 1; } 92% { opacity: 1; } to { translate: var(--dx) var(--dy); opacity: 0; } }
+@keyframes strike-burst { from { opacity: 1; transform: scale(.4); } to { opacity: 0; transform: scale(1.8); } }
+/* Melee: an arc sweeps across the target in the direction of the swing. */
+.strike-slash { width: calc(var(--reach) * 2); height: calc(var(--reach) * 2); margin: calc(var(--reach) * -1) 0 0 calc(var(--reach) * -1);
+  border-radius: 50%; border: 4px solid transparent; border-top-color: #fff3e0; border-right-color: #ffb070;
+  filter: drop-shadow(0 0 6px #ff9e5a); transform: rotate(calc(var(--angle) - 140deg)); opacity: 0;
+  animation: strike-swing .5s ease-out forwards; }
+.strike-slash[data-outcome=critical] { border-top-color: #ffe9a8; border-right-color: #ff6a3a; border-width: 6px; }
+.strike-slash[data-outcome=miss] { border-top-color: #cfd6dc; border-right-color: #8f9aa3; filter: none; }
+@keyframes strike-swing { 0% { opacity: 0; transform: rotate(calc(var(--angle) - 140deg)) scale(.7); } 30% { opacity: 1; }
+  100% { opacity: 0; transform: rotate(calc(var(--angle) + 20deg)) scale(1.05); } }

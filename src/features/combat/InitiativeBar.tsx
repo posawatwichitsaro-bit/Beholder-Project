@@ -6,6 +6,8 @@ import type { Scene, Snapshot } from '../../../shared/model.ts'
 import { CrossedSwordsIcon, HpBar } from '../../ui/index.ts'
 import { tokenInitials } from '../board/tokenAppearance.ts'
 import { ConditionBadges } from './ConditionBadges.tsx'
+import { usePrefs } from '../../state/prefs.ts'
+import { playTurnSound } from '../dice/sound.ts'
 import type { Send } from '../../state/useCommand.ts'
 
 /**
@@ -81,6 +83,16 @@ export function TurnBanner({ scene, room, send }: { scene: Scene; room: Snapshot
   const fight = scene.combat!
   const current = fight.order[fight.turn]
   const mine = room.me.role !== 'dm' ? room.actors.find(actor => actor.id === current.actorId) : undefined
+  // A chime when your turn starts (once per turn, not on reconnect into the same turn).
+  const turnKey = mine ? scene.id + ':' + fight.round + ':' + fight.turn : ''
+  const heard = useRef('')
+  useEffect(() => {
+    if (!turnKey || heard.current === turnKey) return
+    const first = heard.current === ''
+    heard.current = turnKey
+    // On a fresh load mid-turn stay quiet, except when the fight has just begun with your turn.
+    if ((!first || (fight.round === 1 && fight.turn === 0)) && usePrefs.getState().sound) playTurnSound()
+  }, [turnKey])
   if (!mine) return null
   return <div className="turn-banner" role="status">
     <span className="turn-banner-text">ถึงเทิร์นของคุณ, {mine.name}</span>

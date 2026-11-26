@@ -1,12 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { PointerEvent } from 'react'
+import type { CSSProperties, PointerEvent } from 'react'
 import { Crosshair, Grid3x3, Maximize, Minus, MousePointer2, MoreHorizontal, Plus, Ruler } from 'lucide-react'
 import { damageKinds, sizes } from '../../../shared/model.ts'
 import { areaContains, areaOutline, validArea } from '../../../shared/area.ts'
 import type { Area, AreaKind, AreaOutline } from '../../../shared/area.ts'
 import { tokenColor, tokenInitials } from './tokenAppearance.ts'
+import { newStrikes } from './strikes.ts'
+import type { Strike } from './strikes.ts'
 import type { Scene, SceneObject, Snapshot, Token } from '../../../shared/model.ts'
-import { clampZoom, dragThreshold, longPressMs, pinchView, wheelIntent, zoomAround } from './gestures.ts'
+import { clampZoom, dragThreshold, holdToSelectMs, longPressMs, pinchView, wheelIntent, zoomAround } from './gestures.ts'
 import type { Point } from './gestures.ts'
 import { carriesToken, readTokenDrag } from './tokenDrag.ts'
 import { conditionGlyph, rankConditions } from '../../../shared/conditions.ts'
@@ -29,6 +31,8 @@ type Props = {
   moveObject?: (objectId: string, position: Point) => void
   /** Grid calibration: the next drag draws a box over map cells and reports it in map pixels. */
   calibrate?: (rect: { x: number; y: number; width: number; height: number }) => void
+  /** DM: a ±HP field in the token bar (8 heals, -15 damages). */
+  quickHp?: (actorId: string, text: string) => Promise<boolean>
   /** Preview grid while calibrating (map pixels). */
   gridOverride?: { cell: number; originX: number; originY: number }
 }
@@ -58,7 +62,7 @@ function hpBar(ctx: CanvasRenderingContext2D, x: number, y: number, width: numbe
 const editableTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && Boolean(target.closest('input,select,textarea,[contenteditable]'))
 
-export function Board({ room, scene, selected, targetId, select, move, place, placementLabel, mainTokenId, actions, focus, areaKind, preview, onArea, drop, moveObject, calibrate, gridOverride }: Props) {
+export function Board({ room, scene, selected, targetId, select, move, place, placementLabel, mainTokenId, actions, focus, areaKind, preview, onArea, drop, moveObject, calibrate, gridOverride, quickHp }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ x: 640, y: 480 })
   const [camera, setCamera] = useState({ x: 36, y: 36 })
@@ -192,6 +196,17 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
   const activeArea = areaDraft ?? preview
   const outline = activeArea && validArea(activeArea) ? areaOutline(activeArea) : undefined
   const [effectTime, setEffectTime] = useState(Date.now)
+  // Attack animations: a slash for melee, a bolt for ranged, played once per new attack roll.
+  const seenRolls = useRef<Set<string> | undefined>(undefined)
+  const [strikes, setStrikes] = useState<Strike[]>([])
+  useEffect(() => {
+    if (!seenRolls.current) { seenRolls.current = new Set(room.rolls.map(roll => roll.id)); return }
+    const fresh = newStrikes(room.rolls, scene.tokens, scene.id, seenRolls.current, Date.now(), span)
+    if (!fresh.length) return
+    setStrikes(current => [...current, ...fresh])
+    const timer = setTimeout(() => setStrikes(current => current.filter(strike => !fresh.includes(strike))), 1100)
+    return () => clearTimeout(timer)
+  }, [room.rolls])
   useEffect(() => {
     setEffectTime(Date.now())
     const timer = setTimeout(() => setEffectTime(Date.now()), 1500)
@@ -510,6 +525,17 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       : []
     if (mode === 'move' && token && !group.includes(token.id)) setGroup([token.id])
     gesture.current = { from: point, camera, mode, tokens, moved: false, token, object }
+    if (mode === 'pan' && !pan && !token && !object && tool === 'token' && event.pointerType !== 'touch') {
+      // Press and hold on empty map, then drag: a selection box. A quick drag still pans.
+      clearTimeout(longPress.current)
+      longPress.current = setTimeout(() => {
+        const action = gesture.current
+        if (action && !action.moved && action.mode === 'pan') {
+          action.mode = 'select'
+          setSelection({ from: action.from, to: action.from })
+        }
+      }, holdToSelectMs)
+    }
     if (event.pointerType === 'touch') {
       clearTimeout(longPress.current)
       longPress.current = setTimeout(() => {
@@ -645,6 +671,18 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
         event.preventDefault()
         drop(payload, cell(pointer(event)))
       }} />
+    {strikes.map(strike => {
+      const from = scene.tokens.find(token => token.id === strike.from)
+      const to = scene.tokens.find(token => token.id === strike.to)
+      if (!from || !to) return null
+      const a = pixel({ x: from.x + span(from) / 2, y: from.y + span(from) / 2 })
+      const b = pixel({ x: to.x + span(to) / 2, y: to.y + span(to) / 2 })
+      const angle = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI
+      const style = { left: a.x, top: a.y, '--dx': (b.x - a.x) + 'px', '--dy': (b.y - a.y) + 'px', '--angle': angle + 'deg', '--reach': grid * .6 + 'px' } as CSSProperties
+      return strike.ranged
+        ? <span key={strike.id} className="strike-bolt" data-outcome={strike.outcome} style={style} aria-hidden="true" />
+        : <span key={strike.id} className="strike-slash" data-outcome={strike.outcome} style={{ ...style, left: b.x, top: b.y }} aria-hidden="true" />
+    })}
     {(scene.damageEvents ?? []).filter(event => Date.now() - event.at < 2400).map(event => {
       const token = scene.tokens.find(item => item.actorId === event.actorId)
       if (!token) return null
@@ -654,7 +692,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
         aria-label={'เสีย HP ' + event.amount + ' · ' + label}>−{event.amount}</span>
     })}
     <div className="board-tools" role="toolbar" aria-label="เครื่องมือกระดาน">
-      <button aria-label="เลือก Token" aria-pressed={tool === 'token'} onClick={() => setTool('token')} title="เลือกและลาก Token (V) · ลากที่ว่างเพื่อเลื่อนกระดาน · Shift+ลากเพื่อเลือกหลายตัว">
+      <button aria-label="เลือก Token" aria-pressed={tool === 'token'} onClick={() => setTool('token')} title="เลือกและลาก Token (V) · ลากที่ว่างเพื่อเลื่อนกระดาน · กดค้างแล้วลาก (หรือ Shift+ลาก) เพื่อครอบหลายตัว">
         <MousePointer2 size={16} aria-hidden="true" /><span className="board-tool-label">เลือก Token</span></button>
       <button aria-label="วัดระยะ" aria-pressed={tool === 'measure'} onClick={() => setTool('measure')} title="วัดระยะ (R)">
         <Ruler size={16} aria-hidden="true" /><span className="board-tool-label">วัดระยะ</span></button>
@@ -685,6 +723,11 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
         {barActor && <span className="selection-bar-hp">{barActor.hp}/{barActor.maxHp} HP{barSheet ? ' · AC ' + barSheet.ac : ''}</span>}
         {barActor && (barActor.conditions || barActor.effects?.length) ? <span className="selection-bar-conditions"><ConditionBadges creature={barActor} max={4} /></span> : null}
       </span>
+      {quickHp && barActor && <form className="quick-hp" onSubmit={async event => {
+        event.preventDefault()
+        const field = event.currentTarget.elements.namedItem('hp') as HTMLInputElement
+        if (await quickHp(barActor.id, field.value)) field.value = ''
+      }}><input name="hp" aria-label={'ปรับ HP ของ ' + barActor.name} placeholder="±HP" inputMode="numeric" title="ใส่ 8 เพื่อรักษา หรือ -15 เพื่อลด HP แล้วกด Enter" /></form>}
       {barActions.map(action => <button key={action.label} type="button" disabled={action.disabled} onClick={action.run}>{action.label}</button>)}
     </div>}
     {place && <div className="placing">{placementLabel ?? 'คลิกช่องเพื่อวาง Token'}</div>}

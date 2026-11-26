@@ -11,12 +11,14 @@ import { DamageTypeSelect } from '../combat/CombatEffects.tsx'
 import { InitiativeBar, TurnBanner } from '../combat/InitiativeBar.tsx'
 import { DamageQueue } from '../combat/DamageQueue.tsx'
 import { EffectsPanel, PendingSaves } from '../combat/EffectsPanel.tsx'
+import { EncounterEnd } from '../combat/EncounterEnd.tsx'
 import { SheetEditor } from '../sheets/SheetEditor.tsx'
 import { ActorActions } from '../sheets/ActorActions.tsx'
 import { SheetView } from '../sheets/SheetView.tsx'
 import { CharacterWizard } from '../sheets/CharacterWizard.tsx'
 import { AdventureLog } from '../dice/AdventureLog.tsx'
 import { DiceReveal } from '../dice/DiceReveal.tsx'
+import { DiceRoller } from '../dice/DiceRoller.tsx'
 import { usePrefs } from '../../state/prefs.ts'
 import { PersonalLibrary } from '../library/PersonalLibrary.tsx'
 import { ObjectEditor, ObjectActions } from '../objects/Objects.tsx'
@@ -42,6 +44,7 @@ import { groupLabels, panelById, panelForShortcut, panelsFor } from '../shell/pa
 import type { PanelId, Role } from '../shell/panelRegistry.ts'
 import { api } from '../../lib/api.ts'
 import { EmptyState } from '../../ui/index.ts'
+import { readHpChange } from '../combat/hpChange.ts'
 import { currentRoom, roomPath, useRoomStore } from '../../state/roomStore.ts'
 import { refreshRoom, useRoomConnection } from '../../state/connection.ts'
 import { sendCommand } from '../../state/useCommand.ts'
@@ -108,7 +111,6 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [wizard, setWizard] = useState(false)
   const [tokenPlacement, setPlacing] = useState<TokenPlacement>()
   const [objectPlacement, setObjectPlacement] = useState<{ sceneId: string; definition: ObjectDefinition }>()
-  const [formula, setFormula] = useState('1d20')
   const [combatTarget, setCombatTarget] = useState('')
   const [cameraFocus, setCameraFocus] = useState<{ actorId: string; sequence: number }>()
   const [areaKind, setAreaKind] = useState<AreaKind>()
@@ -318,9 +320,6 @@ export function Table({ account, changeAccount }: AccountProps) {
   const preparing = Boolean(dm && scene && scene.id !== room.activeSceneId)
   const focusMain = () => mainToken && setCameraFocus(current => ({ actorId: mainToken.actorId, sequence: (current?.sequence ?? 0) + 1 }))
 
-  function addDemo() {
-    void send({ type: 'demoEncounter' }).then(ok => { if (ok) switchView(currentRoom().scenes.at(-1)!.id) })
-  }
   async function uploadMap(target: Scene, file: File) {
     try {
       await api(base + '/scenes/' + target.id + '/map', { method: 'PUT', body: file, headers: { 'Content-Type': file.type } })
@@ -341,7 +340,7 @@ export function Table({ account, changeAccount }: AccountProps) {
 
   const bodies: Record<PanelId, () => ReactNode> = {
     scenes: () => <ScenePanel room={room} scene={scene} send={send} commandHere={commandHere} switchView={switchView}
-      addDemo={addDemo} createScene={() => setModal('createScene')} editGrid={item => setModal({ sceneId: item.id })}
+ createScene={() => setModal('createScene')} editGrid={item => setModal({ sceneId: item.id })}
       calibrateGrid={beginCalibration} copyScene={item => setSceneOperation({ mode: 'copy', scene: item })}
       deleteScene={item => setSceneOperation({ mode: 'delete', scene: item })} uploadMap={uploadMap}
       inviteLink={inviteLink} dmInviteLink={dmInviteLink} copyInvite={() => void copyInvite()} />,
@@ -417,10 +416,7 @@ export function Table({ account, changeAccount }: AccountProps) {
         <label className="inline"><input type="checkbox" checked={privateRoll} onChange={event => setPrivateRoll(event.target.checked)} />ทอยลับสำหรับ DM คนนี้</label>
         {hideTray && <button onClick={() => setHideTray(false)}>แสดงถาดผลเต๋า</button>}
       </div>}
-      <form className="inline" onSubmit={event => { event.preventDefault(); void send({ type: 'roll', formula }) }}>
-        <input aria-label="สูตรเต๋า" value={formula} onChange={event => setFormula(event.target.value)} /><button className="primary">ทอย</button>
-      </form>
-      <div className="dice-buttons">{[4, 6, 8, 10, 12, 20, 100].map(die => <button key={die} onClick={() => void send({ type: 'roll', formula: '1d' + die })}>d{die}</button>)}</div>
+      <DiceRoller send={send} rolls={history} me={room.me.name} />
       <ol className="rolls">{[...history].reverse().map(roll => <li key={roll.id}>
         <div><small>{roll.name} · {roll.label}</small><br /><span>{roll.formula}{roll.faces.length > 0 && ' · [' + roll.faces.join(', ') + ']'}{roll.modifier ? ' ' + (roll.modifier > 0 ? '+' : '') + roll.modifier : ''}</span>
           {roll.outcome && <small> · {roll.outcome}</small>}{roll.applied === false && <small className="roll-waiting"> · รอ DM ยืนยัน</small>}</div><strong>{roll.total}</strong>
@@ -459,7 +455,6 @@ export function Table({ account, changeAccount }: AccountProps) {
       ...(scene?.tokens.length ? [{ id: 'combat', label: combat ? 'เปิดแผงต่อสู้' : 'เตรียมการต่อสู้', group: 'DM', keywords: 'combat initiative fight', run: () => openPanel('combat') }] : []),
       { id: 'manage', label: 'เปิดห้องเก็บของ DM', group: 'DM', keywords: 'manage token item loot scene จัดการ', shortcut: 'M', run: () => setManageOpen(true) },
       ...(scene?.map ? [{ id: 'calibrate', label: 'ปรับ Grid บนภาพ', group: 'DM', keywords: 'grid calibrate align map ปรับ', run: () => beginCalibration(scene) }] : []),
-      { id: 'demo', label: 'เพิ่ม Encounter ด่านร้างริมทาง', group: 'DM', keywords: 'demo encounter goblin', run: addDemo },
       ...(partyIds.length ? [
         { id: 'short-rest-party', label: 'พักสั้นทั้งกลุ่ม (Short Rest)', group: 'DM', keywords: 'rest short party พัก', run: () => void send({ type: 'rest', actorIds: partyIds, kind: 'short' }) },
         { id: 'long-rest-party', label: 'พักยาวทั้งกลุ่ม (Long Rest)', group: 'DM', keywords: 'rest long party พัก นอน', run: () => void send({ type: 'rest', actorIds: partyIds, kind: 'long' }) }
@@ -489,6 +484,11 @@ export function Table({ account, changeAccount }: AccountProps) {
     <section className="workspace" aria-label="ฉากปัจจุบัน">
       {scene ? <Board key={scene.id} scene={scene} room={room} selected={boardSelected} targetId={combatOpen ? combatTarget : attackTarget || undefined}
         mainTokenId={mainTokenId}
+        quickHp={dm ? async (actorId, text) => {
+          const change = readHpChange(text)
+          if (!change) { setError('ใส่ตัวเลข เช่น 8 เพื่อรักษา หรือ -15 เพื่อลด HP'); return false }
+          return commandHere({ type: 'adjustHp', actorId, ...change })
+        } : undefined}
         calibrate={calibratingScene ? rect => setCalibrating({ sceneId: calibratingScene.id, rect }) : undefined}
         gridOverride={calibratingScene ? gridPreview : undefined}
         focus={cameraFocus} areaKind={combatOpen ? areaKind : undefined} preview={combatOpen ? areaPreview : undefined}
@@ -549,9 +549,8 @@ export function Table({ account, changeAccount }: AccountProps) {
           ]
         }} />
         : <div className="empty">{dm
-          ? <EmptyState title="สร้างฉากเพื่อเริ่มจัดกระดาน" hint="ตั้งชื่อฉาก อัปโหลดแผนที่ แล้ววาง Token หรือลองเล่นจาก Encounter ตัวอย่างที่มีมอนสเตอร์พร้อมแล้ว">
+          ? <EmptyState title="สร้างฉากเพื่อเริ่มจัดกระดาน" hint="ตั้งชื่อฉาก อัปโหลดแผนที่ แล้ววาง Token ผู้เล่นและมอนสเตอร์จาก Monster Manual">
               <button className="primary" onClick={() => setModal('createScene')}>สร้างฉาก</button>
-              <button onClick={addDemo}>ลองด้วย Encounter ตัวอย่าง</button>
             </EmptyState>
           : <EmptyState title="รอ DM เปิดฉาก" hint="ระหว่างนี้สร้างตัวละครไว้ก่อนได้ พอ DM เปิดฉากแล้วค่อยลากลงกระดาน">
               <button className="primary" onClick={() => setWizard(true)}>สร้างตัวละคร</button>
@@ -578,6 +577,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       }} />}
       {scene?.combat && scene.id === room.activeSceneId && <TurnBanner scene={scene} room={room} send={commandHere} />}
       <DamageQueue room={room} send={send} />
+      <EncounterEnd scene={scene} />
       <PendingSaves room={room} send={commandHere} />
       {calibratingScene && <GridCalibrator key={calibratingScene.id} scene={calibratingScene} rect={calibrating?.rect} preview={setGridPreview} cancel={endCalibration}
         save={async fit => {
@@ -630,13 +630,21 @@ export function Table({ account, changeAccount }: AccountProps) {
     {hpActor && dm && <div className="scrim"><form className="dialog compact" onSubmit={async event => {
       event.preventDefault()
       const form = new FormData(event.currentTarget)
-      if (await commandHere({ type: 'adjustHp', actorId: hpActor.id, amount: Number(form.get('amount')), mode: form.get('mode'), damageKind: form.get('damageKind') })) setHpTarget(undefined)
+      const text = String(form.get('amount'))
+      if (form.get('mode') === 'temp') {
+        const amount = readHpChange(text)?.amount
+        if (amount && await commandHere({ type: 'adjustHp', actorId: hpActor.id, amount, mode: 'temp' })) setHpTarget(undefined)
+        return
+      }
+      const change = readHpChange(text)
+      if (!change) { setError('ใส่ตัวเลข เช่น 8 เพื่อรักษา หรือ -15 เพื่อลด HP'); return }
+      if (await commandHere({ type: 'adjustHp', actorId: hpActor.id, ...change, damageKind: form.get('damageKind') })) setHpTarget(undefined)
     }}>
       <header><h2>ปรับ HP · {hpActor.name}</h2><button type="button" aria-label="ปิด" onClick={() => setHpTarget(undefined)}>×</button></header>
       <p>HP {hpActor.hp}/{hpActor.maxHp} · Temp HP {hpActor.tempHp}</p>
-      <label>การปรับ<select name="mode"><option value="damage">ความเสียหาย</option><option value="heal">รักษา</option><option value="temp">ตั้ง Temporary HP</option></select></label>
+      <label>จำนวน (ใส่ 8 = รักษา · -15 = ลด HP)<input aria-label="จำนวน" name="amount" inputMode="numeric" autoFocus required placeholder="เช่น -15 หรือ 8" /></label>
       <label>ประเภทเมื่อเป็นความเสียหาย<DamageTypeSelect /></label>
-      <label>จำนวน<input type="number" name="amount" min={1} max={9999} defaultValue={1} required /></label>
+      <label>การปรับ<select name="mode"><option value="auto">เพิ่ม/ลด HP ตามเครื่องหมาย</option><option value="temp">ตั้ง Temporary HP</option></select></label>
       <footer><button type="button" onClick={() => setHpTarget(undefined)}>ยกเลิก</button><button className="primary">ยืนยันการปรับ HP</button></footer>
     </form></div>}
     {wizard && <CharacterWizard close={() => setWizard(false)}
