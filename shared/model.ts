@@ -46,6 +46,29 @@ export type Sheet = {
   savingThrows?: Partial<Record<Ability, CheckBonus>>
   characterDetails?: { species?: string; background?: string; hitDice?: string; defenses?: string }
   successes: number; failures: number; life: 'active' | 'dying' | 'stable' | 'dead'
+  /** Conditions with a source, an end and saves (see shared/effects.ts); plain ones stay in `conditions`. */
+  effects?: Effect[]
+}
+/**
+ * One condition from one source. Poisoned from two sources is two effects shown as one mark;
+ * ending one leaves the other. `concentration` ties it to the source's Concentration.
+ */
+export type Effect = {
+  id: string
+  condition: string
+  /** Exhaustion level. */
+  level?: number
+  sourceId?: string
+  sourceLabel?: string
+  concentration?: boolean
+  /** Ends at the start or end of `actorId`'s turn, after `turns` such turns (1 = the next one). */
+  ends?: { at: 'start' | 'end'; actorId: string; turns: number }
+  /** Repeat save at the start or end of the affected creature's own turn; success ends it. */
+  save?: { ability: Ability; dc: number; at: 'start' | 'end' }
+  /** A save waiting to be rolled: a repeat save, or a Concentration check after damage. */
+  pending?: { ability: Ability; dc: number; reason: 'repeat' | 'concentration' }
+  /** Only the DM sees it. */
+  hidden?: boolean
 }
 export type Actor = Sheet & { id: string; ownerId: string; templateId?: string; lootResult?: LootResult }
 export type Template = { id: string; sheet: Sheet }
@@ -136,7 +159,7 @@ export type Room = {
 }
 export type Snapshot = Omit<Room, 'invite' | 'dmInvite' | 'actors' | 'members'> & {
   me: Member; members: Member[]; invite?: string; dmInvite?: string; actors: Actor[]
-  publicActors: (Pick<Actor, 'id' | 'name' | 'kind' | 'size' | 'portrait' | 'hp' | 'maxHp' | 'tempHp' | 'lootResult' | 'conditions'> & { lootable?: boolean })[]
+  publicActors: (Pick<Actor, 'id' | 'name' | 'kind' | 'size' | 'portrait' | 'hp' | 'maxHp' | 'tempHp' | 'lootResult' | 'conditions' | 'effects'> & { lootable?: boolean })[]
   combatQueue?: Roll[]
 }
 export function blankSheet(kind: Sheet['kind'] = 'pc'): Sheet {

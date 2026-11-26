@@ -152,3 +152,32 @@ label.queue-check { display: inline-flex; align-items: center; gap: 6px; color: 
 .condition-details b { display: block; }
 .condition-details small { display: block; color: var(--bh-ink-muted); font-size: var(--bh-text-xs); line-height: 1.5; }
 .condition-details .condition-effect { color: var(--bh-crimson); font-weight: 700; }
+
+/* Structured conditions: the effect list in the Condition panel, the add form, and saves waiting to be rolled. */
+.condition-badge.condition-pending { background: var(--bh-crimson); border-color: var(--bh-crimson-ink); color: var(--bh-crimson-ink); }
+.effect-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--bh-space-2); }
+.effect-list li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--bh-space-2); align-items: start; padding-top: var(--bh-space-2); border-top: 1px solid var(--bh-parchment-line); }
+.effect-text { display: grid; }
+.effect-text small { color: var(--bh-ink-muted); font-size: var(--bh-text-xs); line-height: 1.5; }
+.effect-actions { grid-column: 2; display: flex; flex-wrap: wrap; gap: 6px; }
+.effect-form { border: 1px solid var(--bh-parchment-line); border-radius: var(--bh-radius-md); padding: var(--bh-space-2) var(--bh-space-3); }
+.effect-form summary { cursor: pointer; font-weight: 600; color: var(--bh-ink-strong); }
+.effect-form[open] { display: grid; gap: var(--bh-space-2); }
+.effect-form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--bh-space-2); margin-top: var(--bh-space-2); }
+.effect-form .wizard-check { display: flex; align-items: center; gap: 8px; }
+.effect-form .wizard-check input { width: 16px; height: 16px; flex: none; }
+.effect-form > button { justify-self: start; }
+
+.pending-saves {
+  position: absolute; z-index: 4; left: 16px; bottom: 64px; width: min(320px, calc(100% - 32px)); display: grid; gap: 6px;
+  padding: var(--bh-space-3); border-radius: var(--bh-radius-md); background: var(--bh-parchment); color: var(--bh-ink);
+  box-shadow: var(--bh-shadow-3); border: 2px solid var(--bh-crimson);
+}
+.pending-saves h2 { margin: 0; font: 700 var(--bh-text-md) var(--bh-font-heading); color: var(--bh-crimson); }
+.pending-save { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; }
+.pending-save span { display: grid; }
+.pending-save small { color: var(--bh-ink-muted); font-size: var(--bh-text-xs); }
+.table .pending-save button:not(.primary), .table .effect-actions button:not(.primary) {
+  background: transparent; color: var(--bh-ink); border: 1px solid var(--bh-parchment-line);
+}
+.table .pending-save button:not(.primary):hover, .table .effect-actions button:not(.primary):hover { background: var(--bh-ink); color: var(--bh-text-strong); }

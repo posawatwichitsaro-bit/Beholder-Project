@@ -64,7 +64,7 @@ export function InitiativeBar({ scene, room, focus, send }: {
             <span className="initiative-portrait" aria-hidden="true">{actor.portrait ? <img src={actor.portrait} alt="" /> : tokenInitials(actor.name)}</span>
             <HpBar hp={actor.hp} max={actor.maxHp} side={side} label={'HP ของ ' + actor.name} height={4} />
             <span className="initiative-name">{actor.name}</span>
-            {actor.conditions && <ConditionBadges conditions={actor.conditions} max={2} size={11} />}
+            {(actor.conditions || actor.effects?.length) ? <ConditionBadges creature={actor} max={2} size={11} /> : null}
             <b className="initiative-score">{initiative}</b>
           </button>
         </li>

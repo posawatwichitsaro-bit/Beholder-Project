@@ -1,6 +1,8 @@
 import { ArrowDown, Ban, BedDouble, CircleDot, EarOff, EyeOff, FlaskConical, Ghost, Hand, Heart, Link, Lock, Moon, Mountain, Sparkles, Tag, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { conditionBase, conditionThai, isSrdCondition, parseConditions, rankConditions } from '../../../shared/conditions.ts'
+import { conditionBase, conditionThai, isSrdCondition, rankConditions } from '../../../shared/conditions.ts'
+import { activeConditions } from '../../../shared/effects.ts'
+import type { Effect } from '../../../shared/model.ts'
 import type { ConditionName } from '../../../shared/conditions.ts'
 
 /** One shape per condition, so they read without relying on colour. */
@@ -27,15 +29,17 @@ export function conditionLabel(name: string, rounds?: number) {
  * Leather-and-brass condition marks: the most limiting `max` first, then "+N".
  * Exhaustion shows its level on the icon.
  */
-export function ConditionBadges({ conditions, max = 2, size = 12 }: { conditions: string; max?: number; size?: number }) {
-  const list = rankConditions(parseConditions(conditions))
-  if (!list.length) return null
+export function ConditionBadges({ creature, max = 2, size = 12 }: { creature: { conditions: string; effects?: Effect[] }; max?: number; size?: number }) {
+  const list = rankConditions(activeConditions(creature))
+  const waiting = creature.effects?.some(effect => effect.pending)
+  if (!list.length && !waiting) return null
   const shown = list.slice(0, max)
   return <span className="condition-badges" role="img" aria-label={'Condition: ' + list.map(item => conditionLabel(item.name, item.rounds)).join(', ')}>
     {shown.map(item => <span key={item.name} className="condition-badge" title={conditionLabel(item.name, item.rounds)}>
       <ConditionIcon name={item.name} size={size} />
       {conditionBase(item.name).level !== undefined && <b>{conditionBase(item.name).level}</b>}
     </span>)}
+    {waiting && <span className="condition-badge condition-pending" title="รอทอยเซฟ">!</span>}
     {list.length > max && <span className="condition-badge condition-more" title={list.slice(max).map(item => conditionLabel(item.name)).join(', ')}>+{list.length - max}</span>}
   </span>
 }
