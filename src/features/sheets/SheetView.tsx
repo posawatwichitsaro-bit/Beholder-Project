@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Copy, HeartPulse, Pencil, Shield, Footprints, Sparkles, Swords, Zap } from 'lucide-react'
+import { ArrowBigUpDash, Copy, HeartPulse, Pencil, Shield, Footprints, Sparkles, Swords, Zap } from 'lucide-react'
 import { abilities } from '../../../shared/model.ts'
 import type { Ability, Actor, Scene, Snapshot } from '../../../shared/model.ts'
 import { abilityModifier, bonusForCheck, commonSkills } from '../../../shared/characterStats.ts'
@@ -9,6 +9,7 @@ import { HpBar, Tabs } from '../../ui/index.ts'
 import { InventoryPanel } from '../objects/Inventory.tsx'
 import { ConditionEditor } from '../combat/ConditionEditor.tsx'
 import { SlotTracker } from './SlotTracker.tsx'
+import { LevelUpDialog } from './LevelUpDialog.tsx'
 import { RestPanel } from './RestPanel.tsx'
 
 type Tab = 'overview' | 'actions' | 'spells' | 'rest' | 'inventory' | 'notes'
@@ -26,6 +27,7 @@ export function SheetView({ actor, scene, room, send, edit, copy }: {
 }) {
   const dm = room.me.role === 'dm'
   const [tab, setTab] = useState<Tab>('overview')
+  const [levelling, setLevelling] = useState(false)
   const [mode, setMode] = useState<Mode>('normal')
   const [proficient, setProficient] = useState(false)
   const [target, setTarget] = useState('')
@@ -81,6 +83,8 @@ export function SheetView({ actor, scene, room, send, edit, copy }: {
       </div>
       <div className="sheet-head-actions">
         <button type="button" className="sheet-icon" onClick={edit} aria-label="แก้ชีต" title="แก้ชีต (เปิดโหมดแก้ไขและตัวคำนวณ D&D)"><Pencil size={16} aria-hidden="true" /></button>
+        {actor.kind === 'pc' && actor.calculations?.hp && <button type="button" className="sheet-icon" onClick={() => setLevelling(true)} aria-label="เลเวลอัป" title="เลเวลอัป">
+          <ArrowBigUpDash size={16} aria-hidden="true" /></button>}
         <button type="button" className="sheet-icon" onClick={copy} aria-label="คัดลอกเข้าคลังส่วนตัว" title="คัดลอกเข้าคลังส่วนตัว"><Copy size={16} aria-hidden="true" /></button>
       </div>
     </header>
@@ -199,5 +203,6 @@ export function SheetView({ actor, scene, room, send, edit, copy }: {
         {!actor.characterDetails && !actor.skills && !actor.saves && !actor.monsterReference && <p className="sheet-note">ยังไม่มีบันทึก · เพิ่มได้จากปุ่มแก้ชีต</p>}
       </div>}
     </div>
+    {levelling && <LevelUpDialog actor={actor} send={send} close={() => setLevelling(false)} />}
   </article>
 }
