@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { blankSheet, objectDefinition, objectLabels, tokenRoleLabels } from '../../../shared/model.ts'
-import type { Actor, ObjectDefinition, Roll, Scene, Sheet, Template, TokenRole } from '../../../shared/model.ts'
+import type { Actor, ObjectDefinition, Roll, Scene, Sheet, Snapshot, Template, TokenRole } from '../../../shared/model.ts'
 import type { Area, AreaKind } from '../../../shared/area.ts'
 import { AccountPanel } from '../account/AccountPanel.tsx'
 import { MonsterManual } from '../manual/MonsterManual.tsx'
@@ -51,6 +51,19 @@ type Point = { x: number; y: number }
 type TokenPlacement = { sceneId: string; source: TokenSource; role?: TokenRole }
 const arrowSteps: Record<string, Point> = {
   ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }
+}
+/** The closest living creature on the other side from whoever's turn it is: the DM's default target. */
+function nearestFoe(room: Snapshot, scene?: Scene) {
+  const fight = scene?.combat
+  const actingId = fight?.order[fight.turn]?.actorId
+  const acting = room.publicActors.find(item => item.id === actingId)
+  const from = scene?.tokens.find(token => token.actorId === actingId)
+  if (!scene || !acting || !from) return undefined
+  return scene.tokens.flatMap(token => {
+    const other = room.publicActors.find(item => item.id === token.actorId)
+    return other && other.hp > 0 && (other.kind === 'monster') !== (acting.kind === 'monster')
+      ? [{ id: other.id, distance: Math.max(Math.abs(token.x - from.x), Math.abs(token.y - from.y)) }] : []
+  }).sort((a, b) => a.distance - b.distance)[0]?.id
 }
 const signedBonus = (value: number) => (value >= 0 ? '+' : '') + value
 const wideScreen = () => typeof matchMedia === 'undefined' || matchMedia('(min-width: 761px)').matches
@@ -195,7 +208,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   }
   function clearArea() { setAreaKind(undefined); setAreaPreview(undefined) }
   useEffect(() => { setOlder([]); setHistoryEnded(false) }, [room.activeSceneId])
-  useEffect(() => { setCombatTarget(''); clearArea() }, [scene?.id, combat?.round, combat?.turn])
+  useEffect(() => { setCombatTarget(nearestFoe(room, scene) ?? ''); clearArea() }, [scene?.id, combat?.round, combat?.turn])
   useEffect(() => { if (!combatOpen) clearArea() }, [combatOpen])
   const shortcutState = useRef({ role, choosePanel })
   shortcutState.current = { role, choosePanel }
