@@ -35,7 +35,7 @@
 
 /* Selection bar: actions for the selected token or object */
 .selection-bar {
-  position: absolute; z-index: 2; left: 50%; bottom: 16px; transform: translateX(-50%);
+  position: absolute; z-index: 2; left: 50%; bottom: 104px; transform: translateX(-50%);
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center;
   /* Leaves room for the dice tray (right) and the turn / main-token buttons (left) on the same row. */
   max-width: min(760px, max(360px, calc(100% - 660px))); padding: 6px 8px;
@@ -64,7 +64,7 @@
 @media (max-width: 760px) {
   .table .board-tools .board-tool-label { display: none; }
   .table:has(> .hud-dock:not([hidden])) .selection-bar { left: 50%; max-width: calc(100% - 32px); }
-  .selection-bar { bottom: 52px; border-radius: var(--bh-radius-lg); }
+  .selection-bar { bottom: 112px; border-radius: var(--bh-radius-lg); }
 }
 
 /* DM quick HP field in the token bar: 8 heals, -15 damages. */
@@ -90,3 +90,6 @@
 .strike-slash[data-outcome=miss] { border-top-color: #cfd6dc; border-right-color: #8f9aa3; filter: none; }
 @keyframes strike-swing { 0% { opacity: 0; transform: rotate(calc(var(--angle) - 140deg)) scale(.7); } 30% { opacity: 1; }
   100% { opacity: 0; transform: rotate(calc(var(--angle) + 20deg)) scale(1.05); } }
+
+/* The token bar sits above the bottom row (turn button, dice tray) so it never covers them. */
+.table .board-tools .move-handle { color: var(--bh-text-muted); background: transparent; border: 0; min-width: 20px; padding: 0; }

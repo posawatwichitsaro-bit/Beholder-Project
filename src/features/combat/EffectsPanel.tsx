@@ -5,6 +5,7 @@ import { srdConditions } from '../../../shared/conditions.ts'
 import { effectName } from '../../../shared/effects.ts'
 import type { Send } from '../../state/useCommand.ts'
 import { ConditionDetails, ConditionEditor } from './ConditionEditor.tsx'
+import { MoveHandle, useMovable } from '../../ui/index.ts'
 import { ConditionIcon } from './ConditionBadges.tsx'
 
 type Creature = Snapshot['publicActors'][number]
@@ -127,11 +128,12 @@ function EffectForm({ room, creature, sources, send }: { room: Snapshot; creatur
 /** Saves waiting to be rolled by this seat: repeat saves and Concentration checks. */
 export function PendingSaves({ room, send }: { room: Snapshot; send: Send }) {
   const dm = room.me.role === 'dm'
+  const movable = useMovable('pending-saves')
   const pool: { id: string; name: string; effects?: Effect[] }[] = dm ? room.publicActors : room.actors
   const waiting = pool.flatMap(creature => (creature.effects ?? []).filter(effect => effect.pending).map(effect => ({ creature, effect })))
   if (!waiting.length) return null
-  return <section className="pending-saves" aria-label="รอทอยเซฟ">
-    <h2>รอทอยเซฟ · {waiting.length}</h2>
+  return <section className="pending-saves" aria-label="รอทอยเซฟ" {...movable}>
+    <h2><MoveHandle id="pending-saves" label="การ์ดรอทอยเซฟ" />รอทอยเซฟ · {waiting.length}</h2>
     {waiting.map(({ creature, effect }) => <div key={effect.id} className="pending-save">
       <span><b>{creature.name}</b><small>{effect.pending!.ability} save DC {effect.pending!.dc} · {effect.pending!.reason === 'concentration' ? 'Concentration' : effectName(effect)}{effect.sourceLabel ? ' (' + effect.sourceLabel + ')' : ''}</small></span>
       <button type="button" className="primary" onClick={() => void send({ type: 'effectSave', actorId: creature.id, effectId: effect.id })}>ทอย</button>

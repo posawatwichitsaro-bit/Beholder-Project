@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Pin, PinOff, X } from 'lucide-react'
 import type { PanelId } from './panelRegistry.ts'
+import { MoveHandle, useMovable } from '../../ui/index.ts'
 import { panelIcons, panelTabs } from './panelIcons.tsx'
 
 export type DockItem = { id: PanelId; title: string; body: ReactNode }
@@ -13,9 +14,11 @@ export type DockItem = { id: PanelId; title: string; body: ReactNode }
 export function Dock({ items, pinned, pin, close }: {
   items: DockItem[]; pinned: PanelId | null; pin: (id: PanelId) => void; close: (id: PanelId) => void
 }) {
-  return <aside className="table-drawer panel hud-dock" id="table-drawer" aria-label="แผงเครื่องมือ" hidden={!items.length} data-count={items.length}>
+  const movable = useMovable('dock')
+  return <aside className="table-drawer panel hud-dock" id="table-drawer" aria-label="แผงเครื่องมือ" hidden={!items.length} data-count={items.length} {...movable}>
     {items.map(item => <section key={item.id} className="hud-dock-panel" aria-label={item.title} style={{ '--_tab': panelTabs[item.id] } as CSSProperties}>
       <header className="hud-dock-head">
+        {item === items[0] && <MoveHandle id="dock" label="แผงเครื่องมือ" />}
         <span aria-hidden="true" className="hud-dock-icon">{panelIcons[item.id]}</span>
         <h2>{item.title}</h2>
         <button type="button" className="hud-dock-action" aria-pressed={pinned === item.id}

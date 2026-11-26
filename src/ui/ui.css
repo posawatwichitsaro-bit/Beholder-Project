@@ -194,3 +194,13 @@
 }
 .empty .bh-empty b { font-size: var(--bh-text-xl); }
 .empty .bh-empty p { text-shadow: none; font-size: var(--bh-text-md); }
+
+/* ---------- Movable HUD pieces ---------- */
+.move-handle { display: inline-grid; place-items: center; flex: none; width: 20px; min-width: 20px; height: 24px; min-height: 0; padding: 0;
+  border: 0; border-radius: 4px; background: transparent; color: var(--bh-text-muted); cursor: grab; touch-action: none; }
+.move-handle:hover, .move-handle:focus-visible { color: var(--bh-brass-bright); background: #ffffff10; }
+[data-movable][data-moving] { transition: none !important; opacity: .92; }
+[data-movable][data-moving] .move-handle { cursor: grabbing; }
+.bh-on-parchment .move-handle, .pending-saves .move-handle, .damage-queue .move-handle { color: var(--bh-ink-muted); }
+.pending-saves h2 { display: flex; align-items: center; gap: 4px; }
+.combat-panel > header { align-items: center; }

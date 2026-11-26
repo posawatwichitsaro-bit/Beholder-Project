@@ -738,6 +738,89 @@ test('a player clicks a monster to target it and attacks from the token bar; the
   assert.equal(await picker.inputValue(), bandit, 'the sheet follows the board target')
 })
 
+test('0.06: dice pool, signed quick HP, box selection, encounter end, and a movable UI that resets', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  page.setDefaultTimeout(10000)
+  const opened = await page.request.post(base + '/api/rooms', { data: { name: 'Release 0.06', member: 'DM' } })
+  const room: Snapshot = await opened.json()
+  const path = base + '/api/rooms/' + room.id
+  const state = async () => (await (await page.request.get(path)).json()) as Snapshot
+  const command = async (body: Record<string, unknown>) => {
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: (await state()).revision } })
+    assert.equal(response.status(), 200, await response.text())
+  }
+  await command({ type: 'scene', name: 'Yard', cell: 48, originX: 0, originY: 0 })
+  const sceneId = (await state()).scenes[0].id
+  for (const [name, x] of [['Rat', 2], ['Bat', 3]] as const) {
+    await command({ type: 'place', sceneId, kind: 'monster', sheet: { ...blankSheet('monster'), name, hp: 20, maxHp: 20 }, x, y: 2 })
+  }
+  await page.goto(base + '/room/' + room.id)
+  await page.getByRole('button', exact('เมนูโต๊ะ')).waitFor()
+
+  // Dice: tap d6, d6, d4 and the modifier, then roll the whole pool.
+  await openPanel(page, 'ลูกเต๋า')
+  for (const die of ['d6', 'd6', 'd4']) await page.getByRole('button', exact('เพิ่ม ' + die)).click()
+  await page.getByRole('button', exact('เพิ่มตัวปรับ')).click()
+  await page.getByRole('button', exact('ทอย 2d6+1d4+1')).click()
+  await page.waitForFunction(async url => (await (await fetch(url)).json()).rolls.some((roll: { formula: string; faces: number[] }) => roll.formula === '2d6+1d4+1' && roll.faces.length === 3), path)
+  await page.getByRole('button', exact('d20 Advantage')).click()
+  await page.waitForFunction(async url => (await (await fetch(url)).json()).rolls.some((roll: { label: string; faces: number[] }) => roll.label.endsWith('Advantage') && roll.faces.length === 2), path)
+  await page.keyboard.press('Escape')
+
+  // Press and hold on empty map, then drag around both monsters: a selection box.
+  const canvas = page.locator('canvas')
+  const frame = (await canvas.boundingBox())!
+  const cellAt = (x: number, y: number) => ({ x: frame.x + 36 + x * 48, y: frame.y + 36 + y * 48 })
+  const from = cellAt(1.2, 1.2)
+  const to = cellAt(4.8, 3.6)
+  await page.mouse.move(from.x, from.y)
+  await page.mouse.down()
+  await page.waitForTimeout(400)
+  await page.mouse.move(to.x, to.y, { steps: 6 })
+  await page.mouse.up()
+  await page.getByRole('status').filter({ hasText: 'เลือก 2 Token' }).waitFor()
+
+  // Quick HP from the token bar: -5 is damage, 3 heals.
+  await page.keyboard.press('Escape')
+  const rat = cellAt(2.5, 2.5)
+  await page.mouse.click(rat.x, rat.y)
+  const quick = page.getByLabel('ปรับ HP ของ Rat')
+  await quick.fill('-5')
+  await quick.press('Enter')
+  await page.waitForFunction(async url => (await (await fetch(url)).json()).actors.find((actor: { name: string }) => actor.name === 'Rat')?.hp === 15, path)
+  await quick.fill('3')
+  await quick.press('Enter')
+  await page.waitForFunction(async url => (await (await fetch(url)).json()).actors.find((actor: { name: string }) => actor.name === 'Rat')?.hp === 18, path)
+
+  // Ending a fight shows the encounter-end banner.
+  const s = await state()
+  await command({ type: 'combat', sceneId, participants: s.actors.map(actor => actor.id) })
+  await page.getByRole('complementary', { name: 'Turn Initiative' }).waitFor()
+  await command({ type: 'end', sceneId })
+  await page.getByText('การต่อสู้จบลง', { exact: true }).waitFor()
+
+  // Move the dice tray by its grip; the place survives a reload, and reset puts it back.
+  const tray = page.getByRole('complementary', { name: 'ถาดผลเต๋า' })
+  const before = (await tray.boundingBox())!
+  const grip = (await page.getByRole('button', exact('ย้าย ถาดผลเต๋า')).boundingBox())!
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(grip.x - 200, grip.y - 120, { steps: 8 })
+  await page.mouse.up()
+  const moved = (await tray.boundingBox())!
+  assert.ok(Math.abs(moved.x - (before.x - 200 - grip.width / 2 + grip.width / 2)) < 30 && moved.y < before.y - 80, 'the tray follows the grip')
+  await page.reload()
+  await page.getByRole('button', exact('เมนูโต๊ะ')).waitFor()
+  assert.ok(Math.abs((await tray.boundingBox())!.x - moved.x) < 2, 'the place is kept on this device')
+  await openPanel(page, 'ตั้งค่าการแสดงผล')
+  await page.getByRole('button', exact('รีเซ็ตตำแหน่ง UI')).click()
+  await page.waitForFunction(() => !(document.querySelector('.dice-tray') as HTMLElement).style.translate)
+  await page.keyboard.press('Escape')
+  await page.waitForFunction(x => Math.abs(document.querySelector('.dice-tray')!.getBoundingClientRect().x - x) < 2, before.x)
+})
+
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')

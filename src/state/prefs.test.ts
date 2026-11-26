@@ -9,8 +9,9 @@ test('missing or broken storage gives the defaults', () => {
 })
 
 test('stored settings are kept, and out-of-range or wrong-typed values fall back', () => {
-  assert.deepEqual(readPrefs(JSON.stringify({ sound: false, uiScale: 1.1, reduceMotion: true, showGrid: false, tourSeen: { dm: true } })),
-    { sound: false, uiScale: 1.1, reduceMotion: true, showGrid: false, tourSeen: { dm: true, player: false } })
+  assert.deepEqual(readPrefs(JSON.stringify({ sound: false, uiScale: 1.1, reduceMotion: true, showGrid: false, tourSeen: { dm: true }, layout: { 'dice-tray': { x: -40, y: 12.4 } } })),
+    { sound: false, uiScale: 1.1, reduceMotion: true, showGrid: false, tourSeen: { dm: true, player: false }, layout: { 'dice-tray': { x: -40, y: 12 } } })
+  assert.deepEqual(readPrefs(JSON.stringify({ layout: { 'dock': { x: 1e9, y: 0 }, 'BAD id!': { x: 1, y: 1 }, 'board-tools': { x: 'a', y: 1 } } })).layout, {}, 'bad offsets are dropped')
   const odd = readPrefs(JSON.stringify({ sound: 'no', uiScale: 3, showGrid: 1, tourSeen: 'yes' }))
   assert.equal(odd.sound, true)
   assert.equal(odd.uiScale, 1.25)

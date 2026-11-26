@@ -15,6 +15,7 @@ import { conditionGlyph, rankConditions } from '../../../shared/conditions.ts'
 import { activeConditions } from '../../../shared/effects.ts'
 import type { TokenDragPayload } from './tokenDrag.ts'
 import { usePrefs } from '../../state/prefs.ts'
+import { MoveHandle, useMovable } from '../../ui/index.ts'
 import { ConditionBadges } from '../combat/ConditionBadges.tsx'
 
 type Action = { label: string; run: () => void; disabled?: boolean }
@@ -196,6 +197,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
   const activeArea = areaDraft ?? preview
   const outline = activeArea && validArea(activeArea) ? areaOutline(activeArea) : undefined
   const [effectTime, setEffectTime] = useState(Date.now)
+  const toolsMovable = useMovable('board-tools')
   // Attack animations: a slash for melee, a bolt for ranged, played once per new attack roll.
   const seenRolls = useRef<Set<string> | undefined>(undefined)
   const [strikes, setStrikes] = useState<Strike[]>([])
@@ -691,7 +693,8 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       return <span key={event.id} className="floating-damage" style={{ left: position.x, top: position.y, color }}
         aria-label={'เสีย HP ' + event.amount + ' · ' + label}>−{event.amount}</span>
     })}
-    <div className="board-tools" role="toolbar" aria-label="เครื่องมือกระดาน">
+    <div className="board-tools" role="toolbar" aria-label="เครื่องมือกระดาน" {...toolsMovable}>
+      <MoveHandle id="board-tools" label="แถบเครื่องมือกระดาน" />
       <button aria-label="เลือก Token" aria-pressed={tool === 'token'} onClick={() => setTool('token')} title="เลือกและลาก Token (V) · ลากที่ว่างเพื่อเลื่อนกระดาน · กดค้างแล้วลาก (หรือ Shift+ลาก) เพื่อครอบหลายตัว">
         <MousePointer2 size={16} aria-hidden="true" /><span className="board-tool-label">เลือก Token</span></button>
       <button aria-label="วัดระยะ" aria-pressed={tool === 'measure'} onClick={() => setTool('measure')} title="วัดระยะ (R)">
