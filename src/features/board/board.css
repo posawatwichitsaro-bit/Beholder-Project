@@ -35,9 +35,10 @@
 
 /* Selection bar: actions for the selected token or object */
 .selection-bar {
-  position: absolute; z-index: 2; left: 50%; bottom: 56px; transform: translateX(-50%);
+  position: absolute; z-index: 2; left: 50%; bottom: 16px; transform: translateX(-50%);
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center;
-  max-width: min(760px, calc(100% - 32px)); padding: 6px 8px;
+  /* Leaves room for the dice tray (right) and the turn / main-token buttons (left) on the same row. */
+  max-width: min(760px, max(360px, calc(100% - 660px))); padding: 6px 8px;
   background: var(--bh-parchment); color: var(--bh-ink); border-radius: var(--bh-radius-pill);
   box-shadow: var(--bh-shadow-2); animation: bh-rise var(--bh-medium) var(--bh-ease);
 }

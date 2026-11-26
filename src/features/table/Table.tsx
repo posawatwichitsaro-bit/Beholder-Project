@@ -143,6 +143,12 @@ export function Table({ account, changeAccount }: AccountProps) {
   const send = sendCommand
 
   useRoomConnection(room.id)
+  // Notices fade after a few seconds; errors stay until dismissed.
+  useEffect(() => {
+    if (!notice || error) return
+    const timer = setTimeout(() => { if (!useRoomStore.getState().error) useRoomStore.getState().setNotice('') }, 6000)
+    return () => clearTimeout(timer)
+  }, [notice, error])
   // First visit as this role on this device: show the tour once.
   useEffect(() => { if (!usePrefs.getState().tourSeen[role]) setTouring(true) }, [role])
   function endTour() {
@@ -403,11 +409,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     </>,
     actor: () => actor ? <SheetView key={actor.id} actor={actor} scene={scene} room={room} preferredTarget={attackTarget} chooseTarget={setAttackTarget}
       edit={() => setSheet({ initial: actor, actor })} copy={() => saveToLibrary(actor)}
-      send={async value => {
-        const ok = await send(value)
-        if (ok && (value.type === 'sheetRoll' || value.type === 'castSave')) openPanel('dice', true)
-        return ok
-      }} /> : <EmptyState title="ยังไม่ได้เลือกตัวละคร" hint="เลือกจากชีตในห้อง (T) หรือคลิก Token บนกระดาน" />,
+      send={send} /> : <EmptyState title="ยังไม่ได้เลือกตัวละคร" hint="เลือกจากชีตในห้อง (T) หรือคลิก Token บนกระดาน" />,
     log: () => <AdventureLog room={room} send={send} />,
     dice: () => <>
       <div className="section-head"><h2>ผลทอย</h2></div>
