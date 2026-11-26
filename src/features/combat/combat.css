@@ -98,7 +98,7 @@ label.queue-check { display: inline-flex; align-items: center; gap: 6px; color: 
 .table .sheet-view .condition-options button { display: flex; flex-direction: column; align-items: flex-start; padding: 5px 8px; font-size: var(--bh-text-xs); text-align: start; }
 .condition-options small { font-size: 10px; opacity: .75; }
 .table .sheet-view .condition-options button[aria-pressed=true] { background: #4a2f55; border-color: #4a2f55; color: #f5e6ff; }
-.selection-bar-conditions { padding: 1px 8px; border-radius: var(--bh-radius-pill); background: #4a2f55; color: #f5e6ff; font-size: 11px; }
+.selection-bar-conditions { display: inline-flex; }
 
 /* ---------- Spell slots ---------- */
 .slot-tracker { display: grid; gap: 6px; }
@@ -142,3 +142,28 @@ label.queue-check { display: inline-flex; align-items: center; gap: 6px; color: 
 .rest-stepper { display: inline-flex; gap: 4px; }
 .rest-actions { display: flex; flex-wrap: wrap; gap: var(--bh-space-2); }
 .table .sheet-view .rest-sync { justify-self: start; font-size: var(--bh-text-xs); }
+
+/* Condition marks: dark leather with a brass rim; the icon shape carries the meaning, the name is in the label. */
+.condition-badges { display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; }
+.condition-badge {
+  display: inline-flex; align-items: center; gap: 1px; min-width: 18px; height: 18px; padding: 0 3px; justify-content: center;
+  border-radius: 4px; background: #2a1f18; border: 1px solid var(--bh-brass); color: var(--bh-text-strong);
+  font-size: 10px; font-weight: 700; line-height: 1;
+}
+.condition-more { background: var(--bh-surface-3); }
+.initiative-entry .condition-badges { justify-content: center; }
+.condition-chip svg { flex: none; }
+.condition-options small svg { vertical-align: -1px; }
+
+.condition-panel { width: min(440px, calc(100vw - 24px)); display: grid; gap: var(--bh-space-3); }
+.condition-panel header { display: flex; align-items: center; justify-content: space-between; }
+.condition-panel h2 { margin: 0; font-family: var(--bh-font-heading); }
+.condition-details { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--bh-space-2); }
+.condition-details li { display: grid; grid-template-columns: auto 1fr; gap: var(--bh-space-2); align-items: start; }
+.condition-details-icon {
+  display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px;
+  background: #2a1f18; border: 1px solid var(--bh-brass); color: var(--bh-text-strong);
+}
+.condition-details b { display: block; }
+.condition-details small { display: block; color: var(--bh-ink-muted); font-size: var(--bh-text-xs); line-height: 1.5; }
+.condition-details .condition-effect { color: var(--bh-crimson); font-weight: 700; }
