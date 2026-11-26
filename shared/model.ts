@@ -35,7 +35,8 @@ export type Sheet = {
   attacks?: { name: string; bonus: number; damage: string; damageKind?: DamageKind; notes?: string }[]
   spells: string; slots: string; conditions: string
   portrait?: string
-  monsterReference?: { statBlock: string; page?: number }
+  /** Where a monster sheet came from: the stat block text, its SRD page, and the catalog id / D&D Beyond page when imported from the SRD catalog. */
+  monsterReference?: { statBlock: string; page?: number; id?: string; url?: string }
   inventory?: InventoryItem[]
   itemProficiency?: ItemProficiency
   lootDc?: number

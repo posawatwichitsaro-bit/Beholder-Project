@@ -845,7 +845,8 @@ test('DM searches the SRD, saves a monster template and places the creature with
   await page.goto(base + '/?room=' + room.id)
   await openPanel(page, 'Monster Manual')
   await page.getByLabel('ค้นหาชื่อหรือประเภท').fill('Goblin Warrior')
-  await page.locator('.manual-filters').getByRole('combobox').selectOption('1/4')
+  await page.locator('.manual-filters').getByLabel('กรองตาม CR').selectOption('1/4')
+  await page.locator('.manual-filters').getByLabel('กรองตามประเภท').selectOption('Fey')
   await page.locator('.manual-list button').click()
   await page.getByRole('button', exact('เพิ่มเป็นต้นแบบในห้อง')).click()
   await page.getByRole('button', exact('เพิ่มต้นแบบแล้ว')).waitFor()
@@ -861,6 +862,11 @@ test('DM searches the SRD, saves a monster template and places the creature with
   assert.equal(monster.attack, 4)
   assert.equal(monster.damage, '1d6+2')
   assert.match(monster.monsterReference!.statBlock, /Nimble Escape/)
+  // SRD catalog fields arrive as rollable data, not just text.
+  assert.equal(monster.monsterReference!.id, 'srd-5.2.1:goblin-warrior')
+  assert.deepEqual(monster.skillChecks?.Stealth, { ability: 'DEX', training: 2, adjustment: 0 })
+  assert.equal(monster.attacks?.[1].damageKind, 'piercing')
+  assert.equal(monster.characterDetails?.hitDice, '3d6')
   assert.equal(result.templates[0].sheet.monsterReference?.page, monster.monsterReference!.page)
   assert.equal(result.scenes[0].tokens[0].actorId, monster.id)
 

@@ -1,0 +1,24 @@
+/* Monster Manual detail: ability table, details list, rollable attacks and stat block sections. */
+.manual .manual-filters { grid-template-columns: 1fr 80px 120px; }
+.manual .manual-stats { grid-template-columns: repeat(4, 1fr); }
+.manual table.manual-abilities {
+  display: table; width: 100%; border-collapse: collapse; font-size: var(--bh-text-sm);
+  font-variant-numeric: tabular-nums lining-nums; text-align: center;
+}
+.manual table.manual-abilities th, .manual table.manual-abilities td { padding: 4px 2px; border: 1px solid var(--bh-line); }
+.manual table.manual-abilities thead th { color: var(--bh-brass-bright); font-weight: 600; background: var(--bh-surface-2); }
+.manual table.manual-abilities tbody th { color: var(--bh-text-muted); font-weight: 400; text-align: left; padding-inline: 6px; }
+.manual table.manual-abilities td[data-trained] { color: var(--bh-brass-bright); font-weight: 700; }
+.manual-details { display: grid; gap: 4px; margin: 0; font-size: var(--bh-text-sm); }
+.manual-details div { display: grid; grid-template-columns: 7.5em 1fr; gap: var(--bh-space-2); }
+.manual-details dt { color: var(--bh-text-muted); }
+.manual-details dd { margin: 0; }
+.manual-attacks h3, .manual-section h3 {
+  margin: 0 0 4px; font-family: var(--bh-font-heading); font-size: var(--bh-text-md); color: var(--bh-brass-bright);
+  border-bottom: 1px solid var(--bh-line); padding-bottom: 2px;
+}
+.manual-attacks ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: var(--bh-text-sm); }
+.manual-attacks span { color: var(--bh-text-muted); }
+.manual-section .stat-block { margin: 0; font-size: var(--bh-text-sm); }
+.manual-links { display: flex; flex-wrap: wrap; gap: var(--bh-space-3); margin: 0; }
+@media (max-width: 760px) { .manual .manual-filters { grid-template-columns: 1fr 1fr; } .manual .manual-filters label:first-child { grid-column: 1 / -1; } }
