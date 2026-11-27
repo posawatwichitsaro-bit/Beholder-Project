@@ -179,6 +179,8 @@ export type Scene = {
   damageEvents?: DamageEvent[]; areaEffect?: { area: Area; kind: DamageKind; at: number }
   /** Walls, doors, light, darkness and what each player has explored (see shared/vision.ts). */
   vision?: SceneVision
+  /** Difficult Terrain squares ("x,y"): moving into one costs 5 ft more. */
+  terrain?: string[]
   /** Sent to a player only: what their tokens see on this scene right now, as "x,y" cells. */
   view?: { visible: string[]; dimmed: string[]; darkvision: string[]; explored: string[] }
 }

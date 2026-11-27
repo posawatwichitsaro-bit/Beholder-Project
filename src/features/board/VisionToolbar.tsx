@@ -1,4 +1,4 @@
-import { BrickWall, DoorOpen, Eraser, Eye, Flame, Moon, Sparkles, SunDim } from 'lucide-react'
+import { BrickWall, DoorOpen, Eraser, Eye, Flame, Footprints, Moon, Sparkles, SunDim, Trash2 } from 'lucide-react'
 import type { Member, Scene } from '../../../shared/model.ts'
 import { ambientLabels } from '../../../shared/vision.ts'
 import type { Ambient } from '../../../shared/vision.ts'
@@ -13,6 +13,8 @@ const tools: { id: VisionTool; label: string; hint: string; icon: typeof BrickWa
   { id: 'dark', label: 'ถมมืด', hint: 'ลากระบายช่องที่มืด · Darkvision ยังเห็น และแสงส่องได้', icon: Moon },
   { id: 'magic', label: 'ถมมืดเวท', hint: 'ลากระบายความมืดเวท · Darkvision มองไม่เห็นและแสงธรรมดาส่องไม่ถึง', icon: Sparkles },
   { id: 'clear', label: 'ล้างความมืด', hint: 'ลากเพื่อลบความมืดที่ระบายไว้', icon: SunDim },
+  { id: 'terrain', label: 'Difficult Terrain', hint: 'ลากระบายช่องที่เดินยาก · เดินเข้าแต่ละช่องใช้ 10 ฟุต (ใช้ได้ทุกฉาก ไม่ต้องเปิดระบบมองเห็น)', icon: Footprints },
+  { id: 'terrainClear', label: 'ล้าง Difficult Terrain', hint: 'ลากเพื่อลบ Difficult Terrain', icon: Trash2 },
   { id: 'erase', label: 'ลบผนังหรือแสง', hint: 'คลิกที่เส้นผนัง ประตู หรือแหล่งแสงเพื่อลบ', icon: Eraser }
 ]
 
@@ -25,7 +27,7 @@ export function VisionToolbar({ scene, members, tool, setTool, viewAs, setViewAs
   const enabled = vision?.enabled === true
   const players = members.filter(member => member.role === 'player')
   const current = tools.find(item => item.id === tool)
-  return <div className="vision-tools" role="toolbar" aria-label="เครื่องมือการมองเห็น">
+  return <div className="vision-tools" role="toolbar" aria-label="เครื่องมือฉาก">
     <label className="vision-switch"><input type="checkbox" checked={enabled}
       onChange={event => void command({ type: 'visionSettings', enabled: event.target.checked })} />ระบบมองเห็น</label>
     <select aria-label="แสงของฉาก" value={vision?.ambient ?? 'day'}

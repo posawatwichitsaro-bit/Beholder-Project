@@ -1,5 +1,6 @@
 import type { Actor, Scene } from '../../../shared/model.ts'
 import { actionCount, attacksPerAction, freshUse } from '../../../shared/economy.ts'
+import { hasCondition } from '../../../shared/effects.ts'
 
 type Command = (command: Record<string, unknown>) => Promise<boolean>
 
@@ -28,6 +29,8 @@ export function TurnChips({ actor, scene, command, compact = false }: { actor: A
     {mine && chip('Bonus ' + use.bonus + '/1', use.bonus >= 1, use.bonus > 1, () => set('bonus', use.bonus ? 0 : 1))}
     {chip(use.reaction ? 'Reaction ใช้แล้ว' : 'Reaction', use.reaction, false, () => set('reaction', !use.reaction), 'คืนเมื่อเริ่มเทิร์นของตัวเอง')}
     {mine && chip('Disengage', use.disengaged, false, () => set('disengage', !use.disengaged), 'เดินออกจากระยะเอื้อมโดยไม่โดน Opportunity Attack')}
+    {hasCondition(actor, 'Prone') && <button type="button" className="turn-chip" disabled={!command} title="ใช้ระยะเดินครึ่งหนึ่งของ Speed"
+      onClick={() => void command?.({ type: 'standUp', actorId: actor.id })}>ลุกขึ้น</button>}
     {mine && surge && surge.used < surge.max && <button type="button" className="turn-chip surge" disabled={!command}
       onClick={() => set('surge', true)}>Action Surge</button>}
   </span>

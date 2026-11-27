@@ -1165,8 +1165,8 @@ test('0.09: two players see different parts of a walled map; the DM draws a wall
   await mira.screenshot({ path: '.data/0.09-mira-door-open.png' })
 
   // The DM draws a wall with the tool (two clicks, then right-click to finish) and watches as Mira.
-  await dm.getByRole('button', exact('การมองเห็น')).click()
-  const tools = dm.getByRole('toolbar', { name: 'เครื่องมือการมองเห็น' })
+  await dm.getByRole('button', exact('เครื่องมือฉาก')).click()
+  const tools = dm.getByRole('toolbar', { name: 'เครื่องมือฉาก' })
   await tools.getByRole('button', exact('ผนัง')).click()
   const board = (await dm.locator(boardCanvas).boundingBox())!
   await dm.mouse.click(board.x + 36 + 2 * 48, board.y + 36 + 6 * 48)

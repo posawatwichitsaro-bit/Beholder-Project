@@ -67,6 +67,7 @@ export class PixiBoard {
   private screen = new Container()
   private mapLayer = new Container()
   private areaLayer = new Graphics()
+  private terrainLayer = new Graphics()
   private objectLayer = new Container()
   private tokenLayer = new Container()
   private rulerLayer = new Container()
@@ -98,7 +99,7 @@ export class PixiBoard {
     this.app = app
     this.gridHolder.addChild(this.gridLayer)
     this.fogLayer.addChild(this.fogBorder)
-    this.world.addChild(this.mapLayer, this.gridHolder, this.areaLayer, this.objectLayer, this.tokenLayer, this.fogLayer, this.wallLayer, this.rulerLayer, this.effectLayer)
+    this.world.addChild(this.mapLayer, this.gridHolder, this.terrainLayer, this.areaLayer, this.objectLayer, this.tokenLayer, this.fogLayer, this.wallLayer, this.rulerLayer, this.effectLayer)
     this.screen.addChild(this.boxLayer)
     app.stage.addChild(this.world, this.screen)
     this.effects = new BoardEffects(this.effectLayer)
@@ -506,6 +507,21 @@ export class PixiBoard {
       g.stroke({ width: 3 / zoom, color: '#ffd08a', alpha: .9 })
       for (const p of points) g.circle(p.x, p.y, 4 / zoom).fill('#ffd08a')
     }
+  }
+
+  /** Difficult Terrain: a faint hatch (three diagonal strokes) on each square, plus squares being painted. */
+  setTerrain(cells: string[]) {
+    this.dirty = true
+    const g = this.terrainLayer.clear()
+    const cell = this.grid.cell
+    for (const item of cells) {
+      const [x, y] = item.split(',').map(Number)
+      const left = this.grid.originX + x * cell
+      const top = this.grid.originY + y * cell
+      g.rect(left, top, cell, cell).fill({ color: '#8a6d3b', alpha: .12 })
+      for (const t of [.25, .5, .75]) g.moveTo(left + cell * t, top).lineTo(left, top + cell * t).moveTo(left + cell, top + cell * t).lineTo(left + cell * t, top + cell)
+    }
+    if (cells.length) g.stroke({ width: 1.5 / this.view.zoom, color: '#c9a66b', alpha: .45 })
   }
 
   /** Release images the board no longer shows. */

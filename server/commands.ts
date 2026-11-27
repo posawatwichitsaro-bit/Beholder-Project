@@ -7,7 +7,7 @@ import { d20, deathSave, die, harm, heal, Invalid, parseDice, rollDice, rollPool
 import { center, isNear, structureCover } from './cover.ts'
 import { createRoadsideEncounter } from './encounter.ts'
 import { bonusForCheck, calculatedSheet, commonSkills } from '../shared/characterStats.ts'
-import { formatConditions, formatSlots, parseSlots, tickConditions } from '../shared/conditions.ts'
+import { conditionBase, formatConditions, formatSlots, parseConditions, parseSlots, tickConditions } from '../shared/conditions.ts'
 import { advanceEffects, concentrationDc, d20Penalty, effectName, hasCondition, incapacitating, tiedTo } from '../shared/effects.ts'
 import { hitDiceLeft, hitDieHealing, restedSheet } from '../shared/rest.ts'
 import type { ClassResource, Effect, HitDie as RestDie } from '../shared/model.ts'
@@ -17,7 +17,7 @@ import type { Odds } from '../shared/advantage.ts'
 import { criticalFrom, magicalCunning, monsterXp, srdFeats, srdSubclasses } from '../shared/progression.ts'
 import { key, lightsOf, playerView, seenBy, tokenCenter, tokenSeen, visionOf, wallsForPlayer } from '../shared/vision.ts'
 import type { ActorVision, Ambient, Door, LightSource, SceneVision, Wall } from '../shared/vision.ts'
-import { gridFeet } from '../shared/movement.ts'
+import { gridFeet, moveCost, speedNow } from '../shared/movement.ts'
 import { afterCommand, beforeCommand, isUndoable, undoLast } from './undo.ts'
 import { freshUse, gapBetween, reachOf } from '../shared/economy.ts'
 import type { TurnUse } from '../shared/economy.ts'
@@ -1007,7 +1007,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       if (Math.abs(dx) + Math.abs(dy) !== 1) throw new Invalid('ย้ายได้ทีละหนึ่งช่อง')
       const x = number(token.x + dx, -1000, 1000, .5)
       const y = number(token.y + dy, -1000, 1000, .5)
-      countMove(target, token.actorId, gridFeet(token, { x, y }))
+      countMove(target, token.actorId, moveCost(target, room.actors.find(item => item.id === token.actorId), token, { x, y }))
       opportunities(target, token.actorId, token, { x, y })
       Object.assign(get(target.tokens, token.id), { x, y })
       return {}
@@ -1017,7 +1017,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       const token = get(target.tokens, command.tokenId)
       owns(member, get(room.actors, token.actorId))
       const to = { x: number(command.x, -1000, 1000, .5), y: number(command.y, -1000, 1000, .5) }
-      countMove(target, token.actorId, gridFeet(token, to))
+      countMove(target, token.actorId, moveCost(target, room.actors.find(item => item.id === token.actorId), token, to))
       opportunities(target, token.actorId, { x: token.x, y: token.y }, to)
       Object.assign(token, to)
       return {}
@@ -1033,7 +1033,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
         return { token, x: number(token.x + dx, -1000, 1000, .5), y: number(token.y + dy, -1000, 1000, .5) }
       })
       for (const { token, x, y } of moves) {
-        countMove(target, token.actorId, gridFeet(token, { x, y }))
+        countMove(target, token.actorId, moveCost(target, room.actors.find(item => item.id === token.actorId), token, { x, y }))
         opportunities(target, token.actorId, { x: token.x, y: token.y }, { x, y })
         Object.assign(token, { x, y })
       }
@@ -1532,6 +1532,32 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       if (command.attack !== true) return {}
       if (!target.tokens.some(token => token.actorId === prompt.targetId)) throw new Invalid('เป้าหมายออกจากฉากแล้ว')
       return runCommand(room, member, { type: 'sheetRoll', rollType: 'attack', sceneId: target.id, actorId: prompt.attackerId, targetId: prompt.targetId })
+    }
+    case 'terrain': {
+      // DM paints Difficult Terrain (any scene, vision or not), or clears it.
+      requireDM(member)
+      const target = scene()
+      if (!Array.isArray(command.cells) || command.cells.length > 5000) throw new Invalid('ระบายได้ครั้งละไม่เกิน 5000 ช่อง')
+      const cells = new Set(target.terrain ?? [])
+      for (const cell of command.cells.map(cellKey)) {
+        if (command.mode === 'difficult') cells.add(cell)
+        else if (command.mode === 'clear') cells.delete(cell)
+        else throw new Invalid('เลือกชนิดพื้นที่')
+      }
+      if (cells.size > 40000) throw new Invalid('Difficult Terrain ในฉากมากเกินไป')
+      target.terrain = [...cells]
+      return {}
+    }
+    case 'standUp': {
+      // Prone → standing costs half the creature's Speed this turn (counted, not enforced).
+      const target = board()
+      const creature = actor()
+      owns(member, creature)
+      if (!hasCondition(creature, 'Prone')) throw new Invalid('ตัวนี้ไม่ได้ล้มอยู่')
+      creature.conditions = formatConditions(parseConditions(creature.conditions).filter(item => conditionBase(item.name).base !== 'Prone'))
+      if (creature.effects) creature.effects = creature.effects.filter(effect => effect.condition !== 'Prone')
+      countMove(target, creature.id, Math.floor(speedNow(creature, room.settings?.encumbrance !== false) / 2))
+      return {}
     }
     case 'turnAction': {
       // Owner or DM marks Action / Bonus Action / Reaction / Disengage by hand, or uses Action Surge. Counting only.
