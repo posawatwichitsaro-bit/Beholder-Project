@@ -17,6 +17,8 @@ export function SettingsPanel({ role, replayTour }: { role: Role; replayTour: ()
     [mac ? '⌘ K' : 'Ctrl K', 'ค้นหาคำสั่ง'],
     ...panelsFor(role).filter(panel => panel.shortcut && panel.inRail).map(panel => [panel.shortcut!, panel.label] as [string, string]),
     ...(role === 'dm' ? [['M', 'ห้องเก็บของ DM'] as [string, string]] : [['↑ ↓ ← →', 'ขยับตัวละครหลัก'] as [string, string]]),
+    ['Enter', 'จบเทิร์นของคุณ' + (role === 'dm' ? ' / เทิร์นถัดไป' : '')], ['Tab', 'เลือกเป้าหมายถัดไป (Shift+Tab ย้อน)'], ['1 2 3', 'โจมตีเป้าหมายด้วยการโจมตีหลักและอีกสองแบบ'],
+    ...(role === 'dm' ? [[mac ? '⌘ Z' : 'Ctrl Z', 'ย้อนการเดินหรือการหัก HP ล่าสุด'] as [string, string]] : []),
     ['V', 'เลือกและลาก Token'], ['R', 'วัดระยะ'], ['G', 'แสดงหรือซ่อน Grid'], ['Space + ลาก', 'เลื่อนกระดาน'], ['Esc', 'ปิดแผงและยกเลิก']
   ]
   return <div className="settings-panel">

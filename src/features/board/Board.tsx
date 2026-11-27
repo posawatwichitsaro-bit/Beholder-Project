@@ -27,6 +27,8 @@ import type { VisionTool } from './visionTools.ts'
 import { playerView } from '../../../shared/vision.ts'
 import type { Wall } from '../../../shared/vision.ts'
 import { Eye as EyeIcon } from 'lucide-react'
+import { feetMoved, gridFeet, speedNow } from '../../../shared/movement.ts'
+import { parseConditions, srdConditions } from '../../../shared/conditions.ts'
 import type { ObjectLook, PixiBoard, TokenLook } from './pixiBoard.ts'
 
 /** A token-bar / context command. `roll` makes it a d20 roll with a right-click menu for Advantage or Disadvantage. */
@@ -52,6 +54,8 @@ type Props = {
   gridOverride?: { cell: number; originX: number; originY: number }
   /** Sends a command for this scene: vision tools, doors. */
   command?: (command: Record<string, unknown>) => Promise<boolean>
+  /** A token of yours dropped on an enemy: attack it with your main weapon instead of moving there. */
+  attackDrop?: (attackerId: string, targetId: string) => void
 }
 const objectColors = { container: '#6e5432', prop: '#4b5e58', structure: '#5c5a66', item: '#6a5470' }
 type Mode = 'pan' | 'measure' | 'select' | 'move' | 'area' | 'object' | 'calibrate' | 'paint'
@@ -62,7 +66,7 @@ type Gesture = {
 const editableTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && Boolean(target.closest('input,select,textarea,[contenteditable]'))
 
-export function Board({ room, scene, selected, targetId, select, move, copy, paste, place, placementLabel, mainTokenId, actions, focus, areaKind, preview, onArea, drop, moveObject, calibrate, gridOverride, quickHp, command }: Props) {
+export function Board({ room, scene, selected, targetId, select, move, copy, paste, place, placementLabel, mainTokenId, actions, focus, areaKind, preview, onArea, drop, moveObject, calibrate, gridOverride, quickHp, command, attackDrop }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ x: 640, y: 480 })
   const [camera, setCamera] = useState({ x: 36, y: 36 })
@@ -572,7 +576,14 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       if (validArea(area)) onArea?.(area)
       setAreaDraft(undefined)
     } else if (action?.mode === 'move' && action.delta && (action.delta.x || action.delta.y)) {
-      move(action.tokens.map(token => token.id), action.delta)
+      // One token of yours let go over an enemy: that is an attack, not a move (the token stays put).
+      const dragged = action.tokens.length === 1 ? action.tokens[0] : undefined
+      const landing = dragged && { x: dragged.x + action.delta.x + span(dragged) / 2, y: dragged.y + action.delta.y + span(dragged) / 2 }
+      const foe = dragged && landing && attackDrop ? scene.tokens.find(token => token.id !== dragged.id &&
+        landing.x >= token.x && landing.x < token.x + span(token) && landing.y >= token.y && landing.y < token.y + span(token) &&
+        (dm || !room.actors.some(actor => actor.id === token.actorId))) : undefined
+      if (dragged && foe && attackDrop) attackDrop(dragged.actorId, foe.actorId)
+      else move(action.tokens.map(token => token.id), action.delta)
     } else if (action?.mode === 'object' && action.object && action.delta && (action.delta.x || action.delta.y)) {
       moveObject?.(action.object.id, { x: action.object.x + action.delta.x, y: action.object.y + action.delta.y })
     } else if (action?.mode === 'calibrate' && calibrate) {
@@ -631,6 +642,27 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
   const barActions = showBar ? actions(selectedToken, selectedToken ? { x: selectedToken.x, y: selectedToken.y } : { x: barObject!.x, y: barObject!.y }, barObject) : []
   const barActor = selectedToken && creature(selectedToken)
   const barSheet = selectedToken && room.actors.find(actor => actor.id === selectedToken.actorId)
+  // Movement this turn: feet used against Speed for the creature whose turn it is (shown on its bar and while dragging it).
+  const encumbrance = room.settings?.encumbrance !== false
+  const budget = (token: Token | undefined, extra = 0) => {
+    const sheet = token && room.actors.find(actor => actor.id === token.actorId)
+    if (!token || !sheet || scene.combat?.order[scene.combat.turn]?.actorId !== token.actorId) return undefined
+    const used = feetMoved(scene, token.actorId) + extra
+    return { used, speed: speedNow(sheet, encumbrance) }
+  }
+  const barBudget = budget(selectedToken)
+  const dragging = draft && draft.tokenIds.length === 1 ? scene.tokens.find(token => token.id === draft.tokenIds[0]) : undefined
+  const dragBudget = dragging && draft ? budget(dragging, gridFeet(dragging, { x: dragging.x + draft.delta.x, y: dragging.y + draft.delta.y })) : undefined
+  // One-click conditions on the token bar (the DM, or the token's owner).
+  const [conditionsOpen, setConditionsOpen] = useState(false)
+  useEffect(() => setConditionsOpen(false), [selected])
+  const canCondition = Boolean(command && barSheet && (dm || barSheet.ownerId === room.me.id))
+  function toggleCondition(name: string) {
+    if (!barSheet || !command) return
+    const list = parseConditions(barSheet.conditions)
+    const has = list.some(item => item.name === name)
+    void command({ type: 'conditions', actorId: barSheet.id, conditions: has ? list.filter(item => item.name !== name) : [...list, { name }] })
+  }
 
   useEffect(() => {
     const track = (event: MouseEvent) => { mouse.current = { x: event.clientX, y: event.clientY } }
@@ -743,7 +775,15 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         <b>{barActor?.name ?? barObject?.name}</b>
         {barActor && <span className="selection-bar-hp">{barActor.hp}/{barActor.maxHp} HP{barSheet ? ' · AC ' + barSheet.ac : ''}</span>}
         {barActor && (barActor.conditions || barActor.effects?.length) ? <span className="selection-bar-conditions"><ConditionBadges creature={barActor} max={4} /></span> : null}
+        {barBudget && <span className={'selection-bar-move' + (barBudget.used > barBudget.speed ? ' over' : '')}>เดินแล้ว {barBudget.used}/{barBudget.speed} ฟุต</span>}
       </span>
+      {canCondition && <button type="button" aria-pressed={conditionsOpen} onClick={() => setConditionsOpen(open => !open)}>สภาพ</button>}
+      {canCondition && conditionsOpen && barSheet && <span className="selection-bar-chips" role="group" aria-label={'สภาพของ ' + barSheet.name}>
+        {srdConditions.filter(name => name !== 'Exhaustion').map(name => {
+          const on = parseConditions(barSheet.conditions).some(item => item.name === name)
+          return <button key={name} type="button" className="bh-chip" aria-pressed={on} onClick={() => toggleCondition(name)}>{name}</button>
+        })}
+      </span>}
       {quickHp && barActor && <form className="quick-hp" onSubmit={async event => {
         event.preventDefault()
         const field = event.currentTarget.elements.namedItem('hp') as HTMLInputElement
@@ -753,6 +793,8 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         {...(action.roll ? rollMenuProps(action.roll, { odds: action.odds, title: action.label }) : {})} onClick={action.run}>{action.label}</button>)}
     </div>}
     {place && <div className="placing">{placementLabel ?? 'คลิกช่องเพื่อวาง Token'}</div>}
+    {dragBudget && <div className={'move-budget' + (dragBudget.used > dragBudget.speed ? ' over' : '')} role="status">
+      เดิน {dragBudget.used}/{dragBudget.speed} ฟุต{dragBudget.used > dragBudget.speed ? ' · เกิน Speed' : ''}</div>}
     {selectionCount > 1 && <div className="selection-count" role="status">เลือก {selectionCount} {objectGroup.length ? 'ชิ้น' : 'Token'}</div>}
     <div className="scale">1 ช่อง · 5 ฟุต</div>
   </section>
