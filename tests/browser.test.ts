@@ -598,11 +598,17 @@ test('a dwarf soldier is built with Point Buy and a background, then levels up w
   const sheet = page.getByRole('article', { name: 'ชีต Bram' })
   await sheet.getByRole('button', exact('เลเวลอัป')).click()
   const levelling = page.getByRole('dialog', { name: 'เลเวลอัป · Bram' })
-  await levelling.getByText(/Ability Score Improvement/).waitFor()
+  // Fighter 4 offers an Ability Score Improvement or a feat; pick +2 CON.
+  await levelling.getByText('Ability Score Improvement หรือ Feat', { exact: true }).waitFor()
+  await levelling.getByLabel('Feat หรือ ASI').selectOption('Ability Score Improvement')
+  await levelling.getByLabel('ค่าแรกที่เพิ่ม').selectOption('CON')
   await levelling.getByRole('button', exact('ยืนยันเลเวลอัป')).click()
   await levelling.waitFor({ state: 'hidden' })
   const levelled = ((await (await page.request.get(path)).json()) as Snapshot).actors.find(actor => actor.name === 'Bram')!
-  assert.deepEqual([levelled.classLevel, levelled.maxHp], ['Fighter 4', bram.maxHp + 6 + 2 + 1])
+  assert.equal(levelled.abilities.CON, bram.abilities.CON + 2)
+  assert.deepEqual(levelled.feats, ['Ability Score Improvement'])
+  // CON 15 → 17 (+2 → +3) adds one HP to each earlier level too: the new level (6 + 3 + Dwarf 1) plus 3.
+  assert.deepEqual([levelled.classLevel, levelled.maxHp], ['Fighter 4', bram.maxHp + 6 + 3 + 1 + 3])
 })
 
 test('a character spends a Hit Die, uses a class resource and takes a Long Rest', { timeout: 45000 }, async t => {
@@ -1197,7 +1203,8 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await createScene(dm, 'Vault')
   await one.getByRole('heading', exact('Gate')).waitFor()
   assert.equal(await one.locator('#table-drawer').isVisible(), false, 'no panel covers the map when a player arrives')
-  assert.equal(await one.getByRole('navigation', { name: 'ระบบในห้อง' }).getByRole('button', exact('Monster Manual')).count(), 0, 'players never see DM tools')
+  // Since 0.07 players may place Manual monsters too (as temp tokens); saving templates stays with the DM.
+  assert.equal(await one.getByRole('navigation', { name: 'ระบบในห้อง' }).getByRole('button', exact('Monster Manual')).count(), 1)
   await one.keyboard.press('Control+k')
   await one.getByRole('combobox', exact('ค้นหาคำสั่ง')).fill('ลูกเต๋า')
   await one.keyboard.press('Enter')

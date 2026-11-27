@@ -25,7 +25,7 @@ export function LevelUpDialog({ actor, send, close }: { actor: Actor; send: Send
   const subclass = nextLevel === 3 && !actor.subclass ? srdSubclasses[className] : undefined
   const offersFeat = asiLevel(className, nextLevel)
   const [takeSubclass, setTakeSubclass] = useState(true)
-  const [feat, setFeat] = useState('Ability Score Improvement')
+  const [feat, setFeat] = useState('')
   const [first, setFirst] = useState<Ability>('STR')
   const [second, setSecond] = useState<Ability | ''>('')
   const choices: LevelChoices = {
@@ -74,7 +74,7 @@ export function LevelUpDialog({ actor, send, close }: { actor: Actor; send: Send
       </fieldset>}
       {offersFeat && <fieldset className="level-up-choice">
         <legend>Ability Score Improvement หรือ Feat</legend>
-        <label>เลือก<select value={feat} onChange={event => setFeat(event.target.value)}>
+        <label>เลือก<select aria-label="Feat หรือ ASI" value={feat} onChange={event => setFeat(event.target.value)}>
           <option value="">ยังไม่เลือก (เลือกเองในชีตทีหลัง)</option>
           {featChoices(total).map(entry => <option key={entry.name} value={entry.name}>{entry.name} · {entry.category}</option>)}
         </select></label>
