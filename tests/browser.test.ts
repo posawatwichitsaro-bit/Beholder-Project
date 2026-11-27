@@ -942,6 +942,48 @@ test('0.07: a player sets an SRD item on the map, drops a bag item to the floor,
   assert.ok(!final.scenes[0].objects!.some(object => object.pile))
 })
 
+test('0.07: conditions pick Advantage or Disadvantage on their own, and right-click picks it by hand', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await seat(browser)
+  const mira = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  const room: Snapshot = await (await dm.request.post(base + '/api/rooms', { data: { name: 'Release 0.07 odds', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const state = await (await page.request.get(path)).json() as Snapshot
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: state.revision } })
+    assert.equal(response.status(), 200, await response.text())
+    return (await page.request.get(path)).json() as Promise<Snapshot>
+  }
+  const sceneId = (await command(dm, { type: 'scene', name: 'Bog', cell: 48, originX: 0, originY: 0 })).scenes[0].id
+  assert.equal((await mira.request.post(base + '/api/join', { data: { invite: room.invite, name: 'Mira', role: 'player' } })).status(), 200)
+  const lyra = (await command(mira, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Lyra', conditions: 'Poisoned' } })).actors.find(actor => actor.name === 'Lyra')!
+  await command(mira, { type: 'place', sceneId, actorId: lyra.id, role: 'character', x: 2, y: 2 })
+  await mira.goto(base + '/room/' + room.id)
+  await openPanel(mira, 'ชีตในห้อง')
+  await mira.getByRole('button', exact('Lyra')).click()
+  const sheet = mira.getByRole('article', { name: 'ชีต Lyra' })
+  const lastRoll = async () => ((await (await mira.request.get(path)).json()) as Snapshot).rolls.at(-1)
+
+  // Poisoned: a plain click on a check rolls with Disadvantage and says why.
+  await sheet.getByRole('button', exact('STR check')).click()
+  await mira.waitForFunction(async url => (await (await fetch(url)).json()).rolls.length === 1, path)
+  let roll = (await lastRoll())!
+  assert.equal(roll.faces.length, 2)
+  assert.match(roll.label, /Disadvantage · Poisoned/)
+
+  // Right-click: the menu suggests Disadvantage; picking Advantage overrides it.
+  await sheet.getByRole('button', exact('DEX check')).click({ button: 'right' })
+  const menu = mira.getByRole('menu', { name: /เลือกการทอย/ })
+  await menu.getByRole('menuitem', { name: /Disadvantage.*แนะนำ/ }).waitFor()
+  await menu.getByRole('menuitem', { name: /^Advantage/ }).click()
+  await mira.waitForFunction(async url => (await (await fetch(url)).json()).rolls.length === 2, path)
+  roll = (await lastRoll())!
+  assert.equal(roll.faces.length, 2)
+  assert.match(roll.label, /Advantage \(เลือกเอง\)/)
+  await menu.waitFor({ state: 'detached' })
+})
+
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')

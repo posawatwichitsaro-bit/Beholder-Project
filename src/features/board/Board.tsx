@@ -17,9 +17,13 @@ import type { TokenDragPayload } from './tokenDrag.ts'
 import { usePrefs } from '../../state/prefs.ts'
 import { MoveHandle, useMovable } from '../../ui/index.ts'
 import { ConditionBadges } from '../combat/ConditionBadges.tsx'
+import { rollMenuProps } from '../../ui/index.ts'
+import type { Odds, RollMode } from '../../../shared/advantage.ts'
+import { hasCondition } from '../../../shared/effects.ts'
 import { isMonsterArt, sceneArtByImage } from '../../../shared/catalogArt.ts'
 
-type Action = { label: string; run: () => void; disabled?: boolean }
+/** A token-bar / context command. `roll` makes it a d20 roll with a right-click menu for Advantage or Disadvantage. */
+type Action = { label: string; run: () => void; disabled?: boolean; roll?: (mode: RollMode) => void; odds?: () => Odds | undefined }
 type Props = {
   room: Snapshot; scene: Scene; selected: string; targetId?: string; select: (id: string) => void
   move: (tokenIds: string[], delta: Point) => void; place?: (position: Point) => void
@@ -347,6 +351,8 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       const delta = draft?.tokenIds.includes(token.id) ? draft.delta : undefined
       const position = pixel({ x: token.x + (delta?.x ?? 0), y: token.y + (delta?.y ?? 0) })
       const actor = creature(token)
+      // Invisible: only its owner and the DM still get the token, drawn faint.
+      ctx.globalAlpha = actor && hasCondition(actor, 'Invisible') ? .42 : 1
       const width = grid * span(token)
       const radius = width * .42
       const x = position.x + width / 2
@@ -428,6 +434,7 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         }
       }
     }
+    ctx.globalAlpha = 1
     if (ruler) {
       const center = (point: Point) => pixel({ x: point.x + .5, y: point.y + .5 })
       const start = center(ruler.from)
@@ -803,7 +810,8 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         const field = event.currentTarget.elements.namedItem('hp') as HTMLInputElement
         if (await quickHp(barActor.id, field.value)) field.value = ''
       }}><input name="hp" aria-label={'ปรับ HP ของ ' + barActor.name} placeholder="±HP" inputMode="numeric" title="ใส่ 8 เพื่อรักษา หรือ -15 เพื่อลด HP แล้วกด Enter" /></form>}
-      {barActions.map(action => <button key={action.label} type="button" disabled={action.disabled} onClick={action.run}>{action.label}</button>)}
+      {barActions.map(action => <button key={action.label} type="button" disabled={action.disabled}
+        {...(action.roll ? rollMenuProps(action.roll, { odds: action.odds, title: action.label }) : {})} onClick={action.run}>{action.label}</button>)}
     </div>}
     {place && <div className="placing">{placementLabel ?? 'คลิกช่องเพื่อวาง Token'}</div>}
     {selectionCount > 1 && <div className="selection-count" role="status">เลือก {selectionCount} {objectGroup.length ? 'ชิ้น' : 'Token'}</div>}

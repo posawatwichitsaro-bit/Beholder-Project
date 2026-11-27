@@ -9,6 +9,7 @@ import { ConditionBadges } from './ConditionBadges.tsx'
 import { usePrefs } from '../../state/prefs.ts'
 import { playTurnSound } from '../dice/sound.ts'
 import { MoveHandle, useMovable } from '../../ui/index.ts'
+import { hasCondition } from '../../../shared/effects.ts'
 import type { Send } from '../../state/useCommand.ts'
 
 /**
@@ -59,16 +60,17 @@ export function InitiativeBar({ scene, room, focus, send }: {
         const upNext = !active && next?.turn === index
         const tokenIndex = scene.tokens.findIndex(token => token.actorId === actorId)
         const side = actor.kind === 'monster' ? 'foe' : 'ally'
+        const unseen = hasCondition(actor, 'Invisible')
         return <li key={actorId}>
           <button type="button" aria-current={active ? 'step' : undefined} disabled={tokenIndex < 0} onClick={() => focus(actorId)}
             className={'initiative-entry' + (actor.hp === 0 ? ' turn-down' : '') + (owned.has(actorId) && !dm ? ' mine' : '')}
             style={{ '--_rim': side === 'foe' ? 'var(--bh-crimson)' : 'var(--bh-hp-ally)' } as CSSProperties}
-            aria-label={tokenIndex < 0 ? actor.name + ' · ไม่มี Token ในฉาก' : 'ไปที่ Token ' + actor.name}
+            aria-label={tokenIndex < 0 ? actor.name + (unseen ? ' · มองไม่เห็น' : ' · ไม่มี Token ในฉาก') : 'ไปที่ Token ' + actor.name}
             title={actor.name + ' · Initiative ' + initiative + ' · HP ' + actor.hp + '/' + actor.maxHp}>
             <span className="initiative-tag" aria-hidden="true">{active ? 'กำลังเล่น' : upNext ? 'ถัดไป' : ''}</span>
             <span className="initiative-portrait" aria-hidden="true">{actor.portrait ? <img src={actor.portrait} alt="" /> : tokenInitials(actor.name)}</span>
             <HpBar hp={actor.hp} max={actor.maxHp} side={side} label={'HP ของ ' + actor.name} height={4} />
-            <span className="initiative-name">{actor.name}</span>
+            <span className="initiative-name">{actor.name}{unseen && <small className="initiative-unseen"> · มองไม่เห็น</small>}</span>
             {(actor.conditions || actor.effects?.length) ? <ConditionBadges creature={actor} max={2} size={11} /> : null}
             <b className="initiative-score">{initiative}</b>
           </button>

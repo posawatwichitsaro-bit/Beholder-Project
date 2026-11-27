@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Minus, Plus, RotateCcw } from 'lucide-react'
 import type { Roll } from '../../../shared/model.ts'
 import type { Send } from '../../state/useCommand.ts'
+import { rollMenuProps } from '../../ui/index.ts'
 import { composeFormula } from './dicePool.ts'
 
 const sizes = [4, 6, 8, 10, 12, 20, 100] as const
@@ -26,10 +27,13 @@ export function DiceRoller({ send, rolls, me }: { send: Send; rolls: Roll[]; me:
     if (await send({ type: 'roll', formula: value, ...extra })) clear()
   }
 
+  const d20 = '1d20' + (modifier ? (modifier > 0 ? '+' : '') + modifier : '')
+  // Right-click (or hold) a d20 to roll it at once with Advantage or Disadvantage.
+  const d20Menu = rollMenuProps(mode => void roll(d20, mode === 'advantage' ? { advantage: true } : mode === 'disadvantage' ? { disadvantage: true } : undefined), { title: 'd20' })
   return <div className="dice-roller">
     <div className="dice-pool" role="group" aria-label="เลือกลูกเต๋า">
       {sizes.map(sides => <div key={sides} className="dice-pick" data-active={pool[sides] ? 'true' : undefined}>
-        <button type="button" className="dice-face" aria-label={'เพิ่ม d' + sides} onClick={() => add(sides, 1)}>
+        <button type="button" className="dice-face" aria-label={'เพิ่ม d' + sides} {...(sides === 20 ? d20Menu : {})} onClick={() => add(sides, 1)}>
           <span>d{sides}</span>{pool[sides] ? <b>×{pool[sides]}</b> : null}
         </button>
         {pool[sides] ? <button type="button" className="dice-less" aria-label={'ลด d' + sides} onClick={() => add(sides, -1)}><Minus size={12} aria-hidden="true" /></button> : null}
@@ -43,7 +47,7 @@ export function DiceRoller({ send, rolls, me }: { send: Send; rolls: Roll[]; me:
     </div>
     <button type="button" className="primary dice-go" disabled={!formula} onClick={() => void roll(formula)}>{formula ? 'ทอย ' + formula : 'แตะลูกเต๋าเพื่อเลือก'}</button>
     <div className="dice-quick" role="group" aria-label="ทอย d20 ทันที">
-      <button type="button" onClick={() => void roll('1d20' + (modifier ? (modifier > 0 ? '+' : '') + modifier : ''))}>d20</button>
+      <button type="button" {...d20Menu} onClick={() => void roll(d20)}>d20</button>
       <button type="button" onClick={() => void roll('1d20' + (modifier ? (modifier > 0 ? '+' : '') + modifier : ''), { advantage: true })}>d20 Advantage</button>
       <button type="button" onClick={() => void roll('1d20' + (modifier ? (modifier > 0 ? '+' : '') + modifier : ''), { disadvantage: true })}>d20 Disadvantage</button>
     </div>

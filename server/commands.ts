@@ -8,10 +8,12 @@ import { center, isNear, structureCover } from './cover.ts'
 import { createRoadsideEncounter } from './encounter.ts'
 import { bonusForCheck, calculatedSheet, commonSkills } from '../shared/characterStats.ts'
 import { formatConditions, formatSlots, parseSlots, tickConditions } from '../shared/conditions.ts'
-import { advanceEffects, concentrationDc, d20Penalty, effectName, incapacitating, tiedTo } from '../shared/effects.ts'
+import { advanceEffects, concentrationDc, d20Penalty, effectName, hasCondition, incapacitating, tiedTo } from '../shared/effects.ts'
 import { hitDiceLeft, hitDieHealing, restedSheet } from '../shared/rest.ts'
 import type { ClassResource, Effect, HitDie as RestDie } from '../shared/model.ts'
 import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared/characterStats.ts'
+import { attackOdds, chooseMode, chosenMode, rollOdds } from '../shared/advantage.ts'
+import type { Odds } from '../shared/advantage.ts'
 import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
 export class Forbidden extends Error {}
@@ -372,6 +374,11 @@ export function snapshot(room: Room, me: Member): Snapshot {
     } : object)
   }))
   const visible = new Set(scenes.flatMap(scene => scene.tokens.map(token => token.actorId)))
+  // Invisible creatures leave the map for other players: no token, so no position. They still show in the turn order.
+  if (!dm) {
+    const unseen = new Set(room.actors.filter(actor => actor.ownerId !== me.id && !actor.temp && hasCondition(actor, 'Invisible')).map(actor => actor.id))
+    if (unseen.size) for (const scene of scenes) scene.tokens = scene.tokens.filter(token => !unseen.has(token.actorId))
+  }
   const rolls = visibleRolls(room, me)
   const active = scenes.find(scene => scene.id === room.activeSceneId)
   return {
@@ -1011,8 +1018,12 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
     case 'sheetRoll': {
       const creature = actor()
       owns(member, creature)
-      const advantage = command.advantage === true
-      const disadvantage = command.disadvantage === true
+      // Left click lets the conditions decide; the right-click menu (or the old toggles) is the roller's own choice.
+      const chosen = chosenMode(command)
+      const decide = (odds: Odds) => {
+        const { mode, note } = chooseMode(odds, chosen)
+        return { advantage: mode === 'advantage', disadvantage: mode === 'disadvantage', note: note ? ' · ' + note : '' }
+      }
       const rollType = command.rollType
       const weapon = command.weaponIndex === undefined ? undefined : creature.attacks?.[number(command.weaponIndex, 0, 19)]
       if (command.weaponIndex !== undefined && !weapon) throw new Invalid('รายการโจมตีเปลี่ยนแล้ว')
@@ -1041,11 +1052,13 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
         if (cover === 99) throw new Invalid('เป้าหมายอยู่หลังที่กำบังเต็ม')
         // Spend the slot only once the attack is valid (target in scene, not behind full cover).
         if (rollType === 'spellAttack') spendSlot(creature, command.slotLevel)
-        const hitRoll = d20((rollType === 'attack' ? weapon?.bonus ?? creature.attack : creature.spellAttack) + d20Penalty(creature), advantage, disadvantage)
+        const adjacent = isNear(tokenOf(creature.id), creature, { ...tokenOf(victim.id), width: sizes[victim.size], height: sizes[victim.size] })
+        const odds = decide(attackOdds(creature, victim, adjacent))
+        const hitRoll = d20((rollType === 'attack' ? weapon?.bonus ?? creature.attack : creature.spellAttack) + d20Penalty(creature), odds.advantage, odds.disadvantage)
         const critical = hitRoll.natural === 20
         const hit = critical || (hitRoll.natural !== 1 && hitRoll.total >= victim.ac + cover)
         const context = { sceneId: target.id, sourceId: creature.id, targetId: victim.id }
-        saveRoll((weapon?.name ?? rollType) + ' · ' + creature.name, hitRoll, { ...context, outcome: critical ? 'คริติคัล' : hit ? 'โดน' : 'พลาด' })
+        saveRoll((weapon?.name ?? rollType) + ' · ' + creature.name + odds.note, hitRoll, { ...context, outcome: critical ? 'คริติคัล' : hit ? 'โดน' : 'พลาด' })
         if (!hit) return {}
         const receipt = saveRoll('Damage · ' + victim.name, rollDice(rollType === 'attack' ? weapon?.damage ?? creature.damage : text(command.formula), die, critical), {
           ...context, applied: false, critical, damageKind: rollType === 'attack'
@@ -1061,7 +1074,10 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
         }
         return receipt
       }
-      if (rollType === 'initiative') return saveRoll('Initiative · ' + creature.name, d20(creature.initiative + d20Penalty(creature), advantage, disadvantage))
+      if (rollType === 'initiative') {
+        const odds = decide(rollOdds(creature, 'initiative'))
+        return saveRoll('Initiative · ' + creature.name + odds.note, d20(creature.initiative + d20Penalty(creature), odds.advantage, odds.disadvantage))
+      }
       if (rollType !== 'check' && rollType !== 'save') throw new Invalid('ประเภทการทอยไม่ถูกต้อง')
       if (!abilities.includes(command.ability as typeof abilities[number])) throw new Invalid('เลือกค่าความสามารถ')
       const ability = command.ability as typeof abilities[number]
@@ -1069,7 +1085,10 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
       const trained = rollType === 'save' ? creature.savingThrows?.[ability] : skill ? creature.skillChecks?.[skill] : undefined
       const score = skill && rollType === 'check' ? commonSkills[skill] : ability
       const bonus = trained ? bonusForCheck(creature, trained) : modifier(creature.abilities[score]) + (command.proficient === true ? creature.proficiency : 0)
-      return saveRoll((rollType === 'check' && skill ? skill : ability) + ' ' + rollType + ' · ' + creature.name, d20(bonus + d20Penalty(creature), advantage, disadvantage))
+      const checkOdds = rollOdds(creature, rollType, ability)
+      const odds = decide(checkOdds)
+      return saveRoll((rollType === 'check' && skill ? skill : ability) + ' ' + rollType + ' · ' + creature.name + odds.note,
+        d20(bonus + d20Penalty(creature), odds.advantage, odds.disadvantage), checkOdds.autoFail ? { outcome: 'ล้มเหลวอัตโนมัติ (' + checkOdds.autoFail + ')' } : {})
     }
     case 'castSave': {
       const target = active()
@@ -1097,11 +1116,14 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
       const proficient = command.proficient === true ? victim.proficiency : 0
       const saved = victim.savingThrows?.[roll.cast.ability]
       const bonus = saved ? bonusForCheck(victim, saved) : modifier(victim.abilities[roll.cast.ability]) + proficient
-      const result = d20(bonus + d20Penalty(victim), command.advantage === true, command.disadvantage === true)
-      const passed = result.total >= roll.cast.dc
+      const saveOdds = rollOdds(victim, 'save', roll.cast.ability)
+      const decided = chooseMode(saveOdds, chosenMode(command))
+      const result = d20(bonus + d20Penalty(victim), decided.mode === 'advantage', decided.mode === 'disadvantage')
+      const passed = !saveOdds.autoFail && result.total >= roll.cast.dc
       roll.cast.resolved = true
       const context = { sceneId: target.id, sourceId: roll.sourceId, targetId: victim.id }
-      saveRoll('Spell Save · ' + victim.name, result, { ...context, outcome: passed ? 'ผ่าน' : 'พลาด' })
+      saveRoll('Spell Save · ' + victim.name + (decided.note ? ' · ' + decided.note : ''), result,
+        { ...context, outcome: saveOdds.autoFail ? 'พลาดอัตโนมัติ (' + saveOdds.autoFail + ')' : passed ? 'ผ่าน' : 'พลาด' })
       if (roll.cast.damage && (!passed || roll.cast.half)) {
         const damage = rollDice(roll.cast.damage)
         return saveRoll('Spell Damage · ' + victim.name, {
@@ -1286,11 +1308,14 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
       const { ability, dc, reason } = effect.pending
       const trained = creature.savingThrows?.[ability]
       const bonus = (trained ? bonusForCheck(creature, trained) : modifier(creature.abilities[ability])) + d20Penalty(creature)
-      const result = d20(bonus, command.advantage === true, command.disadvantage === true)
-      const passed = result.total >= dc
+      const saveOdds = rollOdds(creature, 'save', ability)
+      const decided = chooseMode(saveOdds, chosenMode(command))
+      const result = d20(bonus, decided.mode === 'advantage', decided.mode === 'disadvantage')
+      const passed = !saveOdds.autoFail && result.total >= dc
       effect.pending = undefined
       const label = reason === 'concentration' ? 'Concentration' : effectName(effect)
-      const receipt = saveRoll(ability + ' save · ' + creature.name + ' · ' + label, result, { outcome: (passed ? 'ผ่าน' : 'พลาด') + ' DC ' + dc, ...(effect.hidden ? { privateTo: member.id } : {}) })
+      const receipt = saveRoll(ability + ' save · ' + creature.name + ' · ' + label + (decided.note ? ' · ' + decided.note : ''), result, {
+        outcome: (saveOdds.autoFail ? 'พลาดอัตโนมัติ (' + saveOdds.autoFail + ')' : passed ? 'ผ่าน' : 'พลาด') + ' DC ' + dc, ...(effect.hidden ? { privateTo: member.id } : {}) })
       if (reason === 'concentration' && !passed) breakConcentration(room, creature, 'พลาด CON save')
       if (reason === 'repeat' && passed) {
         creature.effects = (creature.effects ?? []).filter(entry => entry.id !== effect.id)

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowBigUpDash, Copy, HeartPulse, Pencil, Shield, Footprints, Sparkles, Swords, Zap } from 'lucide-react'
-import { abilities } from '../../../shared/model.ts'
+import { abilities, sizes } from '../../../shared/model.ts'
 import type { Ability, Actor, Scene, Snapshot } from '../../../shared/model.ts'
 import { abilityModifier, bonusForCheck, commonSkills } from '../../../shared/characterStats.ts'
 import type { Skill } from '../../../shared/characterStats.ts'
@@ -12,6 +12,9 @@ import { SlotTracker } from './SlotTracker.tsx'
 import { parseSlots } from '../../../shared/conditions.ts'
 import { LevelUpDialog } from './LevelUpDialog.tsx'
 import { carryingLoad } from '../../../shared/encumbrance.ts'
+import { attackOdds, rollOdds, withinReach } from '../../../shared/advantage.ts'
+import type { RollMode } from '../../../shared/advantage.ts'
+import { rollMenuProps } from '../../ui/index.ts'
 import { RestPanel } from './RestPanel.tsx'
 
 type Tab = 'overview' | 'actions' | 'spells' | 'rest' | 'inventory' | 'notes'
@@ -54,13 +57,29 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
   const [slotLevel, setSlotLevel] = useState<number>()
   const lowest = slotLevels.find(slot => slot.left > 0)?.level ?? 0
   const castLevel = slotLevel !== undefined && (slotLevel === 0 || slotLevels.some(slot => slot.level === slotLevel && slot.left > 0)) ? slotLevel : lowest
-  function roll(rollType: string, extra: { ability?: Ability; skill?: Skill; weaponIndex?: number; slotLevel?: number } = {}) {
+  type RollExtra = { ability?: Ability; skill?: Skill; weaponIndex?: number; slotLevel?: number }
+  /** A sheet roll. `chosen` comes from the right-click menu; otherwise the Mode toggle, else the conditions decide. */
+  function roll(rollType: string, extra: RollExtra = {}, chosen?: RollMode) {
     void send({
       type: 'sheetRoll', rollType, actorId: actor.id, sceneId: scene?.id, targetId,
       ability: extra.ability ?? 'STR', skill: extra.skill, weaponIndex: extra.weaponIndex, slotLevel: extra.slotLevel || undefined,
-      advantage: mode === 'advantage', disadvantage: mode === 'disadvantage', proficient, cover, formula: spellDamage
+      ...(chosen ? { rollMode: chosen } : { advantage: mode === 'advantage', disadvantage: mode === 'disadvantage' }),
+      proficient, cover, formula: spellDamage
     })
   }
+  /** What the conditions suggest for this roll, shown in the right-click menu. */
+  function oddsFor(rollType: string, ability?: Ability) {
+    if (rollType === 'attack' || rollType === 'spellAttack') {
+      const target = room.publicActors.find(item => item.id === targetId)
+      const mine = scene?.tokens.find(token => token.actorId === actor.id)
+      const theirs = scene?.tokens.find(token => token.actorId === targetId)
+      const reach = Boolean(mine && theirs && target && withinReach(mine, sizes[actor.size], theirs, sizes[target.size]))
+      return attackOdds(actor, target, reach)
+    }
+    return rollOdds(actor, rollType === 'initiative' ? 'initiative' : rollType === 'save' ? 'save' : 'check', ability)
+  }
+  const menu = (rollType: string, extra: RollExtra = {}) =>
+    rollMenuProps(chosen => roll(rollType, extra, chosen), { odds: () => oddsFor(rollType, extra.ability), title: actor.name })
   const saveBonus = (key: Ability) => {
     const saved = actor.savingThrows?.[key]
     return saved ? bonusForCheck(actor, saved) : abilityModifier(actor.abilities[key])
@@ -121,7 +140,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
         <HpBar hp={actor.hp} max={actor.maxHp} temp={actor.tempHp} side={actor.kind === 'monster' ? 'foe' : 'ally'} label={'HP ของ ' + actor.name} surface="parchment" height={10} />
       </div>
       <div className="sheet-stat"><Shield size={14} aria-hidden="true" /><b>{actor.ac}</b><span>AC</span></div>
-      <button type="button" className="sheet-stat sheet-rollable" onClick={() => roll('initiative')} aria-label={'ทอย Initiative ' + signed(actor.initiative)}>
+      <button type="button" className="sheet-stat sheet-rollable" {...menu('initiative')} onClick={() => roll('initiative')} aria-label={'ทอย Initiative ' + signed(actor.initiative)}>
         <Zap size={14} aria-hidden="true" /><b>{signed(actor.initiative)}</b><span>Init</span></button>
       <div className="sheet-stat" title={overloaded ? 'แบกเกินพิกัด · Speed ปกติ ' + actor.speed + ' ft' : undefined}><Footprints size={14} aria-hidden="true" /><b className={overloaded ? 'carry-over' : undefined}>{overloaded ? 5 : actor.speed}</b><span>ฟุต</span></div>
       <div className="sheet-stat"><b>{signed(actor.proficiency)}</b><span>Prof</span></div>
@@ -141,20 +160,20 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
           {abilities.map(key => {
             const modifier = abilityModifier(actor.abilities[key])
             return <div className="sheet-ability" key={key}>
-              <button type="button" className="sheet-ability-check" onClick={() => roll('check', { ability: key })} aria-label={key + ' check'}
+              <button type="button" className="sheet-ability-check" {...menu('check', { ability: key })} onClick={() => roll('check', { ability: key })} aria-label={key + ' check'}
                 title={'ทอย ' + key + ' check'}>
                 <span className="sheet-ability-key">{key}</span>
                 <b>{signed(modifier)}</b>
                 <span className="sheet-ability-score">{actor.abilities[key]}</span>
               </button>
-              <button type="button" className="sheet-ability-save" onClick={() => roll('save', { ability: key })} aria-label={key + ' save'}
+              <button type="button" className="sheet-ability-save" {...menu('save', { ability: key })} onClick={() => roll('save', { ability: key })} aria-label={key + ' save'}
                 title={'ทอย ' + key + ' saving throw'}>Save {signed(saveBonus(key))}</button>
             </div>
           })}
         </div>
         <div className="sheet-skills" aria-label="ทักษะ">
           {skills.map(key => <button type="button" key={key} data-trained={actor.skillChecks?.[key] ? 'true' : undefined}
-            onClick={() => roll('check', { ability: commonSkills[key], skill: key })} aria-label={key + ' check'}
+            {...menu('check', { ability: commonSkills[key], skill: key })} onClick={() => roll('check', { ability: commonSkills[key], skill: key })} aria-label={key + ' check'}
             title={key + ' (' + commonSkills[key] + ')' + (actor.skillChecks?.[key] ? ' · ชำนาญ' : '')}>
             <span>{key}<small>{commonSkills[key]}</small></span><b>{signed(skillBonus(key))}</b></button>)}
         </div>
@@ -174,17 +193,17 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
         <div className="sheet-attacks">
           <div className="sheet-attack">
             <span className="sheet-attack-name"><Swords size={14} aria-hidden="true" /> การโจมตีหลัก</span>
-            <button type="button" disabled={!targetId || !onBoard} onClick={() => roll('attack')} aria-label="Attack การโจมตีหลัก">{signed(actor.attack)} โจมตี</button>
+            <button type="button" disabled={!targetId || !onBoard} {...menu('attack')} onClick={() => roll('attack')} aria-label="Attack การโจมตีหลัก">{signed(actor.attack)} โจมตี</button>
             <button type="button" onClick={() => roll('damage')} aria-label="Damage การโจมตีหลัก">{actor.damage}</button>
           </div>
           {attacks.map((attack, index) => <div className="sheet-attack" key={index}>
             <span className="sheet-attack-name"><Swords size={14} aria-hidden="true" /> {attack.name}{attack.notes && <small>{attack.notes}</small>}</span>
-            <button type="button" disabled={!targetId || !onBoard} onClick={() => roll('attack', { weaponIndex: index })} aria-label={'Attack ' + attack.name}>{signed(attack.bonus)} โจมตี</button>
+            <button type="button" disabled={!targetId || !onBoard} {...menu('attack', { weaponIndex: index })} onClick={() => roll('attack', { weaponIndex: index })} aria-label={'Attack ' + attack.name}>{signed(attack.bonus)} โจมตี</button>
             <button type="button" onClick={() => roll('damage', { weaponIndex: index })} aria-label={'Damage ' + attack.name}>{attack.damage}</button>
           </div>)}
         </div>
         {!onBoard && <p className="sheet-note">วาง Token ของตัวละครนี้ในฉากก่อนจึงจะโจมตีได้</p>}
-        <button type="button" className="sheet-wide" onClick={() => roll('initiative')}>ทอย Initiative {signed(actor.initiative)}</button>
+        <button type="button" className="sheet-wide" {...menu('initiative')} onClick={() => roll('initiative')}>ทอย Initiative {signed(actor.initiative)}</button>
       </>}
 
       {tab === 'spells' && <>
@@ -199,7 +218,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
         </select></label>
         <div className="sheet-inline">
           <label>สูตร Spell Damage<input value={spellDamage} onChange={event => setSpellDamage(event.target.value)} /></label>
-          <button type="button" disabled={!targetId} onClick={() => roll('spellAttack', { slotLevel: castLevel })}>Spell Attack</button>
+          <button type="button" disabled={!targetId} {...menu('spellAttack', { slotLevel: castLevel })} onClick={() => roll('spellAttack', { slotLevel: castLevel })}>Spell Attack</button>
         </div>
         <form className="sheet-cast" onSubmit={event => {
           event.preventDefault()

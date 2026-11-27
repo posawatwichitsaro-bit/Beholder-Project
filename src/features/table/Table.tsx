@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { blankSheet, objectDefinition, objectLabels, objectOwner, tokenRoleLabels } from '../../../shared/model.ts'
+import { blankSheet, sizes, objectDefinition, objectLabels, objectOwner, tokenRoleLabels } from '../../../shared/model.ts'
 import type { Actor, InventoryItem, ObjectDefinition, Roll, Scene, Sheet, Snapshot, Template, TokenRole } from '../../../shared/model.ts'
 import type { Area, AreaKind } from '../../../shared/area.ts'
 import { AccountPanel } from '../account/AccountPanel.tsx'
@@ -46,11 +46,13 @@ import { dockReducer, emptyDock } from '../shell/dock.ts'
 import { groupLabels, panelById, panelForShortcut, panelsFor } from '../shell/panelRegistry.ts'
 import type { PanelId, Role } from '../shell/panelRegistry.ts'
 import { api, json } from '../../lib/api.ts'
-import { EmptyState, MoveHandle, useMovable } from '../../ui/index.ts'
+import { EmptyState, MoveHandle, RollMenuHost, useMovable } from '../../ui/index.ts'
 import { readHpChange } from '../combat/hpChange.ts'
 import { currentRoom, roomPath, useRoomStore } from '../../state/roomStore.ts'
 import { refreshRoom, useRoomConnection } from '../../state/connection.ts'
 import { sendCommand } from '../../state/useCommand.ts'
+import { attackOdds, withinReach } from '../../../shared/advantage.ts'
+import type { RollMode } from '../../../shared/advantage.ts'
 import type { Command } from '../../state/useCommand.ts'
 
 type Point = { x: number; y: number }
@@ -194,10 +196,18 @@ export function Table({ account, changeAccount }: AccountProps) {
   const ownedHere = !dm ? room.actors.filter(item => scene?.tokens.some(token => token.actorId === item.id)) : []
   const attacker = ownedHere.find(item => item.id === combat?.order[combat.turn]?.actorId)
     ?? ownedHere.find(item => item.id === mainToken?.actorId) ?? ownedHere[0]
-  function attackWith(target: string, weaponIndex?: number) {
+  function attackWith(target: string, weaponIndex?: number, chosen?: RollMode) {
     if (!attacker) return
     setAttackTarget(target)
-    void commandHere({ type: 'sheetRoll', rollType: 'attack', actorId: attacker.id, targetId: target, weaponIndex })
+    void commandHere({ type: 'sheetRoll', rollType: 'attack', actorId: attacker.id, targetId: target, weaponIndex, ...(chosen ? { rollMode: chosen } : {}) })
+  }
+  /** What conditions say about the attacker hitting this creature (for the roll menu). */
+  function attackOddsAgainst(targetId: string) {
+    const target = room.publicActors.find(item => item.id === targetId)
+    const mine = scene?.tokens.find(token => token.actorId === attacker?.id)
+    const theirs = scene?.tokens.find(token => token.actorId === targetId)
+    if (!attacker || !target) return undefined
+    return attackOdds(attacker, target, Boolean(mine && theirs && withinReach(mine, sizes[attacker.size], theirs, sizes[target.size])))
   }
   const keyboardSceneId = !dm ? scene?.id : undefined
   useEffect(() => {
@@ -595,9 +605,11 @@ export function Table({ account, changeAccount }: AccountProps) {
           const foe = room.publicActors.find(item => item.id === token.actorId && item.kind === 'monster' && item.hp > 0)
           // A player attacks a monster straight from its token: main attack plus up to two more.
           const attackActions = !dm && attacker && foe ? [
-            { label: 'โจมตีด้วย ' + attacker.name + ' (' + signedBonus(attacker.attack) + ')', run: () => attackWith(foe.id) },
+            { label: 'โจมตีด้วย ' + attacker.name + ' (' + signedBonus(attacker.attack) + ')', run: () => attackWith(foe.id),
+              roll: (mode: RollMode) => attackWith(foe.id, undefined, mode), odds: () => attackOddsAgainst(foe.id) },
             ...(attacker.attacks ?? []).slice(0, 2).map((attack, index) => ({
-              label: attack.name + ' (' + signedBonus(attack.bonus) + ')', run: () => attackWith(foe.id, index)
+              label: attack.name + ' (' + signedBonus(attack.bonus) + ')', run: () => attackWith(foe.id, index),
+              roll: (mode: RollMode) => attackWith(foe.id, index, mode), odds: () => attackOddsAgainst(foe.id)
             }))
           ] : []
           return [
@@ -664,6 +676,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       chooseArea={kind => { setAreaPreview(undefined); setAreaKind(kind) }}
       send={commandHere} close={() => setDmCombat(false)}
       advanced={(acting, target) => <ActorActions key={acting.id} actor={acting} room={room} scene={scene} send={commandHere} combatTarget={target} />} />}
+    <RollMenuHost />
     {sending && <div className="send-status" aria-live="polite">กำลังส่ง…{sending > 1 ? ` (${sending})` : ''}</div>}
     {(error || notice) && <div className="toast" role={error ? 'alert' : 'status'}>{error || notice}<button aria-label="ปิดข้อความ" onClick={clearMessages}>×</button></div>}
     {manageOpen && dm && <ManageScreen room={room} send={send} close={() => setManageOpen(false)}
