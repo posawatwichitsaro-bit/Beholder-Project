@@ -87,11 +87,13 @@ async function measure(name: string, act: () => Promise<void>) {
     w.__run += 1
     return w.__frames
   })
-  const gaps = frames.slice(1).map((time, index) => time - frames[index]).sort((a, b) => a - b)
+  const raw = frames.slice(1).map((time, index) => time - frames[index])
+  const worstAt = raw.indexOf(Math.max(...raw))
+  const gaps = [...raw].sort((a, b) => a - b)
   const seconds = (frames.at(-1)! - frames[0]) / 1000
   const result = {
     name, fps: Math.round(frames.length / seconds), p95ms: Math.round(gaps[Math.floor(gaps.length * .95)] * 10) / 10,
-    worstMs: Math.round(gaps.at(-1)! * 10) / 10, frames: frames.length
+    worstMs: Math.round(gaps.at(-1)! * 10) / 10, worstAtMs: Math.round(frames[worstAt] - frames[0]), frames: frames.length
   }
   console.log(JSON.stringify(result))
   return result

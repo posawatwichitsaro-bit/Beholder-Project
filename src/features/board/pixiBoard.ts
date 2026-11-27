@@ -46,7 +46,8 @@ const ink = '#f6e7cc'
 
 export class PixiBoard {
   readonly app: Application
-  private world = new Container()
+  // A render group: panning and zooming change only its transform; the drawing commands inside stay cached.
+  private world = new Container({ isRenderGroup: true })
   private screen = new Container()
   private mapLayer = new Container()
   private areaLayer = new Graphics()
@@ -79,8 +80,23 @@ export class PixiBoard {
     this.screen.addChild(this.boxLayer)
     app.stage.addChild(this.world, this.screen)
     this.effects = new BoardEffects(this.effectLayer)
-    app.ticker.add(() => { this.step(); this.effects.step() })
+    // Render on demand: Pixi normally draws every frame; here a frame is drawn only after a change,
+    // while a token glides or while an effect plays. An idle board then costs nothing (battery on phones).
+    app.ticker.remove(app.render, app)
+    app.ticker.add(() => {
+      const moving = this.step()
+      const playing = this.effects.playing > 0
+      this.effects.step()
+      if (this.dirty || moving || playing) {
+        this.dirty = false
+        app.render()
+      }
+    })
   }
+
+  private dirty = true
+  /** Ask for one frame (the next tick draws it). */
+  invalidate() { this.dirty = true }
 
   private effects: BoardEffects
 
@@ -102,6 +118,7 @@ export class PixiBoard {
   }
 
   resize(size: Point) {
+    this.dirty = true
     this.app.renderer.resize(Math.max(1, size.x), Math.max(1, size.y))
   }
 
@@ -115,6 +132,7 @@ export class PixiBoard {
 
   /** Camera, zoom and grid: moves the world and redraws the screen-space grid lines only. */
   setView(view: View, grid: Grid, transform: BoardTransform, showGrid: boolean, hasMap: boolean, screen: Point) {
+    this.dirty = true
     this.view = view
     this.grid = grid
     this.world.position.set(view.camera.x, view.camera.y)
@@ -132,6 +150,7 @@ export class PixiBoard {
   }
 
   setMap(image?: HTMLImageElement) {
+    this.dirty = true
     this.mapSprite?.destroy()
     this.mapSprite = undefined
     if (!image) return
@@ -153,6 +172,7 @@ export class PixiBoard {
   }
 
   setObjects(list: ObjectLook[]) {
+    this.dirty = true
     const keep = new Set(list.map(item => item.id))
     for (const [id, entry] of this.objects) if (!keep.has(id)) { entry.view.destroy({ children: true }); this.objects.delete(id) }
     list.forEach((item, index) => {
@@ -187,7 +207,7 @@ export class PixiBoard {
         body.addChild(sprite)
       }
     }
-    if (h >= 18 && w >= 18) {
+    if (h * this.detail >= 18 && w * this.detail >= 18) {
       body.addChild(new Graphics().rect(2, Math.max(2, h - 16), w - 4, Math.min(h - 4, 14)).fill({ color: '#150e0b', alpha: .93 }))
       const label = new Text({ text: item.name, style: { fontFamily: sans, fontSize: 11, fill: ink }, resolution: this.textResolution })
       label.anchor.set(.5)
@@ -196,11 +216,12 @@ export class PixiBoard {
       body.addChild(label)
     }
     if (item.selected) view.addChild(new Graphics().rect(1, 1, w - 2, h - 2).stroke({ width: 3 / this.detail, color: '#e0b878' }))
-    if (item.hp && w > 16) view.addChild(hpBar(5, 5, w - 10, item.hp, this.detail))
+    if (item.hp && w * this.detail > 16) view.addChild(hpBar(5, 5, w - 10, item.hp, this.detail))
     return view
   }
 
   setTokens(list: TokenLook[], dragging: Set<string>) {
+    this.dirty = true
     const keep = new Set(list.map(item => item.id))
     for (const [id, entry] of this.tokens) if (!keep.has(id)) { entry.view.destroy({ children: true }); this.tokens.delete(id); this.motion.delete(id) }
     const now = performance.now()
@@ -232,12 +253,15 @@ export class PixiBoard {
   /** Every frame: tweened token positions. Nothing else changes per frame unless an effect is playing. */
   private step() {
     const now = performance.now()
+    let moving = false
     for (const [id, motion] of this.motion) {
       const entry = this.tokens.get(id)
       if (!entry) continue
+      if (now - motion.start < moveMs + 20 && (motion.from.x !== motion.to.x || motion.from.y !== motion.to.y)) moving = true
       const at = this.cellToWorld(this.currentCell(motion, now))
       entry.view.position.set(at.x, at.y)
     }
+    return moving
   }
 
   /** World position of a token's centre right now (mid-tween included), for effects. */
@@ -309,6 +333,7 @@ export class PixiBoard {
 
   /** Area templates, the drop cell, the ruler (world) and selection boxes (screen). */
   setOverlay(overlay: Overlay) {
+    this.dirty = true
     const zoom = this.view.zoom
     const cell = this.grid.cell
     const g = this.areaLayer.clear()
@@ -349,6 +374,7 @@ export class PixiBoard {
   /** An attack between two tokens: a melee swing when adjacent, a bolt from farther away. Skipped when motion is reduced. */
   strike(fromId: string, toId: string, ranged: boolean, outcome: Outcome) {
     if (this.reduceMotion) return
+    this.dirty = true
     const from = this.tokenCenter(fromId)
     const to = this.tokenCenter(toId)
     if (!from || !to) return

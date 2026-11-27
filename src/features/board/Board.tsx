@@ -21,8 +21,7 @@ import type { Odds, RollMode } from '../../../shared/advantage.ts'
 import { hasCondition } from '../../../shared/effects.ts'
 import { isMonsterArt, sceneArtByImage } from '../../../shared/catalogArt.ts'
 import { boardTransform, bounds, pieceAt, piecesIn, rulerFeet } from './geometry.ts'
-import { PixiBoard } from './pixiBoard.ts'
-import type { ObjectLook, TokenLook } from './pixiBoard.ts'
+import type { ObjectLook, PixiBoard, TokenLook } from './pixiBoard.ts'
 
 /** A token-bar / context command. `roll` makes it a d20 roll with a right-click menu for Advantage or Disadvantage. */
 type Action = { label: string; run: () => void; disabled?: boolean; roll?: (mode: RollMode) => void; odds?: () => Odds | undefined }
@@ -233,15 +232,17 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
   const [ready, setReady] = useState(false)
   const reduceMotion = usePrefs(state => state.reduceMotion)
   // Zooming scales the pieces on the GPU; their lines and text are rebuilt for the new zoom once it settles.
-  const [detailZoom, setDetailZoom] = useState(zoom)
+  const [detailZoom, setDetailZoom] = useState(1)
   useEffect(() => {
-    const timer = setTimeout(() => setDetailZoom(zoom), 160)
+    // Detail steps of about 26 % (2^⅓): small zoom changes, or zooming back, never rebuild the pieces.
+    const timer = setTimeout(() => setDetailZoom(2 ** (Math.round(Math.log2(zoom) * 3) / 3)), 160)
     return () => clearTimeout(timer)
   }, [zoom])
   useEffect(() => {
     let cancelled = false
     let created: PixiBoard | undefined
-    PixiBoard.create(canvas.current!, size).then(board => {
+    // PixiJS loads with the first board, not with the lobby.
+    import('./pixiBoard.ts').then(({ PixiBoard }) => PixiBoard.create(canvas.current!, size)).then(board => {
       if (cancelled) { board.destroy(); return }
       created = board
       pixi.current = board
