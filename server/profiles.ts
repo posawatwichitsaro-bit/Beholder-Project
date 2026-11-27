@@ -1,5 +1,6 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import type { Request, Response } from 'express'
+import { passwordMaxLength, passwordMinLength } from '../shared/auth.ts'
 import type { Database, Query } from './store.ts'
 
 const digest = (secret: string) => createHash('sha256').update(secret).digest('hex')
@@ -17,10 +18,10 @@ export function profileSecret(cookie: string, header = '') {
   return secret && /^[a-f0-9]{64}$/.test(secret) ? secret : undefined
 }
 
-export function validPassword(password: unknown, registering: boolean): password is string {
-  if (typeof password !== 'string' || password.length > 256) return false
+export function validPassword(password: unknown): password is string {
+  if (typeof password !== 'string' || password.length > passwordMaxLength * 2) return false
   const length = [...password].length
-  return length >= (registering ? 15 : 8) && length <= 128
+  return length >= passwordMinLength && length <= passwordMaxLength
 }
 
 async function derive(password: string, salt: string, legacy = false) {

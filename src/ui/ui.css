@@ -204,3 +204,16 @@
 .bh-on-parchment .move-handle, .pending-saves .move-handle, .damage-queue .move-handle { color: var(--bh-ink-muted); }
 .pending-saves h2 { display: flex; align-items: center; gap: 4px; }
 .combat-panel > header { align-items: center; }
+
+/* ---------- Commands on their way ---------- */
+.send-status { position: fixed; left: 50%; top: 64px; z-index: 60; transform: translateX(-50%); padding: 4px 12px; border-radius: 999px;
+  background: #0d0a08d9; color: var(--bh-text-muted); font-size: .8rem; pointer-events: none; border: 1px solid #ffffff1a; }
+
+/* ---------- Roll mode menu (right-click / hold a d20 roll) ---------- */
+.roll-menu { position: fixed; z-index: 90; display: grid; min-width: 210px; padding: 4px; border-radius: 8px;
+  background: var(--bh-surface-2, #221b17); border: 1px solid var(--bh-brass, #8a6d3b); box-shadow: 0 10px 28px #0009; }
+.roll-menu button { display: grid; gap: 1px; justify-items: start; text-align: start; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; color: inherit; }
+.roll-menu button:hover, .roll-menu button:focus-visible { background: #ffffff14; }
+.roll-menu button[data-suggested="true"] b { color: var(--bh-brass-bright, #e2c27a); }
+.roll-menu small { color: var(--bh-text-muted); font-size: .75rem; }
+.initiative-unseen { color: var(--bh-text-muted); font-style: italic; }

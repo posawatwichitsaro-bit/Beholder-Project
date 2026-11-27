@@ -51,6 +51,15 @@ export type Sheet = {
   hitDiceSpent?: Partial<Record<HitDie, number>>
   /** Conditions with a source, an end and saves (see shared/effects.ts); plain ones stay in `conditions`. */
   effects?: Effect[]
+  /** Warlock Pact Magic kept apart from `slots` ("L3 2/2"): back on every Short Rest. Older single-class Warlocks keep it in `slots`. */
+  pactSlots?: string
+  /** Magical Cunning used since the last Long Rest. */
+  cunningUsed?: boolean
+  /** Experience points (rooms that level by XP). */
+  xp?: number
+  /** SRD subclass and feats picked when levelling; a few have effects worked out for you (shared/progression.ts). */
+  subclass?: string
+  feats?: string[]
 }
 /**
  * One condition from one source. Poisoned from two sources is two effects shown as one mark;
@@ -77,13 +86,13 @@ export type HitDie = 'd6' | 'd8' | 'd10' | 'd12'
 /** What a Short Rest gives back: all uses, one use, or nothing (Long Rest only). */
 export type ShortRestRecovery = 'all' | 'one' | 'none'
 export type ClassResource = { name: string; max: number; used: number; short: ShortRestRecovery }
-export type Actor = Sheet & { id: string; ownerId: string; templateId?: string; lootResult?: LootResult }
+export type Actor = Sheet & { id: string; ownerId: string; temp?: true; templateId?: string; lootResult?: LootResult }
 export type Template = { id: string; sheet: Sheet }
 export type Library = { name: string; sheets: Template[]; objects: SavedObject[] }
 export type MapAsset = { id: string; mime: string }
 export const tokenRoleLabels = { character: 'Character Token', companion: 'Companion Token' } as const
 export type TokenRole = keyof typeof tokenRoleLabels
-export type Token = { id: string; actorId: string; x: number; y: number; role?: TokenRole }
+export type Token = { id: string; actorId: string; x: number; y: number; role?: TokenRole; copyShared?: boolean }
 export type ItemProficiency = { thievesTools: boolean; sleight: boolean; investigation: boolean; perception: boolean }
 export type LootSkill = 'investigation' | 'perception'
 export type LootResult = { passed: boolean; total: number; searcher: string; found: { name: string; quantity: number }[] }
@@ -92,6 +101,8 @@ export type InventoryItem = {
   quantity?: number; tool?: 'thievesTools'; lootTier?: 'basic' | 'bonus'
   /** Set when the item came from the SRD item catalog: the template id and a few facts shown with it. */
   ref?: string; category?: string; rarity?: string; attunement?: boolean; weight?: number
+  /** A +1/+2/+3 weapon, armor, shield or ammunition: the magic bonus, and the plain catalog item it is made from. */
+  bonus?: number; base?: string
 }
 export type ObjectKind = 'container' | 'prop' | 'structure' | 'item'
 export const objectLabels: Record<ObjectKind, string> = {
@@ -99,6 +110,11 @@ export const objectLabels: Record<ObjectKind, string> = {
 }
 export type SceneObject = {
   id: string; name: string; description: string; image?: string
+  ownerId?: string; temp?: true; copyShared?: boolean
+  /** The full inventory item an `item` object stands for, so picking it up keeps its catalog facts. */
+  item?: InventoryItem
+  /** A pile of dropped things on the floor: removed once it is empty. */
+  pile?: true
   x: number; y: number; width: number; height: number
 } & (
   { kind: 'container'; open: boolean; items: InventoryItem[]; lock?: { dc: number; locked: boolean; tried: string[]; last?: { total: number; passed: boolean } } }
@@ -111,6 +127,10 @@ export type ObjectDefinition = Pick<SceneObject, 'name' | 'description' | 'image
   | { kind: 'item' | 'prop' }
 )
 export type SavedObject = { id: string; definition: ObjectDefinition }
+
+export function objectOwner(object: SceneObject, members: Member[]) {
+  return object.temp ? undefined : object.ownerId ?? members.find(member => member.role === 'dm')?.id
+}
 
 export function objectDefinition(object: SceneObject): ObjectDefinition {
   const { kind, name, description, image, width, height } = object
@@ -133,7 +153,11 @@ export function nextLivingTurn(combat: Combat, isDead: (actorId: string) => bool
     if (!isDead(combat.order[turn].actorId)) return { turn, round: combat.round + Math.floor(step / combat.order.length) }
   }
 }
+/** XP waiting for the DM after a fight: the total from defeated monsters and who fought. */
+export type XpAward = { total: number; actorIds: string[]; at: number }
 export type Scene = {
+  /** XP from the last fight, until the DM shares it out or skips it. */
+  xpAward?: XpAward
   id: string; name: string; cell: number; originX: number; originY: number
   map?: MapAsset; tokens: Token[]; combat?: Combat; objects?: SceneObject[]
   /** Who fought in this scene's last encounter, pre-selected for the next one. */
@@ -162,7 +186,11 @@ export type Room = {
   activeSceneId?: string; scenes: Scene[]; actors: Actor[]; templates: Template[]; rolls: Roll[]
   log?: LogEntry[]
   /** Table rules the DM can switch. autoDamage: a hit applies its damage without waiting for the DM. */
-  settings?: { autoDamage?: boolean }
+  /**
+   * Table rules the DM can switch. autoDamage: a hit applies its damage without waiting for the DM.
+   * encumbrance (on unless false): carrying capacity limits Speed. advancement: level by milestone (default) or by XP.
+   */
+  settings?: { autoDamage?: boolean; encumbrance?: boolean; advancement?: 'milestone' | 'xp' }
 }
 export type Snapshot = Omit<Room, 'invite' | 'dmInvite' | 'actors' | 'members'> & {
   me: Member; members: Member[]; invite?: string; dmInvite?: string; actors: Actor[]

@@ -17,11 +17,18 @@ import type { TokenDragPayload } from './tokenDrag.ts'
 import { usePrefs } from '../../state/prefs.ts'
 import { MoveHandle, useMovable } from '../../ui/index.ts'
 import { ConditionBadges } from '../combat/ConditionBadges.tsx'
+import { rollMenuProps } from '../../ui/index.ts'
+import type { Odds, RollMode } from '../../../shared/advantage.ts'
+import { hasCondition } from '../../../shared/effects.ts'
+import { isMonsterArt, sceneArtByImage } from '../../../shared/catalogArt.ts'
 
-type Action = { label: string; run: () => void; disabled?: boolean }
+/** A token-bar / context command. `roll` makes it a d20 roll with a right-click menu for Advantage or Disadvantage. */
+type Action = { label: string; run: () => void; disabled?: boolean; roll?: (mode: RollMode) => void; odds?: () => Odds | undefined }
 type Props = {
   room: Snapshot; scene: Scene; selected: string; targetId?: string; select: (id: string) => void
   move: (tokenIds: string[], delta: Point) => void; place?: (position: Point) => void
+  copy: (tokenIds: string[], objectIds: string[]) => void
+  paste: (position?: Point) => void
   placementLabel?: string
   mainTokenId?: string
   actions: (token: Token | undefined, position: Point, object?: SceneObject) => Action[]
@@ -60,10 +67,16 @@ function hpBar(ctx: CanvasRenderingContext2D, x: number, y: number, width: numbe
     ctx.fillRect(x, y + 5, width * Math.min(1, temp / maxHp), 2)
   }
 }
+function drawContained(ctx: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, width: number, height: number) {
+  const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight)
+  const w = image.naturalWidth * scale
+  const h = image.naturalHeight * scale
+  ctx.drawImage(image, x + (width - w) / 2, y + (height - h) / 2, w, h)
+}
 const editableTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && Boolean(target.closest('input,select,textarea,[contenteditable]'))
 
-export function Board({ room, scene, selected, targetId, select, move, place, placementLabel, mainTokenId, actions, focus, areaKind, preview, onArea, drop, moveObject, calibrate, gridOverride, quickHp }: Props) {
+export function Board({ room, scene, selected, targetId, select, move, copy, paste, place, placementLabel, mainTokenId, actions, focus, areaKind, preview, onArea, drop, moveObject, calibrate, gridOverride, quickHp }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ x: 640, y: 480 })
   const [camera, setCamera] = useState({ x: 36, y: 36 })
@@ -71,6 +84,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
   const [map, setMap] = useState<HTMLImageElement>()
   const [tool, setTool] = useState<'token' | 'measure'>('token')
   const [group, setGroup] = useState<string[]>([])
+  const [objectGroup, setObjectGroup] = useState<string[]>([])
   const [draft, setDraft] = useState<{ tokenIds: string[]; delta: Point }>()
   const [objectDraft, setObjectDraft] = useState<{ id: string; delta: Point }>()
   const [selectedObject, setSelectedObject] = useState<string>()
@@ -84,6 +98,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
   const menuRef = useRef<HTMLDivElement>(null)
   const gesture = useRef<Gesture | null>(null)
   const pointers = useRef(new Map<number, Point>())
+  const mouse = useRef<Point>(undefined)
   const pinch = useRef<{ a: Point; b: Point; ids: [number, number]; camera: Point; zoom: number } | null>(null)
   const longPress = useRef<ReturnType<typeof setTimeout>>(undefined)
   const spaceHeld = useRef(false)
@@ -115,7 +130,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       if (event.key.toLowerCase() === 'r') setTool('measure')
       if (event.key.toLowerCase() === 'v') setTool('token')
       if (event.key.toLowerCase() === 'g') usePrefs.getState().update({ showGrid: !usePrefs.getState().showGrid })
-      if (event.key === 'Escape') { setGroup([]); setSelectedObject(undefined); setRuler(undefined) }
+      if (event.key === 'Escape') { setGroup([]); setObjectGroup([]); setSelectedObject(undefined); setRuler(undefined) }
     }
     const keyUp = (event: KeyboardEvent) => {
       if (event.key === ' ') { spaceHeld.current = false; setPanning(false) }
@@ -309,9 +324,13 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       const picture = object.image && images.current.get(object.image)
       ctx.save()
       ctx.globalAlpha = destroyed ? .38 : .92
-      ctx.fillStyle = objectColors[object.kind]
-      ctx.fillRect(at.x + 2, at.y + 2, width - 4, height - 4)
-      if (picture && picture.complete && picture.naturalWidth) ctx.drawImage(picture, at.x + 2, at.y + 2, width - 4, height - 4)
+      if (object.image && sceneArtByImage(object.image) && picture && picture.complete && picture.naturalWidth) {
+        drawContained(ctx, picture, at.x + 2, at.y + 2, Math.max(1, width - 4), Math.max(1, height - 4))
+      } else {
+        ctx.fillStyle = objectColors[object.kind]
+        ctx.fillRect(at.x + 2, at.y + 2, width - 4, height - 4)
+        if (picture && picture.complete && picture.naturalWidth) ctx.drawImage(picture, at.x + 2, at.y + 2, width - 4, height - 4)
+      }
       ctx.fillStyle = '#150e0bee'
       ctx.fillRect(at.x + 2, at.y + Math.max(2, height - 16), width - 4, Math.min(height - 4, 14))
       ctx.fillStyle = '#f6e7cc'
@@ -319,7 +338,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       if (height >= 18 && width >= 18) ctx.fillText(object.name, at.x + width / 2, at.y + height - 9, width - 7)
-      if (selectedObject === object.id) {
+      if (selectedObject === object.id || objectGroup.includes(object.id)) {
         ctx.globalAlpha = 1
         ctx.strokeStyle = '#e0b878'
         ctx.lineWidth = 3
@@ -332,16 +351,23 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       const delta = draft?.tokenIds.includes(token.id) ? draft.delta : undefined
       const position = pixel({ x: token.x + (delta?.x ?? 0), y: token.y + (delta?.y ?? 0) })
       const actor = creature(token)
+      // Invisible: only its owner and the DM still get the token, drawn faint.
+      ctx.globalAlpha = actor && hasCondition(actor, 'Invisible') ? .42 : 1
       const width = grid * span(token)
       const radius = width * .42
       const x = position.x + width / 2
       const y = position.y + width / 2
       ctx.beginPath()
       ctx.arc(x, y, radius, 0, Math.PI * 2)
-      ctx.fillStyle = '#2a1f18'
-      ctx.fill()
       const portrait = actor?.portrait && images.current.get(actor.portrait)
-      if (portrait && portrait.complete && portrait.naturalWidth) {
+      const ready = portrait && portrait.complete && portrait.naturalWidth
+      if (ready && actor?.portrait && isMonsterArt(actor.portrait)) {
+        drawContained(ctx, portrait, position.x, position.y, width, width)
+      } else {
+        ctx.fillStyle = '#2a1f18'
+        ctx.fill()
+      }
+      if (ready && actor?.portrait && !isMonsterArt(actor.portrait)) {
         const edge = Math.min(portrait.naturalWidth, portrait.naturalHeight)
         ctx.save()
         ctx.clip()
@@ -408,6 +434,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
         }
       }
     }
+    ctx.globalAlpha = 1
     if (ruler) {
       const center = (point: Point) => pixel({ x: point.x + .5, y: point.y + .5 })
       const start = center(ruler.from)
@@ -445,7 +472,7 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
       ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
     }
-  }, [size, map, camera, zoom, grid, scene, room.publicActors, selected, targetId, mainTokenId, draft, objectDraft, selectedObject, ruler, group, selection, imageRevision, outline, effectTime, dropCell, calibration, showGrid])
+  }, [size, map, camera, zoom, grid, scene, room.publicActors, selected, targetId, mainTokenId, draft, objectDraft, selectedObject, objectGroup, ruler, group, selection, imageRevision, outline, effectTime, dropCell, calibration, showGrid])
 
   function pointer(event: { clientX: number; clientY: number; currentTarget: Element }) {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -470,7 +497,16 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
   function openMenuAt(point: Point) {
     const token = tokenAt(point)
     const object = token ? undefined : objectAt(point)
-    if (token) select(token.actorId)
+    if (token) {
+      select(token.actorId)
+      setSelectedObject(undefined)
+      if (!group.includes(token.id)) { setGroup([token.id]); setObjectGroup([]) }
+    } else if (object && !objectGroup.includes(object.id)) {
+      select('')
+      setGroup([])
+      setObjectGroup([])
+      setSelectedObject(object.id)
+    }
     setMenu({ pixel: point, cell: cell(point), token, object })
   }
   function cancelGesture() {
@@ -517,15 +553,18 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
     if (token) {
       select(token.actorId)
       setSelectedObject(undefined)
+      if (!group.includes(token.id)) { setGroup([token.id]); setObjectGroup([]) }
       mode = canMove(token) ? 'move' : 'pan'
     } else if (object) {
+      select('')
+      setGroup([])
+      setObjectGroup([])
       setSelectedObject(object.id)
-      mode = dm && moveObject ? 'object' : 'pan'
+      mode = (dm || object.temp) && moveObject ? 'object' : 'pan'
     } else if (!pan && !measure && event.shiftKey) mode = 'select'
     const tokens = mode === 'move' && token
       ? group.includes(token.id) ? scene.tokens.filter(item => group.includes(item.id) && canMove(item)) : [token]
       : []
-    if (mode === 'move' && token && !group.includes(token.id)) setGroup([token.id])
     gesture.current = { from: point, camera, mode, tokens, moved: false, token, object }
     if (mode === 'pan' && !pan && !token && !object && tool === 'token' && event.pointerType !== 'touch') {
       // Press and hold on empty map, then drag: a selection box. A quick drag still pans.
@@ -610,16 +649,21 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
       setCalibration(undefined)
     } else if (action?.mode === 'select') {
       const rect = bounds(action.from, pointer(event))
-      const found = rect.width > 3 && rect.height > 3 ? scene.tokens.filter(token => {
-        const at = pixel(token)
-        const width = span(token) * grid
-        return canMove(token) && at.x < rect.x + rect.width && at.x + width > rect.x && at.y < rect.y + rect.height && at.y + width > rect.y
-      }).slice(0, 100) : []
+      const intersects = (piece: Point, width: number, height: number) => {
+        const at = pixel(piece)
+        return rect.width > 3 && rect.height > 3 && at.x < rect.x + rect.width && at.x + width * grid > rect.x &&
+          at.y < rect.y + rect.height && at.y + height * grid > rect.y
+      }
+      const found = scene.tokens.filter(token => intersects(token, span(token), span(token))).slice(0, 100)
+      const objects = (scene.objects ?? []).filter(object => intersects(object, object.width, object.height)).slice(0, 100 - found.length)
       setGroup(found.map(token => token.id))
+      setObjectGroup(objects.map(object => object.id))
+      setSelectedObject(found.length === 0 && objects.length === 1 ? objects[0].id : undefined)
       select(found[0]?.actorId ?? '')
     } else if (action?.mode === 'pan' && !action.moved && !action.token && !action.object && !spaceHeld.current) {
       // A click on empty map clears the selection.
       setGroup([])
+      setObjectGroup([])
       setSelectedObject(undefined)
       select('')
     }
@@ -643,10 +687,45 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
   const selectedToken = scene.tokens.find(token => token.actorId === selected)
   const barObject = !selectedToken && selectedObject ? scene.objects?.find(object => object.id === selectedObject) : undefined
   const barTarget = selectedToken ?? barObject
-  const showBar = Boolean(barTarget && !menu && !place && !areaKind && group.length <= 1 && !draft && !objectDraft)
+  const selectionCount = group.length + objectGroup.length
+  const showBar = Boolean(barTarget && !menu && !place && !areaKind && selectionCount <= 1 && !draft && !objectDraft)
   const barActions = showBar ? actions(selectedToken, selectedToken ? { x: selectedToken.x, y: selectedToken.y } : { x: barObject!.x, y: barObject!.y }, barObject) : []
   const barActor = selectedToken && creature(selectedToken)
   const barSheet = selectedToken && room.actors.find(actor => actor.id === selectedToken.actorId)
+
+  useEffect(() => {
+    const track = (event: MouseEvent) => { mouse.current = { x: event.clientX, y: event.clientY } }
+    const clear = () => { mouse.current = undefined }
+    window.addEventListener('mousemove', track)
+    window.addEventListener('blur', clear)
+    return () => {
+      window.removeEventListener('mousemove', track)
+      window.removeEventListener('blur', clear)
+    }
+  }, [])
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.isComposing || event.altKey || event.shiftKey ||
+        !(event.ctrlKey || event.metaKey) || editableTarget(event.target) || document.querySelector('.scrim') ||
+        window.getSelection()?.isCollapsed === false) return
+      const key = event.key.toLowerCase()
+      if (key === 'c') {
+        const tokenIds = group.length ? group : selectedToken && !selectedObject && !objectGroup.length ? [selectedToken.id] : []
+        const objectIds = objectGroup.length ? objectGroup : selectedObject ? [selectedObject] : []
+        if (!tokenIds.length && !objectIds.length) return
+        event.preventDefault()
+        copy(tokenIds, objectIds)
+      } else if (key === 'v') {
+        event.preventDefault()
+        const point = mouse.current
+        const element = canvas.current
+        const onBoard = point && element && document.elementFromPoint(point.x, point.y) === element
+        paste(onBoard ? cell(pointer({ clientX: point.x, clientY: point.y, currentTarget: element })) : undefined)
+      }
+    }
+    window.addEventListener('keydown', keydown)
+    return () => window.removeEventListener('keydown', keydown)
+  })
 
   return <section className="board">
     <canvas ref={canvas} className={(areaKind || calibrate ? 'drawing-aoe' : '') + (panning ? ' panning' : '') + (tool === 'measure' ? ' measuring' : '')}
@@ -731,10 +810,11 @@ export function Board({ room, scene, selected, targetId, select, move, place, pl
         const field = event.currentTarget.elements.namedItem('hp') as HTMLInputElement
         if (await quickHp(barActor.id, field.value)) field.value = ''
       }}><input name="hp" aria-label={'ปรับ HP ของ ' + barActor.name} placeholder="±HP" inputMode="numeric" title="ใส่ 8 เพื่อรักษา หรือ -15 เพื่อลด HP แล้วกด Enter" /></form>}
-      {barActions.map(action => <button key={action.label} type="button" disabled={action.disabled} onClick={action.run}>{action.label}</button>)}
+      {barActions.map(action => <button key={action.label} type="button" disabled={action.disabled}
+        {...(action.roll ? rollMenuProps(action.roll, { odds: action.odds, title: action.label }) : {})} onClick={action.run}>{action.label}</button>)}
     </div>}
     {place && <div className="placing">{placementLabel ?? 'คลิกช่องเพื่อวาง Token'}</div>}
-    {group.length > 1 && <div className="selection-count" role="status">เลือก {group.length} Token</div>}
+    {selectionCount > 1 && <div className="selection-count" role="status">เลือก {selectionCount} {objectGroup.length ? 'ชิ้น' : 'Token'}</div>}
     <div className="scale">1 ช่อง · 5 ฟุต</div>
   </section>
 }

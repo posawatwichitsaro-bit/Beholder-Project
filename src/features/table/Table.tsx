@@ -1,10 +1,13 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { blankSheet, objectDefinition, objectLabels, tokenRoleLabels } from '../../../shared/model.ts'
-import type { Actor, ObjectDefinition, Roll, Scene, Sheet, Snapshot, Template, TokenRole } from '../../../shared/model.ts'
+import { blankSheet, sizes, objectDefinition, objectLabels, objectOwner, tokenRoleLabels } from '../../../shared/model.ts'
+import type { Actor, InventoryItem, ObjectDefinition, Roll, Scene, Sheet, Snapshot, Template, TokenRole } from '../../../shared/model.ts'
 import type { Area, AreaKind } from '../../../shared/area.ts'
 import { AccountPanel } from '../account/AccountPanel.tsx'
 import { MonsterManual } from '../manual/MonsterManual.tsx'
+import { ItemCatalogPicker } from '../items/ItemCatalogPicker.tsx'
+import { loadMonsterCatalog } from '../manual/catalog.ts'
+import { upgradeFromSrd } from '../../../shared/monsterManual.ts'
 import { Board } from '../board/Board.tsx'
 import { CombatPanel } from '../combat/CombatPanel.tsx'
 import { DamageTypeSelect } from '../combat/CombatEffects.tsx'
@@ -42,12 +45,15 @@ import type { PaletteCommand } from '../shell/commands.ts'
 import { dockReducer, emptyDock } from '../shell/dock.ts'
 import { groupLabels, panelById, panelForShortcut, panelsFor } from '../shell/panelRegistry.ts'
 import type { PanelId, Role } from '../shell/panelRegistry.ts'
-import { api } from '../../lib/api.ts'
-import { EmptyState, MoveHandle, useMovable } from '../../ui/index.ts'
+import { api, json } from '../../lib/api.ts'
+import { EmptyState, MoveHandle, RollMenuHost, useMovable } from '../../ui/index.ts'
 import { readHpChange } from '../combat/hpChange.ts'
 import { currentRoom, roomPath, useRoomStore } from '../../state/roomStore.ts'
 import { refreshRoom, useRoomConnection } from '../../state/connection.ts'
 import { sendCommand } from '../../state/useCommand.ts'
+import { attackOdds, withinReach } from '../../../shared/advantage.ts'
+import type { RollMode } from '../../../shared/advantage.ts'
+import { XpAward } from '../combat/XpAward.tsx'
 import type { Command } from '../../state/useCommand.ts'
 
 type Point = { x: number; y: number }
@@ -83,6 +89,14 @@ export function Table({ account, changeAccount }: AccountProps) {
   const online = useRoomStore(state => state.online)
   const error = useRoomStore(state => state.error)
   const notice = useRoomStore(state => state.notice)
+  // Shown only when a command takes a moment, so quick clicks don't flicker.
+  const pendingCount = useRoomStore(state => state.pending)
+  const [sending, setSending] = useState(0)
+  useEffect(() => {
+    if (!pendingCount) { setSending(0); return }
+    const timer = setTimeout(() => setSending(useRoomStore.getState().pending), 350)
+    return () => clearTimeout(timer)
+  }, [pendingCount])
   const privateRoll = useRoomStore(state => state.privateRoll)
   const { setError, setNotice, clearMessages, setPrivateRoll } = useRoomStore.getState()
   const [dock, dispatchDock] = useReducer(dockReducer, emptyDock)
@@ -111,6 +125,8 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [wizard, setWizard] = useState(false)
   const [tokenPlacement, setPlacing] = useState<TokenPlacement>()
   const [objectPlacement, setObjectPlacement] = useState<{ sceneId: string; definition: ObjectDefinition }>()
+  /** A catalog item waiting for a click on the map (anyone; it lands as a temp item). */
+  const [itemPlacement, setItemPlacement] = useState<{ sceneId: string; item: Omit<InventoryItem, 'id'> }>()
   const [combatTarget, setCombatTarget] = useState('')
   const [cameraFocus, setCameraFocus] = useState<{ actorId: string; sequence: number }>()
   const [areaKind, setAreaKind] = useState<AreaKind>()
@@ -124,12 +140,14 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [manageOpen, setManageOpen] = useState(false)
   const [touring, setTouring] = useState(false)
   const trayMovable = useMovable('dice-tray')
+  const copyingBoard = useRef<Promise<boolean>>(undefined)
   const dm = room.me.role === 'dm'
   const role: Role = dm ? 'dm' : 'player'
   const published = room.scenes.find(item => item.id === room.activeSceneId)
   const scene = (dm && focusScene ? room.scenes.find(item => item.id === focusScene) : undefined) ?? published
   const placingObject = objectPlacement?.sceneId === scene?.id ? objectPlacement?.definition : undefined
   const placing = tokenPlacement?.sceneId === scene?.id ? tokenPlacement : undefined
+  const placingItem = itemPlacement && itemPlacement.sceneId === scene?.id ? itemPlacement.item : undefined
   const mainToken = !dm ? scene?.tokens.find(token => token.role === 'character' && room.actors.some(actor => actor.id === token.actorId)) : undefined
   const editingScene = typeof modal === 'object' ? room.scenes.find(item => item.id === modal.sceneId) : undefined
   const actor = room.actors.find(item => item.id === selected)
@@ -179,10 +197,18 @@ export function Table({ account, changeAccount }: AccountProps) {
   const ownedHere = !dm ? room.actors.filter(item => scene?.tokens.some(token => token.actorId === item.id)) : []
   const attacker = ownedHere.find(item => item.id === combat?.order[combat.turn]?.actorId)
     ?? ownedHere.find(item => item.id === mainToken?.actorId) ?? ownedHere[0]
-  function attackWith(target: string, weaponIndex?: number) {
+  function attackWith(target: string, weaponIndex?: number, chosen?: RollMode) {
     if (!attacker) return
     setAttackTarget(target)
-    void commandHere({ type: 'sheetRoll', rollType: 'attack', actorId: attacker.id, targetId: target, weaponIndex })
+    void commandHere({ type: 'sheetRoll', rollType: 'attack', actorId: attacker.id, targetId: target, weaponIndex, ...(chosen ? { rollMode: chosen } : {}) })
+  }
+  /** What conditions say about the attacker hitting this creature (for the roll menu). */
+  function attackOddsAgainst(targetId: string) {
+    const target = room.publicActors.find(item => item.id === targetId)
+    const mine = scene?.tokens.find(token => token.actorId === attacker?.id)
+    const theirs = scene?.tokens.find(token => token.actorId === targetId)
+    if (!attacker || !target) return undefined
+    return attackOdds(attacker, target, Boolean(mine && theirs && withinReach(mine, sizes[attacker.size], theirs, sizes[target.size])))
   }
   const keyboardSceneId = !dm ? scene?.id : undefined
   useEffect(() => {
@@ -213,7 +239,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   }, [mainTokenId, keyboardSceneId])
   function switchView(id: string) {
     setFocusScene(id); setPlacing(undefined); setPlacementPoint(undefined); setCombatTarget('')
-    setObjectTarget(undefined); setLootTarget(undefined); setObjectImport(undefined); setObjectPlacement(undefined)
+    setObjectTarget(undefined); setLootTarget(undefined); setObjectImport(undefined); setObjectPlacement(undefined); setItemPlacement(undefined)
   }
   function clearArea() { setAreaKind(undefined); setAreaPreview(undefined) }
   useEffect(() => { setOlder([]); setHistoryEnded(false) }, [room.activeSceneId])
@@ -234,6 +260,7 @@ export function Table({ account, changeAccount }: AccountProps) {
         setDmCombat(false)
         setPlacing(undefined)
         setObjectPlacement(undefined)
+        setItemPlacement(undefined)
         setPlacementPoint(undefined)
         clearArea()
         setCalibrating(undefined)
@@ -260,6 +287,24 @@ export function Table({ account, changeAccount }: AccountProps) {
   const dmInviteLink = room.dmInvite && location.origin + '/?invite=' + room.dmInvite + '&room=' + room.id + '&role=dm'
   const actorName = (id: string) => room.publicActors.find(item => item.id === id)?.name ?? 'ตัวละคร'
   const commandHere = (command: Command) => send({ ...command, sceneId: scene?.id })
+  function copyBoard(tokenIds: string[], objectIds: string[]) {
+    clearMessages()
+    copyingBoard.current = api<{ copied: number; skipped: number }>(base + '/clipboard', json({ sceneId: scene?.id, tokenIds, objectIds }))
+      .then(({ copied, skipped }) => {
+        setNotice('คัดลอก ' + copied + ' ชิ้น' + (skipped ? ' · ข้าม ' + skipped + ' ชิ้น' : ''))
+        return true
+      })
+      .catch(problem => {
+        setError(problem instanceof Error ? problem.message : 'คัดลอกไม่สำเร็จ')
+        return false
+      })
+  }
+  async function pasteBoard(position?: Point) {
+    if (!position) { setNotice('ชี้เมาส์บนกระดานก่อนวาง'); return }
+    if (copyingBoard.current && !await copyingBoard.current) return
+    const ok = await commandHere({ type: 'pasteBoard', ...position })
+    if (ok) setNotice('วางสำเนา Temp แล้ว')
+  }
   function showActor(id: string) {
     setSelected(id)
     setBoardSelected(id)
@@ -309,6 +354,18 @@ export function Table({ account, changeAccount }: AccountProps) {
     setPlacing(undefined)
     setPlacementPoint(undefined)
     void placeToken(placement, point)
+  }
+  /** Bring room monster templates up to the current SRD sheets (only ones that match an SRD monster). */
+  async function upgradeTemplates(list: Template[]) {
+    try {
+      const catalog = await loadMonsterCatalog()
+      let done = 0
+      for (const template of list) {
+        const sheet = upgradeFromSrd(template.sheet, catalog)
+        if (sheet && await send({ type: 'template', templateId: template.id, sheet })) done++
+      }
+      setNotice(done ? 'อัปเดตจาก SRD แล้ว ' + done + ' ต้นแบบ' : 'ไม่พบต้นแบบที่ตรงกับมอนสเตอร์ใน SRD')
+    } catch (error) { setError((error as Error).message) }
   }
   async function copyInvite() {
     if (!inviteLink) return
@@ -373,15 +430,27 @@ export function Table({ account, changeAccount }: AccountProps) {
             onClick={() => chooseToken({ actorId: item.id }, item.kind === 'pc' ? item.name : undefined, item.ownerId)}>วาง</button>}
         </div>
       })}
-      {dm && <><div className="section-head"><h2>มอนสเตอร์</h2><button onClick={() => setSheet({ initial: blankSheet('monster'), asTemplate: true })}>+ ต้นแบบ</button></div>
+      {dm && <><div className="section-head"><h2>มอนสเตอร์</h2><div className="inline">
+        {room.templates.length > 0 && <button title="ดึงค่าสเตตัส เซฟ สกิล การโจมตี และภาพล่าสุดจาก SRD · ชื่อและของที่ตั้งไว้ยังอยู่ · Token ที่วางแล้วไม่เปลี่ยน"
+          onClick={() => void upgradeTemplates(room.templates)}>อัปเดตทั้งหมดจาก SRD</button>}
+        <button onClick={() => setSheet({ initial: blankSheet('monster'), asTemplate: true })}>+ ต้นแบบ</button></div></div>
         {!room.templates.length && <EmptyState title="ยังไม่มีต้นแบบมอนสเตอร์" hint="ค้นจาก Monster Manual (N) แล้วบันทึกเป็นต้นแบบ หรือกด “+ ต้นแบบ” เพื่อเขียนเอง" />}
         {room.templates.map(item => <div className="actor-item" key={item.id} {...(scene ? tokenDragProps({ source: { templateId: item.id } }) : {})}>
           <button onClick={() => setSheet({ initial: item.sheet, template: item, asTemplate: true })}>{item.sheet.name}</button>
+          <button aria-label={'อัปเดต ' + item.sheet.name + ' จาก SRD'} title="อัปเดตจาก SRD" onClick={() => void upgradeTemplates([item])}>↻</button>
           {scene && <button onClick={() => chooseToken({ templateId: item.id })}>วาง</button>}
         </div>)}</>}
     </>,
+    items: () => <ItemCatalogPicker actionLabel={scene ? 'วางบนฉาก' : 'เปิดฉากก่อนวางไอเทม'} close={closePanels}
+      choose={item => {
+        if (!scene) return false
+        setPlacing(undefined); setObjectPlacement(undefined)
+        setItemPlacement({ sceneId: scene.id, item })
+        closePanels()
+        return true
+      }} />,
     manual: () => <MonsterManual
-      addTemplate={sheet => send({ type: 'template', sheet })}
+      addTemplate={dm ? sheet => send({ type: 'template', sheet }) : undefined}
       placeMonster={scene ? sheet => chooseToken({ sheet }) : undefined}
       dragMonster={scene ? sheet => tokenDragProps({ source: { sheet } }) : undefined} />,
     library: () => <PersonalLibrary key={account?.email} useAccount={Boolean(account)} roomName={room.me.name} dm={dm} draft={libraryDraft} clearDraft={() => setLibraryDraft(undefined)}
@@ -506,14 +575,23 @@ export function Table({ account, changeAccount }: AccountProps) {
           if (value && !dm && !room.actors.some(item => item.id === value)) setAttackTarget(value)
         }}
         move={(tokenIds, delta) => void commandHere({ type: 'moveTokens', tokenIds, dx: delta.x, dy: delta.y })}
+        copy={copyBoard} paste={position => void pasteBoard(position)}
         drop={dropToken}
-        moveObject={dm ? (objectId, position) => void commandHere({ type: 'moveObject', objectId, ...position }) : undefined}
-        place={placingObject ? point => void commandHere({ type: 'importObject', definition: placingObject, ...point })
+        moveObject={(objectId, position) => void commandHere({ type: 'moveObject', objectId, ...position })}
+        place={placingItem ? point => void commandHere({ type: 'placeItem', item: placingItem, ...point })
+          .then(ok => { if (ok) setItemPlacement(undefined) })
+          : placingObject ? point => void commandHere({ type: 'importObject', definition: placingObject, ...point })
           .then(ok => { if (ok) setObjectPlacement(undefined) })
           : placing && (point => void placeToken(placing, point).then(ok => { if (ok) setPlacing(undefined) }))}
-        placementLabel={placingObject && 'คลิกช่องเพื่อวาง ' + placingObject.name}
+        placementLabel={placingItem ? 'คลิกช่องเพื่อวาง ' + placingItem.name : placingObject && 'คลิกช่องเพื่อวาง ' + placingObject.name}
         actions={(token, point, object) => {
-          if (object) return [{ label: 'โต้ตอบกับ Object', run: () => setObjectTarget(object.id) }]
+          if (object) return [
+            { label: 'โต้ตอบกับ Object', run: () => setObjectTarget(object.id) },
+            ...(objectOwner(object, room.members) === room.me.id ? [{
+              label: object.copyShared ? 'ปิดสิทธิ์คัดลอก' : 'อนุญาตให้คนในห้องคัดลอก',
+              run: () => void commandHere({ type: 'boardCopySharing', objectId: object.id, shared: !object.copyShared })
+            }] : [])
+          ]
           if (!token) return [
             { label: 'วาง Token ที่นี่', run: () => { setPlacementPoint(point); openPanel('sheets') } },
             ...(canPlace ? [
@@ -528,9 +606,11 @@ export function Table({ account, changeAccount }: AccountProps) {
           const foe = room.publicActors.find(item => item.id === token.actorId && item.kind === 'monster' && item.hp > 0)
           // A player attacks a monster straight from its token: main attack plus up to two more.
           const attackActions = !dm && attacker && foe ? [
-            { label: 'โจมตีด้วย ' + attacker.name + ' (' + signedBonus(attacker.attack) + ')', run: () => attackWith(foe.id) },
+            { label: 'โจมตีด้วย ' + attacker.name + ' (' + signedBonus(attacker.attack) + ')', run: () => attackWith(foe.id),
+              roll: (mode: RollMode) => attackWith(foe.id, undefined, mode), odds: () => attackOddsAgainst(foe.id) },
             ...(attacker.attacks ?? []).slice(0, 2).map((attack, index) => ({
-              label: attack.name + ' (' + signedBonus(attack.bonus) + ')', run: () => attackWith(foe.id, index)
+              label: attack.name + ' (' + signedBonus(attack.bonus) + ')', run: () => attackWith(foe.id, index),
+              roll: (mode: RollMode) => attackWith(foe.id, index, mode), odds: () => attackOddsAgainst(foe.id)
             }))
           ] : []
           return [
@@ -538,7 +618,11 @@ export function Table({ account, changeAccount }: AccountProps) {
             ...(lootable ? [{ label: lootable.lootResult ? 'ดูผลค้นศพ' : 'ค้นศพ / Loot', run: () => setLootTarget(token.actorId) }] : []),
             ...(accessible ? [{ label: 'เปิดชีต', run: () => showActor(accessible.id) }] : []),
             { label: 'Condition', run: () => setConditionTarget(token.actorId) },
-            ...(accessible?.kind === 'pc' && token.role ? [{
+            ...(accessible?.ownerId === room.me.id && token.role !== 'character' ? [{
+              label: token.copyShared ? 'ปิดสิทธิ์คัดลอก' : 'อนุญาตให้คนในห้องคัดลอก',
+              run: () => void commandHere({ type: 'boardCopySharing', tokenId: token.id, shared: !token.copyShared })
+            }] : []),
+            ...(accessible?.kind === 'pc' && !accessible.temp && token.role ? [{
               label: token.role === 'character' ? 'ตั้งเป็น Companion Token' : 'ตั้งเป็น Character Token',
               run: () => void commandHere({ type: 'tokenRole', tokenId: token.id, role: token.role === 'character' ? 'companion' : 'character' })
             }] : []),
@@ -557,8 +641,8 @@ export function Table({ account, changeAccount }: AccountProps) {
           : <EmptyState title="รอ DM เปิดฉาก" hint="ระหว่างนี้สร้างตัวละครไว้ก่อนได้ พอ DM เปิดฉากแล้วค่อยลากลงกระดาน">
               <button className="primary" onClick={() => setWizard(true)}>สร้างตัวละคร</button>
             </EmptyState>}</div>}
-      {(placing || placingObject) && <button className="cancel-placement" onClick={() => { setPlacing(undefined); setObjectPlacement(undefined) }}>ยกเลิกการวาง</button>}
-      {!placing && !placingObject && <div className="board-status">
+      {(placing || placingObject || placingItem) && <button className="cancel-placement" onClick={() => { setPlacing(undefined); setObjectPlacement(undefined); setItemPlacement(undefined) }}>ยกเลิกการวาง</button>}
+      {!placing && !placingObject && !placingItem && <div className="board-status">
         {mainToken && <button className="main-token-control" title="คลิกเพื่อไปที่ตัวละครหลัก" onClick={focusMain}>
           <kbd>↑ ↓ ← →</kbd><span>{actorName(mainToken.actorId)}</span>
         </button>}
@@ -593,6 +677,9 @@ export function Table({ account, changeAccount }: AccountProps) {
       chooseArea={kind => { setAreaPreview(undefined); setAreaKind(kind) }}
       send={commandHere} close={() => setDmCombat(false)}
       advanced={(acting, target) => <ActorActions key={acting.id} actor={acting} room={room} scene={scene} send={commandHere} combatTarget={target} />} />}
+    <RollMenuHost />
+    <XpAward room={room} scene={scene} send={commandHere} />
+    {sending && <div className="send-status" aria-live="polite">กำลังส่ง…{sending > 1 ? ` (${sending})` : ''}</div>}
     {(error || notice) && <div className="toast" role={error ? 'alert' : 'status'}>{error || notice}<button aria-label="ปิดข้อความ" onClick={clearMessages}>×</button></div>}
     {manageOpen && dm && <ManageScreen room={room} send={send} close={() => setManageOpen(false)}
       openSheet={target => { setManageOpen(false); showActor(target.id) }}

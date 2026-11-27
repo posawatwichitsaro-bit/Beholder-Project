@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowBigUpDash, Copy, HeartPulse, Pencil, Shield, Footprints, Sparkles, Swords, Zap } from 'lucide-react'
-import { abilities } from '../../../shared/model.ts'
+import { abilities, sizes } from '../../../shared/model.ts'
 import type { Ability, Actor, Scene, Snapshot } from '../../../shared/model.ts'
 import { abilityModifier, bonusForCheck, commonSkills } from '../../../shared/characterStats.ts'
 import type { Skill } from '../../../shared/characterStats.ts'
@@ -11,6 +11,12 @@ import { ConditionEditor } from '../combat/ConditionEditor.tsx'
 import { SlotTracker } from './SlotTracker.tsx'
 import { parseSlots } from '../../../shared/conditions.ts'
 import { LevelUpDialog } from './LevelUpDialog.tsx'
+import { carryingLoad } from '../../../shared/encumbrance.ts'
+import { attackOdds, rollOdds, withinReach } from '../../../shared/advantage.ts'
+import type { RollMode } from '../../../shared/advantage.ts'
+import { rollMenuProps } from '../../ui/index.ts'
+import { readyToLevel, srdLink, srdFeats, xpForLevel, characterLevel } from '../../../shared/progression.ts'
+import { GiveXp } from '../combat/XpAward.tsx'
 import { RestPanel } from './RestPanel.tsx'
 
 type Tab = 'overview' | 'actions' | 'spells' | 'rest' | 'inventory' | 'notes'
@@ -30,6 +36,8 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
   chooseTarget?: (id: string) => void
 }) {
   const dm = room.me.role === 'dm'
+  const xpRoom = room.settings?.advancement === 'xp'
+  const overloaded = actor.kind === 'pc' && room.settings?.encumbrance !== false && carryingLoad(actor).over
   const [tab, setTab] = useState<Tab>('overview')
   const [levelling, setLevelling] = useState(false)
   const [mode, setMode] = useState<Mode>('normal')
@@ -50,15 +58,35 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
   const slotLevels = parseSlots(actor.slots) ?? []
   // A leveled cast spends a slot: default to the lowest level still available; pick Cantrip for free casts.
   const [slotLevel, setSlotLevel] = useState<number>()
-  const lowest = slotLevels.find(slot => slot.left > 0)?.level ?? 0
-  const castLevel = slotLevel !== undefined && (slotLevel === 0 || slotLevels.some(slot => slot.level === slotLevel && slot.left > 0)) ? slotLevel : lowest
-  function roll(rollType: string, extra: { ability?: Ability; skill?: Skill; weaponIndex?: number; slotLevel?: number } = {}) {
+  // A Warlock multiclass casts from either pool: ordinary slots or Pact Magic.
+  const pactLevels = parseSlots(actor.pactSlots ?? '') ?? []
+  const [usePact, setUsePact] = useState(false)
+  const lowest = (usePact ? pactLevels : slotLevels).find(slot => slot.left > 0)?.level ?? 0
+  const castLevel = slotLevel !== undefined && (slotLevel === 0 || (usePact ? pactLevels : slotLevels).some(slot => slot.level === slotLevel && slot.left > 0)) ? slotLevel : lowest
+  type RollExtra = { ability?: Ability; skill?: Skill; weaponIndex?: number; slotLevel?: number }
+  /** A sheet roll. `chosen` comes from the right-click menu; otherwise the Mode toggle, else the conditions decide. */
+  function roll(rollType: string, extra: RollExtra = {}, chosen?: RollMode) {
     void send({
       type: 'sheetRoll', rollType, actorId: actor.id, sceneId: scene?.id, targetId,
       ability: extra.ability ?? 'STR', skill: extra.skill, weaponIndex: extra.weaponIndex, slotLevel: extra.slotLevel || undefined,
-      advantage: mode === 'advantage', disadvantage: mode === 'disadvantage', proficient, cover, formula: spellDamage
+      ...(chosen ? { rollMode: chosen } : { advantage: mode === 'advantage', disadvantage: mode === 'disadvantage' }),
+      ...(usePact && extra.slotLevel ? { pact: true } : {}),
+      proficient, cover, formula: spellDamage
     })
   }
+  /** What the conditions suggest for this roll, shown in the right-click menu. */
+  function oddsFor(rollType: string, ability?: Ability) {
+    if (rollType === 'attack' || rollType === 'spellAttack') {
+      const target = room.publicActors.find(item => item.id === targetId)
+      const mine = scene?.tokens.find(token => token.actorId === actor.id)
+      const theirs = scene?.tokens.find(token => token.actorId === targetId)
+      const reach = Boolean(mine && theirs && target && withinReach(mine, sizes[actor.size], theirs, sizes[target.size]))
+      return attackOdds(actor, target, reach)
+    }
+    return rollOdds(actor, rollType === 'initiative' ? 'initiative' : rollType === 'save' ? 'save' : 'check', ability)
+  }
+  const menu = (rollType: string, extra: RollExtra = {}) =>
+    rollMenuProps(chosen => roll(rollType, extra, chosen), { odds: () => oddsFor(rollType, extra.ability), title: actor.name })
   const saveBonus = (key: Ability) => {
     const saved = actor.savingThrows?.[key]
     return saved ? bonusForCheck(actor, saved) : abilityModifier(actor.abilities[key])
@@ -98,11 +126,18 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
       </span>
       <div className="sheet-title">
         <h2>{actor.name}</h2>
-        <span>{[actor.classLevel, actor.kind === 'monster' ? 'Monster' : '', actor.life === 'active' ? '' : actor.life].filter(Boolean).join(' · ')}</span>
+        <span>{[actor.classLevel, actor.subclass, actor.kind === 'monster' ? 'Monster' : '', actor.life === 'active' ? '' : actor.life].filter(Boolean).join(' · ')}</span>
+        {xpRoom && actor.kind === 'pc' && <span className="sheet-xp">{(actor.xp ?? 0).toLocaleString()} XP
+          {characterLevel(actor) < 20 && <> / {xpForLevel[Math.max(1, characterLevel(actor))].toLocaleString()}</>}
+          {readyToLevel(actor) && <b className="sheet-level-ready">เลื่อนระดับได้</b>}</span>}
+        {actor.feats?.length ? <span className="sheet-feats">{actor.feats.map(name => {
+          const feat = srdFeats.find(entry => entry.name === name)
+          return <a key={name} href={srdLink} target="_blank" rel="noreferrer" title={feat ? feat.summary + (feat.automatic ? ' · คิดให้แล้ว: ' + feat.automatic : '') : undefined}>{name}</a>
+        })}</span> : null}
       </div>
       <div className="sheet-head-actions">
         <button type="button" className="sheet-icon" onClick={edit} aria-label="แก้ชีต" title="แก้ชีต (เปิดโหมดแก้ไขและตัวคำนวณ D&D)"><Pencil size={16} aria-hidden="true" /></button>
-        {actor.kind === 'pc' && actor.calculations?.hp && <button type="button" className="sheet-icon" onClick={() => setLevelling(true)} aria-label="เลเวลอัป" title="เลเวลอัป">
+        {actor.kind === 'pc' && actor.calculations?.hp && <button type="button" className={'sheet-icon' + (xpRoom && readyToLevel(actor) ? ' sheet-level-glow' : '')} onClick={() => setLevelling(true)} aria-label="เลเวลอัป" title="เลเวลอัป">
           <ArrowBigUpDash size={16} aria-hidden="true" /></button>}
         <button type="button" className="sheet-icon" onClick={copy} aria-label="คัดลอกเข้าคลังส่วนตัว" title="คัดลอกเข้าคลังส่วนตัว"><Copy size={16} aria-hidden="true" /></button>
       </div>
@@ -119,9 +154,9 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
         <HpBar hp={actor.hp} max={actor.maxHp} temp={actor.tempHp} side={actor.kind === 'monster' ? 'foe' : 'ally'} label={'HP ของ ' + actor.name} surface="parchment" height={10} />
       </div>
       <div className="sheet-stat"><Shield size={14} aria-hidden="true" /><b>{actor.ac}</b><span>AC</span></div>
-      <button type="button" className="sheet-stat sheet-rollable" onClick={() => roll('initiative')} aria-label={'ทอย Initiative ' + signed(actor.initiative)}>
+      <button type="button" className="sheet-stat sheet-rollable" {...menu('initiative')} onClick={() => roll('initiative')} aria-label={'ทอย Initiative ' + signed(actor.initiative)}>
         <Zap size={14} aria-hidden="true" /><b>{signed(actor.initiative)}</b><span>Init</span></button>
-      <div className="sheet-stat"><Footprints size={14} aria-hidden="true" /><b>{actor.speed}</b><span>ฟุต</span></div>
+      <div className="sheet-stat" title={overloaded ? 'แบกเกินพิกัด · Speed ปกติ ' + actor.speed + ' ft' : undefined}><Footprints size={14} aria-hidden="true" /><b className={overloaded ? 'carry-over' : undefined}>{overloaded ? 5 : actor.speed}</b><span>ฟุต</span></div>
       <div className="sheet-stat"><b>{signed(actor.proficiency)}</b><span>Prof</span></div>
       <div className="sheet-conditions"><ConditionEditor actor={actor} send={send} /></div>
     </section>
@@ -139,20 +174,20 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
           {abilities.map(key => {
             const modifier = abilityModifier(actor.abilities[key])
             return <div className="sheet-ability" key={key}>
-              <button type="button" className="sheet-ability-check" onClick={() => roll('check', { ability: key })} aria-label={key + ' check'}
+              <button type="button" className="sheet-ability-check" {...menu('check', { ability: key })} onClick={() => roll('check', { ability: key })} aria-label={key + ' check'}
                 title={'ทอย ' + key + ' check'}>
                 <span className="sheet-ability-key">{key}</span>
                 <b>{signed(modifier)}</b>
                 <span className="sheet-ability-score">{actor.abilities[key]}</span>
               </button>
-              <button type="button" className="sheet-ability-save" onClick={() => roll('save', { ability: key })} aria-label={key + ' save'}
+              <button type="button" className="sheet-ability-save" {...menu('save', { ability: key })} onClick={() => roll('save', { ability: key })} aria-label={key + ' save'}
                 title={'ทอย ' + key + ' saving throw'}>Save {signed(saveBonus(key))}</button>
             </div>
           })}
         </div>
         <div className="sheet-skills" aria-label="ทักษะ">
           {skills.map(key => <button type="button" key={key} data-trained={actor.skillChecks?.[key] ? 'true' : undefined}
-            onClick={() => roll('check', { ability: commonSkills[key], skill: key })} aria-label={key + ' check'}
+            {...menu('check', { ability: commonSkills[key], skill: key })} onClick={() => roll('check', { ability: commonSkills[key], skill: key })} aria-label={key + ' check'}
             title={key + ' (' + commonSkills[key] + ')' + (actor.skillChecks?.[key] ? ' · ชำนาญ' : '')}>
             <span>{key}<small>{commonSkills[key]}</small></span><b>{signed(skillBonus(key))}</b></button>)}
         </div>
@@ -172,17 +207,17 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
         <div className="sheet-attacks">
           <div className="sheet-attack">
             <span className="sheet-attack-name"><Swords size={14} aria-hidden="true" /> การโจมตีหลัก</span>
-            <button type="button" disabled={!targetId || !onBoard} onClick={() => roll('attack')} aria-label="Attack การโจมตีหลัก">{signed(actor.attack)} โจมตี</button>
+            <button type="button" disabled={!targetId || !onBoard} {...menu('attack')} onClick={() => roll('attack')} aria-label="Attack การโจมตีหลัก">{signed(actor.attack)} โจมตี</button>
             <button type="button" onClick={() => roll('damage')} aria-label="Damage การโจมตีหลัก">{actor.damage}</button>
           </div>
           {attacks.map((attack, index) => <div className="sheet-attack" key={index}>
             <span className="sheet-attack-name"><Swords size={14} aria-hidden="true" /> {attack.name}{attack.notes && <small>{attack.notes}</small>}</span>
-            <button type="button" disabled={!targetId || !onBoard} onClick={() => roll('attack', { weaponIndex: index })} aria-label={'Attack ' + attack.name}>{signed(attack.bonus)} โจมตี</button>
+            <button type="button" disabled={!targetId || !onBoard} {...menu('attack', { weaponIndex: index })} onClick={() => roll('attack', { weaponIndex: index })} aria-label={'Attack ' + attack.name}>{signed(attack.bonus)} โจมตี</button>
             <button type="button" onClick={() => roll('damage', { weaponIndex: index })} aria-label={'Damage ' + attack.name}>{attack.damage}</button>
           </div>)}
         </div>
         {!onBoard && <p className="sheet-note">วาง Token ของตัวละครนี้ในฉากก่อนจึงจะโจมตีได้</p>}
-        <button type="button" className="sheet-wide" onClick={() => roll('initiative')}>ทอย Initiative {signed(actor.initiative)}</button>
+        <button type="button" className="sheet-wide" {...menu('initiative')} onClick={() => roll('initiative')}>ทอย Initiative {signed(actor.initiative)}</button>
       </>}
 
       {tab === 'spells' && <>
@@ -191,17 +226,22 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
           <div className="sheet-stat"><b>{actor.spellDC}</b><span>Spell DC</span></div>
         </div>
         {targeting}
-        <label className="sheet-slot-pick">ใช้ช่องเวท<select aria-label="ใช้ช่องเวท" value={castLevel} onChange={event => setSlotLevel(Number(event.target.value))}>
+        <label className="sheet-slot-pick">ใช้ช่องเวท<select aria-label="ใช้ช่องเวท" value={(usePact ? 'p' : '') + castLevel} onChange={event => {
+          const value = event.target.value
+          setUsePact(value.startsWith('p'))
+          setSlotLevel(Number(value.replace('p', '')))
+        }}>
           <option value={0}>Cantrip / ไม่ใช้ช่อง</option>
           {slotLevels.map(slot => <option key={slot.level} value={slot.level} disabled={slot.left < 1}>ระดับ {slot.level} (เหลือ {slot.left}/{slot.max})</option>)}
+          {pactLevels.map(slot => <option key={'p' + slot.level} value={'p' + slot.level} disabled={slot.left < 1}>Pact ระดับ {slot.level} (เหลือ {slot.left}/{slot.max})</option>)}
         </select></label>
         <div className="sheet-inline">
           <label>สูตร Spell Damage<input value={spellDamage} onChange={event => setSpellDamage(event.target.value)} /></label>
-          <button type="button" disabled={!targetId} onClick={() => roll('spellAttack', { slotLevel: castLevel })}>Spell Attack</button>
+          <button type="button" disabled={!targetId} {...menu('spellAttack', { slotLevel: castLevel })} onClick={() => roll('spellAttack', { slotLevel: castLevel })}>Spell Attack</button>
         </div>
         <form className="sheet-cast" onSubmit={event => {
           event.preventDefault()
-          void send({ type: 'castSave', actorId: actor.id, targetId, sceneId: scene?.id, ability: saveAbility, label: spellName, half, formula: spellDamage, slotLevel: castLevel || undefined })
+          void send({ type: 'castSave', actorId: actor.id, targetId, sceneId: scene?.id, ability: saveAbility, label: spellName, half, formula: spellDamage, slotLevel: castLevel || undefined, ...(usePact && castLevel ? { pact: true } : {}) })
         }}>
           <h3>เวทที่ให้เป้าหมายทอย Save</h3>
           <label>ชื่อเวท<input value={spellName} onChange={event => setSpellName(event.target.value)} placeholder="เช่น Fireball" /></label>
@@ -212,8 +252,10 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
         </form>
         {actor.spells && <p className="sheet-note">เวท / ความสามารถ · {actor.spells}</p>}
         <SlotTracker key={actor.slots} actor={actor} send={send} />
+        {actor.pactSlots && <SlotTracker key={'pact' + actor.pactSlots} actor={actor} send={send} pact />}
       </>}
 
+      {tab === 'overview' && dm && xpRoom && actor.kind === 'pc' && <GiveXp actorId={actor.id} send={send} />}
       {tab === 'rest' && <RestPanel actor={actor} send={send} inCombat={room.scenes.some(item => item.combat?.order.some(entry => entry.actorId === actor.id))} />}
       {tab === 'inventory' && <InventoryPanel key={actor.id} actor={actor} send={send} expanded />}
 

@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { blankSheet } from '../shared/model.ts'
 import type { Actor, Member, Room, Scene, SceneObject } from '../shared/model.ts'
-import { applyCommand, snapshot } from './commands.ts'
+import { applyCommand, copyBoardSelection, snapshot } from './commands.ts'
 import { structureCover } from './cover.ts'
 import { areaContains, areaOutline } from '../shared/area.ts'
 
@@ -23,6 +23,56 @@ function table() {
   }
   return { dm, player, actor, scene, room }
 }
+
+test('board clipboard respects ownership and visibility, and pastes independent ownerless pieces', () => {
+  const { dm, player, scene, room } = table()
+  const companion = room.actors[1]
+  companion.hp = 4
+  companion.inventory = [{ id: 'coin', name: 'Coin', description: '' }]
+  companion.effects = [{ id: 'public', condition: 'Poisoned' }, { id: 'private', condition: 'Blinded', hidden: true }]
+  applyCommand(room, dm, { type: 'importObject', sceneId: scene.id, x: 3, y: 4,
+    kind: 'container', name: 'Chest', items: ['Gem'], locked: true, lockDc: 12 })
+  const chest = scene.objects![0]
+  const select = { sceneId: scene.id, tokenIds: ['t1', 't2', 't3'], objectIds: [chest.id] }
+  assert.equal(copyBoardSelection(room, dm, select).skipped, 2)
+  assert.equal(copyBoardSelection(room, player, select).skipped, 3)
+  assert.throws(() => applyCommand(room, dm, { type: 'boardCopySharing', sceneId: scene.id, tokenId: 't2', shared: true }), /ตั้งสิทธิ์/)
+  applyCommand(room, player, { type: 'boardCopySharing', sceneId: scene.id, tokenId: 't2', shared: true })
+  applyCommand(room, dm, { type: 'boardCopySharing', sceneId: scene.id, objectId: chest.id, shared: true })
+  const playerCopy = copyBoardSelection(room, player, select)
+  assert.equal(playerCopy.skipped, 2)
+  const playerChest = playerCopy.pieces[1]
+  assert('object' in playerChest && playerChest.object.kind === 'container')
+  assert.deepEqual(playerChest.object.items, [])
+  assert.equal(playerChest.object.lock?.locked, true)
+  const fullCopy = copyBoardSelection(room, dm, select)
+  assert.equal(fullCopy.skipped, 1)
+  const other = table()
+  const paste = { type: 'pasteBoard', sceneId: other.scene.id, x: 10, y: 12 }
+  assert.throws(() => applyCommand(other.room, other.player, paste, fullCopy.pieces), /ให้ DM/)
+  assert.equal(other.scene.tokens.length, 3)
+  applyCommand(other.room, other.dm, paste, fullCopy.pieces)
+  const [tempCompanion, tempEnemy] = other.scene.tokens.slice(-2)
+  assert.deepEqual([tempCompanion.x, tempCompanion.y, tempEnemy.x, tempEnemy.y], [10, 13, 12, 12])
+  assert.equal(tempCompanion.role, 'companion')
+  const cloned = other.room.actors.find(actor => actor.id === tempCompanion.actorId)!
+  assert.equal(cloned.ownerId, '')
+  assert.equal(cloned.temp, true)
+  assert.equal(cloned.hp, 4)
+  assert.notEqual(cloned.inventory![0].id, 'coin')
+  const tempChest = other.scene.objects![0]
+  assert(tempChest.kind === 'container' && chest.kind === 'container')
+  assert.equal(tempChest.temp, true)
+  assert.equal(tempChest.ownerId, undefined)
+  assert.notEqual(tempChest.items[0].id, chest.items[0].id)
+  assert.equal(copyBoardSelection(other.room, other.player, {
+    sceneId: other.scene.id, tokenIds: [tempCompanion.id], objectIds: [tempChest.id]
+  }).pieces.length, 2)
+  assert.equal(snapshot(other.room, other.player).actors.find(actor => actor.id === cloned.id)?.effects?.length, 1)
+  applyCommand(other.room, other.player, { type: 'move', sceneId: other.scene.id, tokenId: tempCompanion.id, x: 9, y: 9 })
+  assert.equal(tempCompanion.x, 9)
+  assert.throws(() => applyCommand(other.room, other.player, { type: 'removeToken', sceneId: other.scene.id, tokenId: tempCompanion.id }), /DM/)
+})
 
 test('scene copies preserve the layout with independent monsters and objects and deleting the live scene advances the table', () => {
   const { dm, player, scene, room } = table()
@@ -259,4 +309,63 @@ test('a monster search transfers either the base items or all loot to one charac
     assert.deepEqual(monster.inventory, [])
     assert.throws(() => applyCommand(room, player, search), /ค้นศพนี้แล้ว/)
   }
+})
+
+test('0.07: anyone sets catalog items on the map as temp items, drops bag items into floor piles, and picks them up nearby', () => {
+  const { dm, player, actor, scene, room } = table()
+  const other: Member = { id: 'p2', name: 'Bram', role: 'player' }
+  room.members.push(other)
+  const bram: Actor = { ...blankSheet(), id: 'bram', ownerId: other.id, name: 'Bram' }
+  room.actors.push(bram)
+  scene.tokens.push({ id: 't4', actorId: bram.id, x: 1, y: 0 })
+
+  // A player places a catalog rope: a temp item object with the scene art, keeping the full item.
+  applyCommand(room, player, { type: 'placeItem', sceneId: scene.id, x: 1, y: 1,
+    item: { name: 'Rope', description: '50 feet', ref: 'srd-5.2.1:equipment:rope', category: 'Adventuring Gear', weight: 5 } })
+  const rope = scene.objects![0]
+  assert.equal(rope.kind, 'item')
+  assert.equal(rope.temp, true)
+  assert.equal(rope.image, '/art/srd/objects/rope.webp')
+  assert.match(room.log!.at(-1)!.text, /Player วาง Rope/)
+
+  // Another player standing next to it picks it up; it becomes theirs with the catalog facts.
+  applyCommand(room, other, { type: 'takeItem', sceneId: scene.id, objectId: rope.id, actorId: bram.id })
+  assert.equal(scene.objects!.length, 0)
+  assert.equal(bram.inventory![0].name, 'Rope')
+  assert.equal(bram.inventory![0].weight, 5)
+
+  // Dropping from a bag starts a pile under the token; a second drop in the same square joins it.
+  actor.inventory = [{ id: 'gem', name: 'Gem', description: '' }, { id: 'coin', name: 'Coin', description: '' }]
+  applyCommand(room, player, { type: 'dropItem', sceneId: scene.id, actorId: actor.id, itemId: 'gem' })
+  applyCommand(room, player, { type: 'dropItem', sceneId: scene.id, actorId: actor.id, itemId: 'coin' })
+  assert.equal(scene.objects!.length, 1)
+  const pile = scene.objects![0]
+  assert(pile.kind === 'container' && pile.pile && pile.open && pile.temp)
+  assert.deepEqual(pile.items.map(item => item.name), ['Gem', 'Coin'])
+  assert.equal(actor.inventory?.length, 0)
+  assert.throws(() => applyCommand(room, other, { type: 'dropItem', sceneId: scene.id, actorId: actor.id, itemId: 'x' }), /ไม่ได้ควบคุม/)
+
+  // Too far away: a player cannot reach it; the DM can, from anywhere.
+  scene.tokens.find(token => token.actorId === bram.id)!.x = 6
+  assert.throws(() => applyCommand(room, other, { type: 'takeItem', sceneId: scene.id, objectId: pile.id, actorId: bram.id, itemId: pile.items[0].id }), /เข้าใกล้/)
+  applyCommand(room, dm, { type: 'takeItem', sceneId: scene.id, objectId: pile.id, actorId: bram.id, itemId: pile.items[0].id })
+  applyCommand(room, player, { type: 'takeItem', sceneId: scene.id, objectId: pile.id, actorId: actor.id, itemId: pile.items[0].id })
+  assert.equal(scene.objects!.length, 0, 'an empty pile goes away')
+  assert.deepEqual(bram.inventory!.map(item => item.name), ['Rope', 'Gem'])
+  assert.deepEqual(actor.inventory!.map(item => item.name), ['Coin'])
+})
+
+test('0.07: a player places a Manual monster as a temp token anyone in the scene can run', () => {
+  const { dm, player, scene, room } = table()
+  applyCommand(room, player, { type: 'place', sceneId: scene.id, kind: 'monster', sheet: { ...blankSheet('monster'), name: 'Wolf', hp: 11, maxHp: 11 }, x: 4, y: 4 })
+  const wolf = room.actors.find(actor => actor.name === 'Wolf')!
+  assert.equal(wolf.temp, true)
+  assert.equal(wolf.ownerId, '')
+  assert.match(room.log!.at(-1)!.text, /Player วาง Wolf/)
+  const token = scene.tokens.find(entry => entry.actorId === wolf.id)!
+  applyCommand(room, player, { type: 'move', sceneId: scene.id, tokenId: token.id, x: 5, y: 4 })
+  assert.equal(token.x, 5)
+  assert.throws(() => applyCommand(room, player, { type: 'place', sceneId: scene.id, templateId: 'none' }), /DM/)
+  applyCommand(room, dm, { type: 'removeToken', sceneId: scene.id, tokenId: token.id })
+  assert(!room.actors.some(actor => actor.id === wolf.id), 'removing a temp token removes its creature')
 })

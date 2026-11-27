@@ -187,3 +187,14 @@
 .table .sheet-skills button:not([data-trained]) { color: var(--bh-ink-muted); border-style: dashed; }
 .table .sheet-skills button[data-trained] { font-weight: 700; border-color: var(--bh-ink-muted); }
 .table .sheet-skills button:hover small { color: inherit; }
+
+/* ---------- 0.07: XP, feats, Pact Magic ---------- */
+.sheet-xp { display: flex; gap: 6px; align-items: center; font-size: .8rem; color: var(--bh-ink-muted); }
+.sheet-level-ready { padding: 0 6px; border-radius: 999px; background: var(--bh-brass, #8a6d3b); color: #1b140f; font-size: .72rem; }
+.sheet-level-glow { box-shadow: 0 0 0 2px var(--bh-brass-bright, #e2c27a); }
+.sheet-feats { display: flex; flex-wrap: wrap; gap: 4px; font-size: .75rem; }
+.sheet-feats a { padding: 0 6px; border: 1px solid currentColor; border-radius: 999px; color: var(--bh-ink-muted); text-decoration: none; }
+.slot-pact-title { margin: 8px 0 2px; font-size: .85rem; }
+.level-up-choice { display: grid; gap: 6px; }
+.level-up-choice small { color: var(--bh-ink-muted); }
+.xp-award { position: fixed; right: 72px; bottom: 120px; z-index: 40; width: min(320px, calc(100vw - 32px)); }

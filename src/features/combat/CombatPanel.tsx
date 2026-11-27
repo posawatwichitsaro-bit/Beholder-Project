@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import type { Actor, Scene, Snapshot } from '../../../shared/model.ts'
-import { nextLivingTurn } from '../../../shared/model.ts'
+import { nextLivingTurn, sizes } from '../../../shared/model.ts'
 import { AreaAttack, DamageTypeSelect } from './CombatEffects.tsx'
 import { MoveHandle, useMovable } from '../../ui/index.ts'
+import { rollMenuProps } from '../../ui/index.ts'
+import { attackOdds, withinReach } from '../../../shared/advantage.ts'
 import type { Area, AreaKind } from '../../../shared/area.ts'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
@@ -13,8 +15,8 @@ type Props = {
   shape?: AreaKind; preview?: Area; chooseArea: (kind: AreaKind) => void; clearArea: () => void
 }
 
-function TurnActions({ actor, targetId, targets, setTarget, send, advanced, deathSaved }: {
-  actor: Actor; targetId: string; targets: Actor[]; setTarget: (id: string) => void; send: Send; advanced: Props['advanced']; deathSaved: boolean
+function TurnActions({ actor, scene, targetId, targets, setTarget, send, advanced, deathSaved }: {
+  actor: Actor; scene?: Scene; targetId: string; targets: Actor[]; setTarget: (id: string) => void; send: Send; advanced: Props['advanced']; deathSaved: boolean
 }) {
   const [weapon, setWeapon] = useState('')
   const [mode, setMode] = useState('normal')
@@ -22,6 +24,9 @@ function TurnActions({ actor, targetId, targets, setTarget, send, advanced, deat
   const [hpAmount, setHpAmount] = useState(1)
   const target = targets.find(item => item.id === targetId)
   const attack = weapon === '' ? undefined : actor.attacks?.[Number(weapon)]
+  const mine = scene?.tokens.find(token => token.actorId === actor.id)
+  const theirs = scene?.tokens.find(token => token.actorId === target?.id)
+  const reach = Boolean(mine && theirs && target && withinReach(mine, sizes[actor.size], theirs, sizes[target.size]))
   const notes = (attack ?? actor.attacks?.find(item => item.bonus === actor.attack && item.damage === actor.damage))?.notes
   function adjust(event: FormEvent) {
     event.preventDefault()
@@ -43,7 +48,9 @@ function TurnActions({ actor, targetId, targets, setTarget, send, advanced, deat
         <option value="normal">ปกติ</option><option value="advantage">Advantage</option><option value="disadvantage">Disadvantage</option>
       </select></label>
     </div>
-    <button className="primary" disabled={!target || actor.life !== 'active'} onClick={() => void send({
+    <button className="primary" disabled={!target || actor.life !== 'active'} {...rollMenuProps(chosen => void send({
+      type: 'sheetRoll', rollType: 'attack', actorId: actor.id, targetId: target?.id, weaponIndex: attack ? Number(weapon) : undefined, rollMode: chosen
+    }), { title: actor.name, odds: () => target ? attackOdds(actor, target, reach) : undefined })} onClick={() => void send({
       type: 'sheetRoll', rollType: 'attack', actorId: actor.id, targetId: target?.id, weaponIndex: attack ? Number(weapon) : undefined,
       advantage: mode === 'advantage', disadvantage: mode === 'disadvantage'
     })}>โจมตี · {(attack?.bonus ?? actor.attack) >= 0 ? '+' : ''}{attack?.bonus ?? actor.attack} · {attack?.damage ?? actor.damage}</button>
@@ -143,7 +150,7 @@ export function CombatPanel({ room, scene, targetId, setTarget, send, close, adv
             </li>
           })}
         </ol>
-        {scenePublished && activeActor && <TurnActions key={fight.round + ':' + activeActor.id} actor={activeActor} targetId={targetId}
+        {scenePublished && activeActor && <TurnActions key={fight.round + ':' + activeActor.id} actor={activeActor} scene={scene} targetId={targetId}
           targets={targets} setTarget={setTarget} send={run} advanced={advanced} deathSaved={fight.deathSaveAt === fight.round + ':' + activeActor.id} />}
       </>}
       {fight && scenePublished && scene && <AreaAttack room={room} scene={scene} preview={preview} shape={shape} choose={chooseArea} clear={clearArea} send={run} />}

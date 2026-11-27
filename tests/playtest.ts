@@ -271,7 +271,8 @@ const before = JSON.stringify((await state(dm)).actors.map((a: { name: string; h
 writeFileSync(out + '/pt-before-restart.json', before)
 await step('Server restart (docker compose restart app): everyone resumes at the latest state', async () => {
   const { execSync } = await import('node:child_process')
-  execSync('docker compose restart app', { stdio: 'ignore' })
+  // Name the compose project so this also restarts the real app when run from a worktree folder.
+  execSync(`docker compose -p ${process.env.BEHOLDER_COMPOSE_PROJECT ?? 'project'} restart app`, { stdio: 'ignore' })
   for (let i = 0; i < 60; i++) {
     try { if ((await fetch(base + '/api/health')).ok) break } catch { /* still starting */ }
     await new Promise(resolve => setTimeout(resolve, 1000))

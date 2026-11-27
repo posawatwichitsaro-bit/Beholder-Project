@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { InventoryItem } from '../../../shared/model.ts'
-import { catalogItems, categoryLabels, inventoryFromCatalog, itemSummary, rarityOrder, variantName } from '../../../shared/itemCatalog.ts'
+import { bonusBaseChoices, catalogItems, categoryLabels, inventoryFromCatalog, itemSummary, magicBonusBases, magicFromBase, rarityOrder, variantName } from '../../../shared/itemCatalog.ts'
 import type { CatalogItem } from '../../../shared/itemCatalog.ts'
+import { itemIcon } from '../../../shared/catalogArt.ts'
 
 let loading: Promise<CatalogItem[]> | undefined
 /** The SRD item catalog (~570 KB), fetched once when someone first opens it. */
@@ -47,8 +48,15 @@ export function ItemCatalogPicker({ choose, close, actionLabel = 'เพิ่�
     && (!rarity || item.rarity === rarity || item.details.variants?.some(entry => entry.rarity === rarity))
     && (!words || item.name.toLowerCase().includes(words) || item.details.variants?.some(entry => entry.label.toLowerCase().includes(words))))
 
+  // "Weapon, +1" etc.: which plain weapon, armor or shield it is.
+  const bonusKind = selected ? magicBonusBases[selected.id] : undefined
+  const baseChoices = useMemo(() => bonusKind ? bonusBaseChoices(catalog ?? [], bonusKind) : [], [catalog, bonusKind])
+  const [baseId, setBaseId] = useState('')
+  const base = baseChoices.find(item => item.id === baseId) ?? baseChoices[0]
+
   function open(item: CatalogItem) {
     setSelected(item)
+    setBaseId('')
     setVariant(item.details.variants?.[0]?.label ?? '')
     setQuantity(1)
   }
@@ -56,7 +64,9 @@ export function ItemCatalogPicker({ choose, close, actionLabel = 'เพิ่�
     if (!selected) return
     setBusy(true)
     try {
-      const ok = await choose(inventoryFromCatalog(selected, { variant: variant || undefined, quantity }))
+      const plain = inventoryFromCatalog(selected, { variant: variant || undefined, quantity })
+      const bonus = Number(/\+(\d)/.exec(variant)?.[1] ?? 1)
+      const ok = await choose(bonusKind && base ? magicFromBase(plain, base, bonus) : plain)
       if (ok !== false) setSelected(undefined)
     } finally { setBusy(false) }
   }
@@ -65,7 +75,7 @@ export function ItemCatalogPicker({ choose, close, actionLabel = 'เพิ่�
     <header className="item-catalog-head"><b>คลังไอเทม SRD 5.2.1</b><button type="button" onClick={close}>ปิดคลัง</button></header>
     {selected ? <div className="item-catalog-detail">
       <button type="button" onClick={() => setSelected(undefined)}>← กลับไปยังรายการ</button>
-      <h4>{selected.name}</h4>
+      <h4>{itemIcon(selected.id) && <img className="catalog-item-icon" src={itemIcon(selected.id)} alt="" />} {selected.name}</h4>
       <p className="item-badges">
         <span>{categoryLabels[selected.category] ?? selected.category}</span>
         {selected.rarity && <span data-rarity={selected.rarity}>{selected.rarity}</span>}
@@ -76,6 +86,10 @@ export function ItemCatalogPicker({ choose, close, actionLabel = 'เพิ่�
       {selected.details.variants && <label>รุ่น<select value={variant} onChange={event => setVariant(event.target.value)}>
         {selected.details.variants.map(entry => <option key={entry.label} value={entry.label}>{variantName(selected, entry.label)}{entry.rarity ? ' · ' + entry.rarity : ''}</option>)}
       </select></label>}
+      {bonusKind && baseChoices.length > 0 && <label>{bonusKind === 'armor' ? 'เกราะพื้นฐาน' : bonusKind === 'shield' ? 'โล่พื้นฐาน' : bonusKind === 'ammunition' ? 'กระสุนพื้นฐาน' : 'อาวุธพื้นฐาน'}
+        <select value={base?.id ?? ''} onChange={event => setBaseId(event.target.value)}>
+          {baseChoices.map(entry => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+        </select></label>}
       <label>จำนวน<input type="number" min={1} max={999} value={quantity} onChange={event => setQuantity(Math.max(1, Math.min(999, event.target.valueAsNumber || 1)))} /></label>
       <div className="inline">
         <button type="button" className="primary" disabled={busy} onClick={() => void add()}>{actionLabel}</button>
@@ -99,11 +113,13 @@ export function ItemCatalogPicker({ choose, close, actionLabel = 'เพิ่�
         : <small className="muted">{matches.length > shown ? 'แสดง ' + shown + ' จาก ' + matches.length + ' รายการ · พิมพ์เพื่อค้นให้แคบลง' : matches.length + ' รายการ'}</small>}
       <ul className="item-catalog-list">{matches.slice(0, shown).map(item => <li key={item.id}>
         <button type="button" onClick={() => open(item)}>
-          <b>{item.name}</b>
+          <b>{itemIcon(item.id) && <img className="catalog-item-icon" src={itemIcon(item.id)} alt="" loading="lazy" />} {item.name}</b>
           <small>{[categoryLabels[item.category] ?? item.category, item.rarity, item.attunement.required && 'Attunement'].filter(Boolean).join(' · ')}</small>
         </button>
       </li>)}</ul>
     </>}
-    <footer><a href="/data/SRD-LICENSE.txt" target="_blank" rel="noreferrer">SRD 5.2.1 · CC BY 4.0</a></footer>
+    <footer><a href="/data/SRD-LICENSE.txt" target="_blank" rel="noreferrer">SRD 5.2.1 · CC BY 4.0</a>
+      {' · '}<a href="/art/srd/inventory/CREDITS.md" target="_blank" rel="noreferrer">เครดิตภาพไอเทม</a>
+      {' · '}<a href="/art/srd/objects/CREDITS.md" target="_blank" rel="noreferrer">เครดิตภาพวัตถุ</a></footer>
   </section>
 }

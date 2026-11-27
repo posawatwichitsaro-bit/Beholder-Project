@@ -26,6 +26,66 @@ async function seat(browser: Browser, options?: Parameters<Browser['newPage']>[0
   return page
 }
 
+test('Ctrl+C copies a mixed selection and Ctrl+V places it in another room tab', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
+    ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const context = await browser.newContext({ viewport: { width: 1100, height: 750 } })
+  await context.addInitScript(() => localStorage.setItem('beholder.prefs', JSON.stringify({ tourSeen: { dm: true, player: true } })))
+  const source = await context.newPage()
+  const destination = await context.newPage()
+  async function setup(name: string) {
+    const created = await source.request.post(base + '/api/rooms', { data: { name, member: 'DM' } })
+    assert.equal(created.status(), 201)
+    const initial: Snapshot = await created.json()
+    const path = base + '/api/rooms/' + initial.id
+    const read = async (): Promise<Snapshot> => (await source.request.get(path)).json()
+    const command = async (data: object) => {
+      const response = await source.request.post(path + '/commands', {
+        data: { ...data, revision: (await read()).revision, commandId: randomUUID() }
+      })
+      assert.equal(response.status(), 200, await response.text())
+    }
+    await command({ type: 'scene', name, cell: 48, originX: 0, originY: 0 })
+    return { id: initial.id, sceneId: (await read()).scenes[0].id, command, read }
+  }
+  const from = await setup('Clipboard source')
+  const to = await setup('Clipboard destination')
+  await from.command({ type: 'place', sceneId: from.sceneId, x: 1, y: 1, sheet: { ...blankSheet(), name: 'Skip me' } })
+  await from.command({ type: 'place', sceneId: from.sceneId, x: 2, y: 1, kind: 'monster', sheet: { ...blankSheet('monster'), name: 'Goblin' } })
+  await from.command({ type: 'importObject', sceneId: from.sceneId, x: 3, y: 2, kind: 'container', name: 'Chest', items: ['Gem'] })
+  await source.goto(base + '/room/' + from.id)
+  await source.locator('canvas').waitFor()
+  const board = (await source.locator('canvas').boundingBox())!
+  await source.mouse.move(board.x + 74, board.y + 74)
+  await source.keyboard.down('Shift')
+  await source.mouse.down()
+  await source.mouse.move(board.x + 217, board.y + 162, { steps: 5 })
+  await source.mouse.up()
+  await source.keyboard.up('Shift')
+  await source.getByText('เลือก 3 ชิ้น', { exact: true }).waitFor()
+  const copied = source.waitForResponse(response => response.url().endsWith('/clipboard'))
+  await source.keyboard.press('Control+c')
+  assert.deepEqual(await (await copied).json(), { copied: 2, skipped: 1 })
+  await destination.goto(base + '/room/' + to.id)
+  const next = destination.locator('canvas')
+  await next.waitFor()
+  await next.hover({ position: { x: 245, y: 195 } })
+  const pasted = destination.waitForResponse(response => response.url().endsWith('/commands') && response.request().postDataJSON()?.type === 'pasteBoard')
+  await destination.keyboard.press('Control+v')
+  const result = await pasted
+  assert.equal(result.status(), 200, await result.text())
+  await destination.getByRole('status').filter({ hasText: 'วางสำเนา Temp แล้ว' }).waitFor()
+  const state = await to.read()
+  const [monster] = state.scenes[0].tokens
+  const [chest] = state.scenes[0].objects!
+  assert.equal(state.scenes[0].tokens.length, 1)
+  assert.deepEqual([monster.x, monster.y, chest.x - monster.x, chest.y - monster.y], [4, 3, 1, 1])
+  assert.equal(state.actors[0].temp, true)
+  assert.equal(chest.temp, true)
+  assert.equal((await from.read()).scenes[0].tokens.length, 2)
+})
+
 test('sign up with a character name, rename in the room and return with a fresh session', { timeout: 60000 }, async t => {
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
     ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
@@ -159,6 +219,8 @@ test('a new player builds a character step by step and rolls from the sheet', { 
   const sheet = page.getByRole('article', { name: 'ชีต Lyra' })
   await sheet.getByText('20/20', { exact: true }).waitFor()
   await sheet.getByRole('button', exact('Advantage')).click()
+  // The dice reveal is brief: start watching for it before the roll, or a quick one can come and go first.
+  const revealed = page.locator('.dice-reveal').waitFor({ state: 'attached' })
   await sheet.getByRole('button', exact('INT check')).click()
   // The result shows in the table's dice tray; the sheet stays open instead of being squeezed by the dice panel.
   await page.getByRole('complementary', { name: 'ถาดผลเต๋า' }).getByText(/INT check/).waitFor()
@@ -167,7 +229,7 @@ test('a new player builds a character step by step and rolls from the sheet', { 
   await sheet.getByRole('button', exact('Damage การโจมตีหลัก')).waitFor()
 
   // Every new roll gets a short dice animation; the Adventure Log keeps chat and rolls in one timeline.
-  await page.locator('.dice-reveal').waitFor({ state: 'attached' })
+  await revealed
   await openPanel(page, 'บันทึกการผจญภัย')
   const log = page.getByRole('region', exact('บันทึกการผจญภัย')).locator('.adventure-log-list')
   await log.getByText(/INT check/).waitFor()
@@ -536,11 +598,17 @@ test('a dwarf soldier is built with Point Buy and a background, then levels up w
   const sheet = page.getByRole('article', { name: 'ชีต Bram' })
   await sheet.getByRole('button', exact('เลเวลอัป')).click()
   const levelling = page.getByRole('dialog', { name: 'เลเวลอัป · Bram' })
-  await levelling.getByText(/Ability Score Improvement/).waitFor()
+  // Fighter 4 offers an Ability Score Improvement or a feat; pick +2 CON.
+  await levelling.getByText('Ability Score Improvement หรือ Feat', { exact: true }).waitFor()
+  await levelling.getByLabel('Feat หรือ ASI').selectOption('Ability Score Improvement')
+  await levelling.getByLabel('ค่าแรกที่เพิ่ม').selectOption('CON')
   await levelling.getByRole('button', exact('ยืนยันเลเวลอัป')).click()
   await levelling.waitFor({ state: 'hidden' })
   const levelled = ((await (await page.request.get(path)).json()) as Snapshot).actors.find(actor => actor.name === 'Bram')!
-  assert.deepEqual([levelled.classLevel, levelled.maxHp], ['Fighter 4', bram.maxHp + 6 + 2 + 1])
+  assert.equal(levelled.abilities.CON, bram.abilities.CON + 2)
+  assert.deepEqual(levelled.feats, ['Ability Score Improvement'])
+  // CON 15 → 17 (+2 → +3) adds one HP to each earlier level too: the new level (6 + 3 + Dwarf 1) plus 3.
+  assert.deepEqual([levelled.classLevel, levelled.maxHp], ['Fighter 4', bram.maxHp + 6 + 3 + 1 + 3])
 })
 
 test('a character spends a Hit Die, uses a class resource and takes a Long Rest', { timeout: 45000 }, async t => {
@@ -821,6 +889,165 @@ test('0.06: dice pool, signed quick HP, box selection, encounter end, and a mova
   await page.waitForFunction(x => Math.abs(document.querySelector('.dice-tray')!.getBoundingClientRect().x - x) < 2, before.x)
 })
 
+test('0.07: a player sets an SRD item on the map, drops a bag item to the floor, and a friend picks it up', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await seat(browser)
+  const mira = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  const room: Snapshot = await (await dm.request.post(base + '/api/rooms', { data: { name: 'Release 0.07 items', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const state = await (await page.request.get(path)).json() as Snapshot
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: state.revision } })
+    assert.equal(response.status(), 200, await response.text())
+    return (await page.request.get(path)).json() as Promise<Snapshot>
+  }
+  const state = async () => (await (await dm.request.get(path)).json()) as Snapshot
+  const sceneId = (await command(dm, { type: 'scene', name: 'Camp', cell: 48, originX: 0, originY: 0 })).scenes[0].id
+  assert.equal((await mira.request.post(base + '/api/join', { data: { invite: room.invite, name: 'Mira', role: 'player' } })).status(), 200)
+  const lyra = (await command(mira, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Lyra',
+    inventory: [{ id: 'g', name: 'Gem', description: 'A blue stone' }] } })).actors.find(actor => actor.name === 'Lyra')!
+  await command(mira, { type: 'place', sceneId, actorId: lyra.id, role: 'character', x: 2, y: 2 })
+  await mira.goto(base + '/room/' + room.id)
+  await mira.getByRole('button', exact('เมนูโต๊ะ')).waitFor()
+
+  // Pick Rope from the SRD item panel and click a square: it lands as a temp item with its map art.
+  await openPanel(mira, 'คลังไอเทม SRD')
+  await mira.getByLabel('ค้นหาไอเทม').fill('Rope')
+  await mira.locator('.item-catalog-list').getByRole('button', { name: /^Rope/ }).first().click()
+  await mira.getByRole('button', exact('วางบนฉาก')).click()
+  await mira.getByText('คลิกช่องเพื่อวาง Rope').waitFor()
+  const frame = (await mira.locator('canvas').boundingBox())!
+  const cellAt = (x: number, y: number) => ({ x: frame.x + 36 + x * 48, y: frame.y + 36 + y * 48 })
+  const spot = cellAt(3.5, 2.5)
+  await mira.mouse.click(spot.x, spot.y)
+  await mira.waitForFunction(async url => (await (await fetch(url)).json()).scenes[0].objects?.some((object: { name: string; temp?: boolean }) => object.name === 'Rope' && object.temp), path)
+  const rope = (await state()).scenes[0].objects!.find(object => object.name === 'Rope')!
+  assert.equal(rope.image, '/art/srd/objects/rope.webp')
+  assert.ok((await state()).log!.some(entry => entry.text === 'Mira วาง Rope'), 'the DM can see who placed it')
+
+  // Drop the Gem from Lyra's bag: a floor pile appears under her token.
+  await openPanel(mira, 'ชีตในห้อง')
+  await mira.getByRole('button', exact('Lyra')).click()
+  const sheet = mira.getByRole('article', { name: 'ชีต Lyra' })
+  await sheet.getByRole('tab', { name: /Inventory|ของ/ }).first().click()
+  await sheet.getByRole('button', exact('ทิ้ง Gem ลงพื้น')).click()
+  await mira.waitForFunction(async url => (await (await fetch(url)).json()).scenes[0].objects?.some((object: { pile?: boolean }) => object.pile), path)
+  const after = await state()
+  assert.equal(after.actors.find(actor => actor.id === lyra.id)!.inventory?.length ?? 0, 0)
+
+  // Another player next to the pile takes the Gem; the empty pile goes away.
+  const bramSeat = await seat(browser)
+  assert.equal((await bramSeat.request.post(base + '/api/join', { data: { invite: room.invite, name: 'Bram', role: 'player' } })).status(), 200)
+  const bram = (await command(bramSeat, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Bram' } })).actors.find(actor => actor.name === 'Bram')!
+  await command(bramSeat, { type: 'place', sceneId, actorId: bram.id, role: 'character', x: 3, y: 3 })
+  const pile = after.scenes[0].objects!.find(object => object.pile)!
+  assert.ok(pile.kind === 'container')
+  await command(bramSeat, { type: 'takeItem', sceneId, objectId: pile.id, actorId: bram.id, itemId: pile.items[0].id })
+  await command(bramSeat, { type: 'takeItem', sceneId, objectId: rope.id, actorId: bram.id })
+  const final = await state()
+  assert.deepEqual(final.actors.find(actor => actor.id === bram.id)!.inventory!.map(item => item.name).sort(), ['Gem', 'Rope'])
+  assert.ok(!final.scenes[0].objects!.some(object => object.pile))
+})
+
+test('0.07: conditions pick Advantage or Disadvantage on their own, and right-click picks it by hand', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await seat(browser)
+  const mira = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  const room: Snapshot = await (await dm.request.post(base + '/api/rooms', { data: { name: 'Release 0.07 odds', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const state = await (await page.request.get(path)).json() as Snapshot
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: state.revision } })
+    assert.equal(response.status(), 200, await response.text())
+    return (await page.request.get(path)).json() as Promise<Snapshot>
+  }
+  const sceneId = (await command(dm, { type: 'scene', name: 'Bog', cell: 48, originX: 0, originY: 0 })).scenes[0].id
+  assert.equal((await mira.request.post(base + '/api/join', { data: { invite: room.invite, name: 'Mira', role: 'player' } })).status(), 200)
+  const lyra = (await command(mira, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Lyra', conditions: 'Poisoned' } })).actors.find(actor => actor.name === 'Lyra')!
+  await command(mira, { type: 'place', sceneId, actorId: lyra.id, role: 'character', x: 2, y: 2 })
+  await mira.goto(base + '/room/' + room.id)
+  await openPanel(mira, 'ชีตในห้อง')
+  await mira.getByRole('button', exact('Lyra')).click()
+  const sheet = mira.getByRole('article', { name: 'ชีต Lyra' })
+  const lastRoll = async () => ((await (await mira.request.get(path)).json()) as Snapshot).rolls.at(-1)
+
+  // Poisoned: a plain click on a check rolls with Disadvantage and says why.
+  await sheet.getByRole('button', exact('STR check')).click()
+  await mira.waitForFunction(async url => (await (await fetch(url)).json()).rolls.length === 1, path)
+  let roll = (await lastRoll())!
+  assert.equal(roll.faces.length, 2)
+  assert.match(roll.label, /Disadvantage · Poisoned/)
+
+  // Right-click: the menu suggests Disadvantage; picking Advantage overrides it.
+  await sheet.getByRole('button', exact('DEX check')).click({ button: 'right' })
+  const menu = mira.getByRole('menu', { name: /เลือกการทอย/ })
+  await menu.getByRole('menuitem', { name: /Disadvantage.*แนะนำ/ }).waitFor()
+  await menu.getByRole('menuitem', { name: /^Advantage/ }).click()
+  await mira.waitForFunction(async url => (await (await fetch(url)).json()).rolls.length === 2, path)
+  roll = (await lastRoll())!
+  assert.equal(roll.faces.length, 2)
+  assert.match(roll.label, /Advantage \(เลือกเอง\)/)
+  await menu.waitFor({ state: 'detached' })
+})
+
+test('0.07: phone and tablet seats (touch): no sideways scroll, panels open, and holding a roll opens its menu', { timeout: 90000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const host = await seat(browser)
+  const room: Snapshot = await (await host.request.post(base + '/api/rooms', { data: { name: 'Release 0.07 touch', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const state = await (await page.request.get(path)).json() as Snapshot
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: state.revision } })
+    assert.equal(response.status(), 200, await response.text())
+    return (await page.request.get(path)).json() as Promise<Snapshot>
+  }
+  const sceneId = (await command(host, { type: 'scene', name: 'Road', cell: 48, originX: 0, originY: 0 })).scenes[0].id
+  const devices = [
+    { name: 'iPhone', viewport: { width: 390, height: 844 }, deviceScaleFactor: 3 },
+    { name: 'iPad', viewport: { width: 820, height: 1180 }, deviceScaleFactor: 2 }
+  ]
+  for (const device of devices) {
+    const page = await seat(browser, { viewport: device.viewport, deviceScaleFactor: device.deviceScaleFactor, hasTouch: true, isMobile: true })
+    page.setDefaultTimeout(10000)
+    assert.equal((await page.request.post(base + '/api/join', { data: { invite: room.invite, name: device.name, role: 'player' } })).status(), 200)
+    const hero = (await command(page, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: device.name + ' Hero' } })).actors.find(actor => actor.name === device.name + ' Hero')!
+    await command(page, { type: 'place', sceneId, actorId: hero.id, role: 'character', x: devices.indexOf(device) + 1, y: 1 })
+    await page.goto(base + '/room/' + room.id)
+    await page.getByRole('button', exact('เมนูโต๊ะ')).waitFor()
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+    assert.ok(overflow <= 1, device.name + ': the page does not scroll sideways (' + overflow + 'px)')
+
+    // Panels open from the folded rail by tapping.
+    await openPanel(page, 'ชีตในห้อง')
+    await page.getByRole('button', exact(device.name + ' Hero')).tap()
+    const sheet = page.getByRole('article', { name: 'ชีต ' + device.name + ' Hero' })
+    const check = sheet.getByRole('button', exact('WIS check'))
+    await check.scrollIntoViewIfNeeded()
+    const box = (await check.boundingBox())!
+    assert.ok(box.x >= 0 && box.x + box.width <= device.viewport.width + 1, device.name + ': the sheet fits on screen')
+
+    // Press and hold a roll: the roll menu opens and the lifting finger does not also roll.
+    const before = ((await (await page.request.get(path)).json()) as Snapshot).rolls.length
+    const at = { clientX: box.x + box.width / 2, clientY: box.y + box.height / 2, pointerType: 'touch', isPrimary: true, bubbles: true }
+    await check.dispatchEvent('pointerdown', at)
+    await page.waitForTimeout(650)
+    await check.dispatchEvent('pointerup', at)
+    await check.dispatchEvent('click', at)
+    const menu = page.getByRole('menu', { name: /เลือกการทอย/ })
+    await menu.waitFor()
+    assert.equal(((await (await page.request.get(path)).json()) as Snapshot).rolls.length, before, device.name + ': holding does not roll by itself')
+    await menu.getByRole('menuitem', { name: /^Disadvantage/ }).tap()
+    await page.waitForFunction(async ([url, count]) => (await (await fetch(url as string)).json()).rolls.length > (count as number), [path, before])
+    const roll = ((await (await page.request.get(path)).json()) as Snapshot).rolls.at(-1)!
+    assert.equal(roll.faces.length, 2)
+    assert.match(roll.label, /Disadvantage \(เลือกเอง\)/)
+    await page.close()
+  }
+})
+
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')
@@ -976,7 +1203,8 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await createScene(dm, 'Vault')
   await one.getByRole('heading', exact('Gate')).waitFor()
   assert.equal(await one.locator('#table-drawer').isVisible(), false, 'no panel covers the map when a player arrives')
-  assert.equal(await one.getByRole('navigation', { name: 'ระบบในห้อง' }).getByRole('button', exact('Monster Manual')).count(), 0, 'players never see DM tools')
+  // Since 0.07 players may place Manual monsters too (as temp tokens); saving templates stays with the DM.
+  assert.equal(await one.getByRole('navigation', { name: 'ระบบในห้อง' }).getByRole('button', exact('Monster Manual')).count(), 1)
   await one.keyboard.press('Control+k')
   await one.getByRole('combobox', exact('ค้นหาคำสั่ง')).fill('ลูกเต๋า')
   await one.keyboard.press('Enter')
@@ -1055,7 +1283,9 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   assert.match(state.actors.find((actor: { name: string }) => actor.name === 'Scout').portrait, /^data:image\//)
   await canvas.click({ position: { x: 163, y: 203 }, button: 'right' })
   await dm.getByRole('button', exact('นำเข้า Object ที่นี่')).click()
-  await dm.getByRole('dialog', { name: 'นำเข้า Object' }).getByRole('combobox').selectOption('item')
+  await dm.getByRole('dialog', { name: 'นำเข้า Object' }).getByRole('combobox', { name: /^ประเภท/ }).selectOption('item')
+  await dm.getByRole('combobox', { name: /^ภาพสำหรับวางบนแผนที่/ }).selectOption('/art/srd/objects/longsword.webp')
+  await dm.getByRole('img', { name: 'รูป Object' }).waitFor()
   await dm.getByLabel('ชื่อ Object').fill('Silver key')
   await dm.getByRole('button', exact('วาง Object')).click()
   await dm.getByRole('dialog', { name: 'นำเข้า Object' }).waitFor({ state: 'hidden' })
@@ -1076,7 +1306,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await one.getByText('Inventory (2)', { exact: true }).waitFor()
   await canvas.click({ position: { x: 163, y: 203 }, button: 'right' })
   await dm.getByRole('button', exact('นำเข้า Object ที่นี่')).click()
-  await dm.getByRole('dialog', { name: 'นำเข้า Object' }).getByRole('combobox').selectOption('container')
+  await dm.getByRole('dialog', { name: 'นำเข้า Object' }).getByRole('combobox', { name: /^ประเภท/ }).selectOption('container')
   await dm.getByLabel('ชื่อ Object').fill('Locked cache')
   await dm.getByLabel(/ของเริ่มต้นในกล่อง/).fill('Letter')
   await dm.getByLabel('ล็อกกล่อง', { exact: true }).check()

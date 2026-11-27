@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react'
-import type { Actor } from '../../../shared/model.ts'
+import { abilities } from '../../../shared/model.ts'
+import type { Ability, Actor } from '../../../shared/model.ts'
+import { featChoices, srdLink, srdSubclasses } from '../../../shared/progression.ts'
 import { hitDiceByClass } from '../../../shared/characterStats.ts'
 import type { Send } from '../../state/useCommand.ts'
 import { Button, Dialog } from '../../ui/index.ts'
-import { classesOf, levelHp, levelUp } from './levelUp.ts'
-import type { HpChoice } from './levelUp.ts'
+import { asiLevel, classesOf, levelHp, levelUp } from './levelUp.ts'
+import type { HpChoice, LevelChoices } from './levelUp.ts'
 import type { ClassName } from './wizard.ts'
 
 /**
@@ -17,9 +19,24 @@ export function LevelUpDialog({ actor, send, close }: { actor: Actor; send: Send
   const [className, setClassName] = useState<ClassName>(owned[0]?.name ?? 'Fighter')
   const [hp, setHp] = useState<HpChoice>({ mode: 'fixed' })
   const [saving, setSaving] = useState(false)
+  const nextLevel = (owned.find(entry => entry.name === className)?.level ?? 0) + 1
+  const total = owned.reduce((sum, entry) => sum + entry.level, 0) + 1
+  // SRD choices at this level: the subclass at 3, a feat or Ability Score Improvement at ASI levels.
+  const subclass = nextLevel === 3 && !actor.subclass ? srdSubclasses[className] : undefined
+  const offersFeat = asiLevel(className, nextLevel)
+  const [takeSubclass, setTakeSubclass] = useState(true)
+  const [feat, setFeat] = useState('')
+  const [first, setFirst] = useState<Ability>('STR')
+  const [second, setSecond] = useState<Ability | ''>('')
+  const choices: LevelChoices = {
+    ...(subclass && takeSubclass ? { subclass: subclass.name } : {}),
+    ...(offersFeat && feat ? { feat, increase: feat === 'Ability Score Improvement' ? (second && second !== first ? { [first]: 1, [second]: 1 } : { [first]: 2 }) : undefined } : {})
+  }
   const preview = useMemo(() => {
-    try { return { result: levelUp(actor, className, hp) } } catch (error) { return { error: (error as Error).message } }
-  }, [actor, className, hp])
+    try { return { result: levelUp(actor, className, hp, choices) } } catch (error) { return { error: (error as Error).message } }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actor, className, hp, JSON.stringify(choices)])
+  const featInfo = featChoices(total).find(entry => entry.name === feat)
   const die = hitDiceByClass[className]
 
   async function confirm() {
@@ -50,6 +67,25 @@ export function LevelUpDialog({ actor, send, close }: { actor: Actor; send: Send
         {hp.mode === 'rolled' && <label>ผลทอย d{die}<input type="number" min={1} max={die} value={hp.roll}
           onChange={event => setHp({ mode: 'rolled', roll: Math.max(1, Math.min(die, event.target.valueAsNumber || 1)) })} /></label>}
       </fieldset>
+      {subclass && <fieldset className="level-up-choice">
+        <legend>Subclass (SRD)</legend>
+        <label className="wizard-check"><input type="checkbox" checked={takeSubclass} onChange={event => setTakeSubclass(event.target.checked)} />{subclass.name}</label>
+        <small>{subclass.summary} · <a href={srdLink} target="_blank" rel="noreferrer">อ่านใน SRD ↗</a></small>
+      </fieldset>}
+      {offersFeat && <fieldset className="level-up-choice">
+        <legend>Ability Score Improvement หรือ Feat</legend>
+        <label>เลือก<select aria-label="Feat หรือ ASI" value={feat} onChange={event => setFeat(event.target.value)}>
+          <option value="">ยังไม่เลือก (เลือกเองในชีตทีหลัง)</option>
+          {featChoices(total).map(entry => <option key={entry.name} value={entry.name}>{entry.name} · {entry.category}</option>)}
+        </select></label>
+        {featInfo && <small>{featInfo.summary}{featInfo.automatic ? ' · คิดให้แล้ว: ' + featInfo.automatic : ''}</small>}
+        {feat === 'Ability Score Improvement' && <div className="form-grid">
+          <label>+{second ? 1 : 2} ให้<select aria-label="ค่าแรกที่เพิ่ม" value={first} onChange={event => setFirst(event.target.value as Ability)}>
+            {abilities.map(key => <option key={key} value={key}>{key} ({actor.abilities[key]})</option>)}</select></label>
+          <label>+1 อีกค่า (ถ้าแบ่ง)<select aria-label="ค่าที่สองที่เพิ่ม" value={second} onChange={event => setSecond(event.target.value as Ability | '')}>
+            <option value="">ไม่แบ่ง</option>{abilities.filter(key => key !== first).map(key => <option key={key} value={key}>{key} ({actor.abilities[key]})</option>)}</select></label>
+        </div>}
+      </fieldset>}
       {preview.error ? <p role="alert">{preview.error}</p> : preview.result && <>
         <dl className="wizard-summary">
           <div><dt>เลเวลรวม</dt><dd>{preview.result.total}</dd></div>

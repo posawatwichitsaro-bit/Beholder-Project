@@ -2,7 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import type { Member, Room } from '../shared/model.ts'
-import { catalogMonsters, monsterSheet, readSkills } from '../shared/monsterManual.ts'
+import { catalogMonsters, monsterSheet, readSkills, upgradeFromSrd } from '../shared/monsterManual.ts'
+import { blankSheet } from '../shared/model.ts'
 import { applyCommand } from './commands.ts'
 
 const catalog = catalogMonsters(JSON.parse(readFileSync(new URL('../public/data/srd-monsters.json', import.meta.url), 'utf8')))
@@ -53,8 +54,25 @@ test('the server keeps trained saves and the catalog reference on a monster temp
   assert.deepEqual(saved.savingThrows?.WIS, { ability: 'WIS', training: 1, adjustment: 0 })
   assert.equal(saved.skillChecks?.Perception?.training, 2)
   assert.equal(saved.monsterReference?.id, 'srd-5.2.1:adult-red-dragon')
+  assert.equal(saved.portrait, '/art/srd/monsters/adult-red-dragon.webp')
+  assert(readFileSync(new URL('../public' + saved.portrait, import.meta.url)).includes(Buffer.from('WEBP')))
   assert.match(saved.monsterReference?.url ?? '', /^https:\/\/www\.dndbeyond\.com\//)
   const forged = sheetOf('Goblin Warrior')
   forged.monsterReference = { ...forged.monsterReference!, url: 'https://example.com/phish' }
   assert.throws(() => applyCommand(room, dm, { type: 'template', sheet: forged }), /D&D Beyond/)
+})
+
+test('an old monster template upgrades from the SRD: new stats and art, its own name and loot kept', () => {
+  const old = { ...blankSheet('monster'), name: 'Owlbear 2', hp: 30, maxHp: 30, ac: 11, lootDc: 14,
+    inventory: [{ id: 'f', name: 'Feather', description: '' }] }
+  const upgraded = upgradeFromSrd(old, catalog)!
+  assert.equal(upgraded.name, 'Owlbear 2')
+  assert.equal(upgraded.ac, sheetOf('Owlbear').ac)
+  assert.equal(upgraded.monsterReference?.id, sheetOf('Owlbear').monsterReference?.id)
+  assert.equal(upgraded.portrait, '/art/srd/monsters/owlbear.webp')
+  assert.equal(upgraded.lootDc, 14)
+  assert.deepEqual(upgraded.inventory, old.inventory)
+  const byId = upgradeFromSrd({ ...old, name: 'Mister Hoots', monsterReference: { statBlock: '', id: sheetOf('Owlbear').monsterReference!.id } }, catalog)!
+  assert.equal(byId.name, 'Mister Hoots')
+  assert.equal(upgradeFromSrd({ ...old, name: 'Homebrew Thing' }, catalog), undefined)
 })

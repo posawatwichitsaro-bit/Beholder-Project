@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { abilities, blankSheet, damageKinds, nextLivingTurn, sizes } from '../shared/model.ts'
+import { abilities, blankSheet, damageKinds, nextLivingTurn, objectOwner, sizes } from '../shared/model.ts'
 import type { Actor, DamageKind, InventoryItem, LogEntry, LootSkill, Member, ObjectDefinition, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token, TokenRole } from '../shared/model.ts'
 import { areaContains, areaLabels, areaOutline, validArea } from '../shared/area.ts'
 import type { Area } from '../shared/area.ts'
@@ -8,10 +8,14 @@ import { center, isNear, structureCover } from './cover.ts'
 import { createRoadsideEncounter } from './encounter.ts'
 import { bonusForCheck, calculatedSheet, commonSkills } from '../shared/characterStats.ts'
 import { formatConditions, formatSlots, parseSlots, tickConditions } from '../shared/conditions.ts'
-import { advanceEffects, concentrationDc, d20Penalty, effectName, incapacitating, tiedTo } from '../shared/effects.ts'
+import { advanceEffects, concentrationDc, d20Penalty, effectName, hasCondition, incapacitating, tiedTo } from '../shared/effects.ts'
 import { hitDiceLeft, hitDieHealing, restedSheet } from '../shared/rest.ts'
 import type { ClassResource, Effect, HitDie as RestDie } from '../shared/model.ts'
 import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared/characterStats.ts'
+import { attackOdds, chooseMode, chosenMode, rollOdds } from '../shared/advantage.ts'
+import type { Odds } from '../shared/advantage.ts'
+import { criticalFrom, magicalCunning, monsterXp, srdFeats, srdSubclasses } from '../shared/progression.ts'
+import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
 export class Forbidden extends Error {}
 export class Conflict extends Error {}
@@ -40,9 +44,6 @@ function get<T extends { id: string }>(items: T[], key: unknown): T {
 function requireDM(member: Member) {
   if (member.role !== 'dm') throw new Forbidden('สงวนให้ DM')
 }
-function owns(member: Member, actor: Actor) {
-  if (member.role !== 'dm' && actor.ownerId !== member.id) throw new Forbidden('คุณไม่ได้ควบคุมตัวนี้')
-}
 function readTokenRole(value: unknown): TokenRole {
   if (value !== 'character' && value !== 'companion') throw new Invalid('เลือก Character Token หรือ Companion Token')
   return value
@@ -60,6 +61,7 @@ function withTokenRoles(scene: Scene, actors: Actor[]) {
 }
 function image(value: unknown) {
   if (value === undefined || value === '') return undefined
+  if (typeof value === 'string' && isCatalogArt(value)) return value
   if (typeof value !== 'string' || value.length > 32000 || !/^data:image\/(webp|png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) {
     throw new Invalid('รูปต้องเป็น PNG, JPEG หรือ WebP ที่ระบบย่อแล้ว')
   }
@@ -70,6 +72,11 @@ function description(value: unknown) {
 }
 const rarities = ['Common', 'Uncommon', 'Rare', 'Very Rare', 'Legendary', 'Artifact', 'Varies']
 /** Facts copied from the SRD item catalog. Optional, so hand-made items and older rooms stay as they are. */
+function baseRef(value: unknown) {
+  const ref = String(value)
+  if (!/^srd-5\.2\.1:equipment:[a-z0-9-]+$/.test(ref)) throw new Invalid('ไอเทมพื้นฐานไม่ถูกต้อง')
+  return ref
+}
 function catalogFields(item: Record<string, unknown>): Partial<InventoryItem> {
   if (item.ref === undefined) return {}
   const ref = text(item.ref)
@@ -79,7 +86,9 @@ function catalogFields(item: Record<string, unknown>): Partial<InventoryItem> {
   if (weight !== undefined && !(Number.isFinite(weight) && weight >= 0 && weight <= 100000)) throw new Invalid('น้ำหนักไม่ถูกต้อง')
   return {
     ref, category: item.category === undefined ? undefined : text(item.category, 40),
-    rarity: item.rarity as string | undefined, attunement: item.attunement === true ? true : undefined, weight
+    rarity: item.rarity as string | undefined, attunement: item.attunement === true ? true : undefined, weight,
+    bonus: item.bonus === undefined || item.bonus === 0 ? undefined : number(item.bonus, 1, 3),
+    base: item.base === undefined ? undefined : baseRef(item.base)
   }
 }
 function parseItem(value: unknown, monster: boolean): InventoryItem {
@@ -134,7 +143,7 @@ function copyScene(room: Room, source: Scene, name: string) {
     tokens: source.tokens.map(token => {
       const actor = get(room.actors, token.actorId)
       let actorId = actor.id
-      if (actor.kind === 'monster') {
+      if (actor.kind === 'monster' || actor.temp) {
         const duplicate = structuredClone(actor)
         duplicate.id = actorId = id()
         duplicate.inventory?.forEach(item => { item.id = id() })
@@ -185,7 +194,9 @@ function parseCalculations(value: unknown): CharacterCalculations {
     const armor = record(input.armor)
     if (armor.dex !== 'full' && armor.dex !== 'medium' && armor.dex !== 'none') throw new Invalid('เลือกวิธีใช้ DEX กับ AC')
     output.armor = { base: number(armor.base, 1, 99), dex: armor.dex, shield: armor.shield === true,
-      bonus: number(armor.bonus, -30, 99), extra: armor.extra === undefined ? undefined : readAbility(armor.extra) }
+      bonus: number(armor.bonus, -30, 99), extra: armor.extra === undefined ? undefined : readAbility(armor.extra),
+      armorMagic: armor.armorMagic === undefined ? undefined : number(armor.armorMagic, 0, 3),
+      shieldMagic: armor.shieldMagic === undefined ? undefined : number(armor.shieldMagic, 0, 3) }
   }
   if (input.initiativeBonus !== undefined) output.initiativeBonus = number(input.initiativeBonus, -99, 99)
   if (input.spellAbility !== undefined) output.spellAbility = readAbility(input.spellAbility)
@@ -203,13 +214,15 @@ function parseResources(value: unknown): ClassResource[] {
   })
 }
 /** Spend one spell slot of `level` (1–9) for a cast; 0 or none means a cantrip or a free cast. */
-function spendSlot(caster: Actor, level: unknown) {
+/** Spend one slot of a level: from Pact Magic when `pact` is set (a Warlock multiclass picks which pool), else the ordinary slots. */
+function spendSlot(caster: Actor, level: unknown, pact = false) {
   if (level === undefined || level === 0) return
   const wanted = number(level, 1, 9)
-  const slots = parseSlots(caster.slots)
+  const field = pact && caster.pactSlots !== undefined ? 'pactSlots' : 'slots'
+  const slots = parseSlots(caster[field] ?? '')
   const slot = slots?.find(entry => entry.level === wanted)
-  if (!slots || !slot || slot.left < 1) throw new Invalid('ไม่มีช่องเวทระดับ ' + wanted + ' เหลือ')
-  caster.slots = formatSlots(slots.map(entry => entry === slot ? { ...entry, left: entry.left - 1 } : entry))
+  if (!slots || !slot || slot.left < 1) throw new Invalid('ไม่มีช่องเวท' + (field === 'pactSlots' ? ' Pact ' : '') + 'ระดับ ' + wanted + ' เหลือ')
+  caster[field] = formatSlots(slots.map(entry => entry === slot ? { ...entry, left: entry.left - 1 } : entry))
 }
 function parseChecks<K extends string>(value: unknown, keys: readonly K[]) {
   const source = record(value)
@@ -304,6 +317,21 @@ export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory
   if (input.skillChecks !== undefined) sheet.skillChecks = parseChecks(input.skillChecks, Object.keys(commonSkills) as Skill[])
   if (input.savingThrows !== undefined) sheet.savingThrows = parseChecks(input.savingThrows, abilities)
   if (input.resources !== undefined) sheet.resources = parseResources(input.resources)
+  if (input.pactSlots !== undefined && input.pactSlots !== '') sheet.pactSlots = text(input.pactSlots, 200)
+  if (input.cunningUsed === true) sheet.cunningUsed = true
+  if (input.xp !== undefined) sheet.xp = number(input.xp, 0, 1000000)
+  if (input.subclass !== undefined && input.subclass !== '') {
+    if (!Object.values(srdSubclasses).some(entry => entry.name === input.subclass)) throw new Invalid('Subclass นี้ไม่มีใน SRD 5.2.1')
+    sheet.subclass = input.subclass as string
+  }
+  if (input.feats !== undefined) {
+    if (!Array.isArray(input.feats) || input.feats.length > 20) throw new Invalid('Feat ได้สูงสุด 20 รายการ')
+    const known = new Set(srdFeats.map(feat => feat.name))
+    sheet.feats = input.feats.map(feat => {
+      if (typeof feat !== 'string' || !known.has(feat)) throw new Invalid('Feat นี้ไม่มีใน SRD 5.2.1')
+      return feat
+    })
+  }
   if (input.hitDiceSpent !== undefined) {
     const spent = record(input.hitDiceSpent)
     sheet.hitDiceSpent = Object.fromEntries(restDice.flatMap(key => spent[key] === undefined ? [] : [[key, number(spent[key], 0, 20)]]))
@@ -364,14 +392,20 @@ export function snapshot(room: Room, me: Member): Snapshot {
     } : object)
   }))
   const visible = new Set(scenes.flatMap(scene => scene.tokens.map(token => token.actorId)))
+  // Invisible creatures leave the map for other players: no token, so no position. They still show in the turn order.
+  if (!dm) {
+    const unseen = new Set(room.actors.filter(actor => actor.ownerId !== me.id && !actor.temp && hasCondition(actor, 'Invisible')).map(actor => actor.id))
+    if (unseen.size) for (const scene of scenes) scene.tokens = scene.tokens.filter(token => !unseen.has(token.actorId))
+  }
   const rolls = visibleRolls(room, me)
   const active = scenes.find(scene => scene.id === room.activeSceneId)
   return {
     id: room.id, name: room.name, revision: room.revision, me: publicMember(me), members: room.members.map(publicMember),
     activeSceneId: room.activeSceneId, scenes, invite: dm ? room.invite : undefined, dmInvite: dm ? room.dmInvite : undefined,
-    actors: room.actors.filter(actor => dm || actor.ownerId === me.id).map(actor => dm ? actor : { ...actor, effects: visibleEffects(actor.effects, dm) }),
-    publicActors: room.actors.filter(actor => dm || visible.has(actor.id)).map(({ id, name, kind, size, portrait, hp, maxHp, tempHp, life, lootResult, conditions, effects }) =>
-      ({ id, name, kind, size, portrait, hp, maxHp, tempHp, lootResult, conditions, effects: visibleEffects(effects, dm), lootable: kind === 'monster' && life === 'dead' })),
+    actors: room.actors.filter(actor => dm || actor.ownerId === me.id || (actor.temp && visible.has(actor.id)))
+      .map(actor => ({ ...actor, portrait: actor.portrait ?? monsterPortrait(actor.monsterReference?.id), effects: visibleEffects(actor.effects, dm) })),
+    publicActors: room.actors.filter(actor => dm || visible.has(actor.id)).map(({ id, name, kind, size, portrait, monsterReference, hp, maxHp, tempHp, life, lootResult, conditions, effects }) =>
+      ({ id, name, kind, size, portrait: portrait ?? monsterPortrait(monsterReference?.id), hp, maxHp, tempHp, lootResult, conditions, effects: visibleEffects(effects, dm), lootable: kind === 'monster' && life === 'dead' })),
     templates: dm ? room.templates : [],
     rolls: rolls.slice(-40),
     log: visibleLog(room, me).slice(-80),
@@ -382,7 +416,83 @@ export function snapshot(room: Room, me: Member): Snapshot {
   }
 }
 
-export function applyCommand(room: Room, member: Member, command: Command) {
+export type BoardPiece = { token: Token; actor: Actor } | { object: SceneObject }
+
+export function copyBoardSelection(room: Room, member: Member, command: Command) {
+  const { tokenIds, objectIds } = command
+  if (!Array.isArray(tokenIds) || !Array.isArray(objectIds) || tokenIds.length + objectIds.length > 100 ||
+    [...tokenIds, ...objectIds].some(key => typeof key !== 'string')) throw new Invalid('เลือกได้สูงสุด 100 ชิ้น')
+  const view = snapshot(room, member)
+  const scene = get(view.scenes, command.sceneId)
+  const pieces: BoardPiece[] = []
+  for (const key of new Set(tokenIds)) {
+    const token = scene.tokens.find(token => token.id === key)
+    const actor = token && room.actors.find(actor => actor.id === token.actorId)
+    if (!token || !actor || (actor.kind === 'pc' && token.role !== 'companion')) continue
+    if (!actor.temp && actor.ownerId !== member.id && !token.copyShared) continue
+    const visible = view.actors.find(entry => entry.id === actor.id)
+    const summary = view.publicActors.find(entry => entry.id === actor.id)
+    if (visible) pieces.push({ token, actor: visible })
+    else if (summary) pieces.push({ token, actor: { ...blankSheet(summary.kind), ...summary, life: summary.lootable ? 'dead' : summary.hp ? 'active' : 'dying', ownerId: '' } })
+  }
+  for (const key of new Set(objectIds)) {
+    const object = scene.objects?.find(object => object.id === key)
+    if (object && (object.temp || object.copyShared || objectOwner(object, room.members) === member.id)) pieces.push({ object })
+  }
+  return { pieces, skipped: new Set(tokenIds).size + new Set(objectIds).size - pieces.length }
+}
+
+function pasteBoardSelection(target: Scene, room: Room, member: Member, command: Command, pieces: BoardPiece[]) {
+  if (!pieces.length) throw new Invalid('ยังไม่มี Token หรือ Object ที่คัดลอกไว้')
+  if (member.role !== 'dm' && pieces.some(piece => 'object' in piece || piece.actor.kind === 'monster')) {
+    throw new Forbidden('ให้ DM วาง Object หรือ Monster Token ในห้องนี้')
+  }
+  const anchorX = number(command.x, -1000, 1000, .5)
+  const anchorY = number(command.y, -1000, 1000, .5)
+  const positions = pieces.map(piece => 'object' in piece ? piece.object : piece.token)
+  const left = Math.min(...positions.map(point => point.x))
+  const top = Math.min(...positions.map(point => point.y))
+  const actorIds = new Map(pieces.flatMap(piece => 'actor' in piece ? [[piece.actor.id, id()] as const] : []))
+  const remap = (key?: string) => key ? actorIds.get(key) : undefined
+  const placements = pieces.map((piece, index) => {
+    const x = number(anchorX + positions[index].x - left, -1000, 1000, .5)
+    const y = number(anchorY + positions[index].y - top, -1000, 1000, .5)
+    if ('object' in piece) {
+      const object = structuredClone(piece.object)
+      Object.assign(object, { id: id(), x, y, temp: true, ownerId: undefined, copyShared: undefined })
+      if (object.kind === 'container') {
+        for (const item of object.items) item.id = id()
+        if (object.lock) object.lock.tried = object.lock.tried.flatMap(key => remap(key) ?? [])
+      }
+      return { object }
+    }
+    const actor = structuredClone(piece.actor)
+    actor.id = actorIds.get(actor.id)!
+    actor.ownerId = ''
+    actor.temp = true
+    delete actor.templateId
+    for (const item of actor.inventory ?? []) item.id = id()
+    for (const effect of actor.effects ?? []) {
+      effect.id = id()
+      effect.sourceId = remap(effect.sourceId)
+      if (!effect.sourceId) effect.concentration = undefined
+      const endsAt = remap(effect.ends?.actorId)
+      if (effect.ends) effect.ends = endsAt ? { ...effect.ends, actorId: endsAt } : undefined
+    }
+    const token: Token = { id: id(), actorId: actor.id, x, y, role: actor.kind === 'pc' ? 'companion' : undefined }
+    return { actor, token }
+  })
+  for (const placement of placements) {
+    if (placement.object) (target.objects ??= []).push(placement.object)
+    else {
+      room.actors.push(placement.actor)
+      target.tokens.push(placement.token)
+    }
+  }
+  return { pasted: placements.length }
+}
+
+export function applyCommand(room: Room, member: Member, command: Command, clipboard: BoardPiece[] = []) {
   const scene = () => get(room.scenes, command.sceneId)
   const active = () => {
     if (command.sceneId !== room.activeSceneId) throw new Conflict('ฉากเปลี่ยนแล้ว')
@@ -390,6 +500,11 @@ export function applyCommand(room: Room, member: Member, command: Command) {
   }
   const actor = () => get(room.actors, command.actorId)
   const board = () => member.role === 'dm' ? scene() : active()
+  function owns(member: Member, actor: Actor) {
+    if (member.role === 'dm' || actor.ownerId === member.id ||
+      (actor.temp && room.scenes.some(scene => scene.id === room.activeSceneId && scene.tokens.some(token => token.actorId === actor.id)))) return
+    throw new Forbidden('คุณไม่ได้ควบคุมตัวนี้')
+  }
   const object = (objects: SceneObject[]) => get(objects, command.objectId)
   const editableObject = () => {
     requireDM(member)
@@ -438,6 +553,26 @@ export function applyCommand(room: Room, member: Member, command: Command) {
     }
   }
   switch (command.type) {
+    case 'pasteBoard':
+      return pasteBoardSelection(board(), room, member, command, clipboard)
+    case 'boardCopySharing': {
+      const target = board()
+      if (typeof command.shared !== 'boolean' || (command.tokenId === undefined) === (command.objectId === undefined)) {
+        throw new Invalid('เลือกสิ่งที่จะตั้งสิทธิ์คัดลอก')
+      }
+      if (command.tokenId !== undefined) {
+        const token = get(target.tokens, command.tokenId)
+        const creature = get(room.actors, token.actorId)
+        const normalized = get(withTokenRoles(target, room.actors), token.id)
+        if (creature.temp || creature.ownerId !== member.id || normalized.role === 'character') throw new Forbidden('คุณตั้งสิทธิ์คัดลอก Token นี้ไม่ได้')
+        token.copyShared = command.shared
+      } else {
+        const item = object(target.objects ?? [])
+        if (objectOwner(item, room.members) !== member.id) throw new Forbidden('เจ้าของ Object เท่านั้นที่ตั้งสิทธิ์คัดลอกได้')
+        item.copyShared = command.shared
+      }
+      return {}
+    }
     case 'dmInvite':
       requireDM(member)
       room.dmInvite = id()
@@ -486,6 +621,9 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const removed = scene()
       const index = room.scenes.indexOf(removed)
       room.scenes.splice(index, 1)
+      const removedActors = new Set(removed.tokens.map(token => token.actorId))
+      room.actors = room.actors.filter(actor => !actor.temp || !removedActors.has(actor.id) ||
+        room.scenes.some(scene => scene.tokens.some(token => token.actorId === actor.id)))
       if (room.activeSceneId === removed.id) room.activeSceneId = (room.scenes[index] ?? room.scenes[index - 1])?.id
       return {}
     }
@@ -562,6 +700,50 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       }
       return {}
     }
+    case 'inventoryBonus': {
+      // The DM sets or changes the +1/+2/+3 of an item already in a bag; re-equip it to refresh the sheet.
+      requireDM(member)
+      const creature = actor()
+      const item = get(creature.inventory ?? [], command.itemId)
+      if (!['weapon', 'armor', 'shield', 'ammunition'].includes(item.category ?? '')) throw new Invalid('ใส่โบนัสเวทได้กับอาวุธ เกราะ โล่ และกระสุน')
+      const bonus = number(command.bonus, 0, 3)
+      const plain = item.name.replace(/ \+[1-3]$/, '')
+      if (bonus) Object.assign(item, { bonus, name: plain + ' +' + bonus, base: item.base ?? (item.ref?.includes(':equipment:') ? item.ref : undefined) })
+      else { delete item.bonus; item.name = plain }
+      return {}
+    }
+    case 'awardXp': {
+      // The DM shares XP (after a fight, or by hand): each named character gets `amount`.
+      requireDM(member)
+      const ids = command.actorIds
+      if (!Array.isArray(ids) || !ids.length || ids.length > 20) throw new Invalid('เลือกตัวละครที่จะได้ XP')
+      const amount = number(command.amount, 0, 100000)
+      const names: string[] = []
+      for (const key of new Set(ids)) {
+        const creature = get(room.actors, key)
+        if (creature.kind !== 'pc') throw new Invalid('ให้ XP ได้เฉพาะตัวละครผู้เล่น')
+        creature.xp = Math.min(1000000, (creature.xp ?? 0) + amount)
+        names.push(creature.name)
+      }
+      if (command.fromFight === true) delete scene().xpAward
+      if (amount) addLog(room, { kind: 'combat', text: names.join(', ') + ' ได้ ' + amount + ' XP' })
+      return {}
+    }
+    case 'skipXp': {
+      requireDM(member)
+      delete scene().xpAward
+      return {}
+    }
+    case 'magicalCunning': {
+      const creature = actor()
+      owns(member, creature)
+      const result = magicalCunning(creature)
+      if (!result) throw new Invalid('ใช้ Magical Cunning ไม่ได้ตอนนี้ (Warlock 2+, มีช่อง Pact ที่ใช้ไป และยังไม่ใช้ตั้งแต่ Long Rest ครั้งก่อน)')
+      creature[result.field] = result.value
+      creature.cunningUsed = true
+      addLog(room, { kind: 'combat', text: creature.name + ' ใช้ Magical Cunning ได้ช่อง Pact คืน ' + result.regained + ' ช่อง' })
+      return {}
+    }
     case 'lootSettings': {
       requireDM(member)
       const creature = actor()
@@ -607,7 +789,10 @@ export function applyCommand(room: Room, member: Member, command: Command) {
     }
     case 'place': {
       const target = board()
-      if (command.templateId || command.kind === 'monster') requireDM(member)
+      if (command.templateId) requireDM(member)
+      // A player's monster from the Manual is a temp token: it belongs to the scene, and anyone there can run it.
+      const playerMonster = member.role !== 'dm' && command.kind === 'monster' && command.sheet !== undefined
+      if (command.kind === 'monster' && !playerMonster) requireDM(member)
       if ([command.templateId, command.actorId, command.sheet].filter(value => value !== undefined).length !== 1) throw new Invalid('เลือกชีตสำหรับวาง Token')
       const template = command.templateId ? get(room.templates, command.templateId) : undefined
       const sheet = command.sheet === undefined ? undefined : parseSheet(command.sheet, command.kind === 'monster' ? 'monster' : 'pc')
@@ -615,7 +800,9 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         inventory: template.sheet.inventory?.map(item => ({ ...item, id: id() })) }
         : sheet ? { ...sheet, id: id(), ownerId: member.id } : actor()
       owns(member, creature)
-      if (creature.kind === 'monster') requireDM(member)
+      if (creature.temp) throw new Invalid('Temp Token ผูกกับฉากที่วางไว้')
+      if (creature.kind === 'monster' && !playerMonster) requireDM(member)
+      if (playerMonster) Object.assign(creature, { ownerId: '', temp: true as const })
       if (target.tokens.some(token => token.actorId === creature.id)) throw new Invalid('มี Token ของตัวนี้ในฉากแล้ว')
       const tokens = withTokenRoles(target, room.actors)
       const hasMain = tokens.some(token => token.role === 'character' && room.actors.some(actor => actor.id === token.actorId && actor.ownerId === creature.ownerId))
@@ -640,6 +827,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       }
       if (template || sheet) room.actors.push(creature)
       target.tokens = [...tokens, token]
+      if (playerMonster) addLog(room, { kind: 'scene', sceneId: target.id, name: member.name, text: member.name + ' วาง ' + creature.name })
       return {}
     }
     case 'tokenRole': {
@@ -648,7 +836,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const token = get(tokens, command.tokenId)
       const creature = get(room.actors, token.actorId)
       owns(member, creature)
-      if (creature.kind !== 'pc') throw new Invalid('เลือก Token ตัวละคร')
+      if (creature.kind !== 'pc' || creature.temp) throw new Invalid('เลือก Token ตัวละครที่มีเจ้าของ')
       const role = readTokenRole(command.role)
       const owned = new Set(room.actors.filter(actor => actor.ownerId === creature.ownerId).map(actor => actor.id))
       target.tokens = tokens.map(entry => {
@@ -697,11 +885,58 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const target = scene()
       const definition = parseObjectDefinition(command.definition ?? { ...command, lockDc: command.locked === true ? command.lockDc ?? 15 : undefined })
       const imported = placeObject(definition, command)
+      imported.ownerId = member.id
       ;(target.objects ??= []).push(imported)
       return {}
     }
+    case 'placeItem': {
+      // Anyone may set a catalog item on the map. It is temp: anyone nearby can pick it up.
+      const target = board()
+      if ((target.objects ?? []).length >= 300) throw new Invalid('ฉากนี้มี Object มากเกินไป')
+      const { id: _id, ...item } = parseItem(command.item, false)
+      const placed: SceneObject = { id: id(), kind: 'item', name: item.name, description: item.description, image: boardArt(item),
+        item: { ...item, id: id() }, temp: true, width: 1, height: 1,
+        x: number(command.x, -1000, 1000, .5), y: number(command.y, -1000, 1000, .5) }
+      ;(target.objects ??= []).push(placed)
+      addLog(room, { kind: 'scene', sceneId: target.id, name: member.name, text: member.name + ' วาง ' + item.name })
+      return {}
+    }
+    case 'dropItem': {
+      // Out of a bag onto the floor under the token: joins a pile already in that square, or starts one.
+      const target = board()
+      const creature = actor()
+      owns(member, creature)
+      const token = target.tokens.find(entry => entry.actorId === creature.id)
+      if (!token) throw new Invalid('วาง Token ของตัวนี้ในฉากก่อน')
+      const inventory = creature.inventory ?? []
+      const item = get(inventory, command.itemId)
+      const x = Math.floor(token.x), y = Math.floor(token.y)
+      let pile = target.objects?.find(entry => entry.pile && entry.kind === 'container' && Math.floor(entry.x) === x && Math.floor(entry.y) === y)
+      if (pile?.kind === 'container' && pile.items.length >= 50) throw new Invalid('กองของตรงนี้เต็มแล้ว')
+      if (!pile) {
+        if ((target.objects ?? []).length >= 300) throw new Invalid('ฉากนี้มี Object มากเกินไป')
+        pile = { id: id(), kind: 'container', name: 'ของบนพื้น', description: '', image: boardArt(item), open: true, items: [],
+          pile: true, temp: true, x, y, width: 1, height: 1 }
+        ;(target.objects ??= []).push(pile)
+      }
+      if (pile.kind === 'container') pile.items.push(item)
+      creature.inventory = inventory.filter(entry => entry.id !== item.id)
+      addLog(room, { kind: 'scene', sceneId: target.id, name: member.name, text: creature.name + ' ทิ้ง ' + item.name + ' ลงพื้น' })
+      return {}
+    }
+    case 'containerAdd': {
+      // Straight into a box on the map (from the SRD catalog or typed): the DM, or anyone for a temp box.
+      const target = board()
+      const box = object(target.objects ?? [])
+      if (!box.temp) requireDM(member)
+      if (box.kind !== 'container') throw new Invalid('เป้าหมายต้องเป็นกล่อง')
+      if (box.items.length >= 50) throw new Invalid('ใส่ของในกล่องได้สูงสุด 50 รายการ')
+      box.items.push(parseItem(command.item, false))
+      return {}
+    }
     case 'moveObject': {
-      const target = editableObject()
+      const target = object(board().objects ?? [])
+      if (!target.temp) requireDM(member)
       target.x = number(command.x, -1000, 1000, .5)
       target.y = number(command.y, -1000, 1000, .5)
       return {}
@@ -750,7 +985,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const current = object(target.objects ?? [])
       const creature = command.actorId ? actor() : undefined
       if (creature) {
-        nearby(target, creature, current)
+        if (member.role !== 'dm') nearby(target, creature, current)
       } else if (member.role !== 'dm' || command.type !== 'openObject') throw new Invalid('เลือกตัวละครก่อน')
       if (command.type === 'openObject') {
         if (current.kind !== 'container') throw new Invalid('เป้าหมายต้องเป็นกล่อง')
@@ -774,11 +1009,15 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         if (inventory.length >= 100) throw new Invalid('Inventory เต็ม')
         let item: InventoryItem
         if (current.kind === 'item') {
-          item = { id: current.id, name: current.name, description: current.description, image: current.image }
+          const art = current.image ? sceneArtByImage(current.image) : undefined
+          const ref = art?.name === current.name ? art.ref ?? undefined : undefined
+          item = current.item ? { ...current.item, id: id() }
+            : { id: current.id, name: current.name, description: current.description, image: itemIcon(ref) ?? current.image, ref }
           target.objects = target.objects!.filter(entry => entry.id !== current.id)
         } else if (current.kind === 'container' && current.open) {
           item = get(current.items, command.itemId)
           current.items = current.items.filter(entry => entry.id !== item.id)
+          if (current.pile && !current.items.length) target.objects = target.objects!.filter(entry => entry.id !== current.id)
         } else throw new Invalid('เปิดกล่องก่อนหยิบของ')
         inventory.push(item)
       }
@@ -810,6 +1049,9 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         throw new Conflict('ให้นำ Token ออกหลังจบการต่อสู้')
       }
       target.tokens = withTokenRoles(target, room.actors).filter(item => item.id !== token.id)
+      if (!room.scenes.some(scene => scene.tokens.some(entry => entry.actorId === token.actorId))) {
+        room.actors = room.actors.filter(actor => actor.id !== token.actorId || !actor.temp)
+      }
       return {}
     }
     case 'roll': {
@@ -826,8 +1068,12 @@ export function applyCommand(room: Room, member: Member, command: Command) {
     case 'sheetRoll': {
       const creature = actor()
       owns(member, creature)
-      const advantage = command.advantage === true
-      const disadvantage = command.disadvantage === true
+      // Left click lets the conditions decide; the right-click menu (or the old toggles) is the roller's own choice.
+      const chosen = chosenMode(command)
+      const decide = (odds: Odds) => {
+        const { mode, note } = chooseMode(odds, chosen)
+        return { advantage: mode === 'advantage', disadvantage: mode === 'disadvantage', note: note ? ' · ' + note : '' }
+      }
       const rollType = command.rollType
       const weapon = command.weaponIndex === undefined ? undefined : creature.attacks?.[number(command.weaponIndex, 0, 19)]
       if (command.weaponIndex !== undefined && !weapon) throw new Invalid('รายการโจมตีเปลี่ยนแล้ว')
@@ -855,12 +1101,16 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         const cover = Math.max(manualCover, structureCover(target.objects ?? [], center(tokenOf(creature.id), creature), center(tokenOf(victim.id), victim)))
         if (cover === 99) throw new Invalid('เป้าหมายอยู่หลังที่กำบังเต็ม')
         // Spend the slot only once the attack is valid (target in scene, not behind full cover).
-        if (rollType === 'spellAttack') spendSlot(creature, command.slotLevel)
-        const hitRoll = d20((rollType === 'attack' ? weapon?.bonus ?? creature.attack : creature.spellAttack) + d20Penalty(creature), advantage, disadvantage)
-        const critical = hitRoll.natural === 20
+        if (rollType === 'spellAttack') spendSlot(creature, command.slotLevel, command.pact === true)
+        const adjacent = isNear(tokenOf(creature.id), creature, { ...tokenOf(victim.id), width: sizes[victim.size], height: sizes[victim.size] })
+        const odds = decide(attackOdds(creature, victim, adjacent))
+        // Archery: +2 with weapons that fire ammunition.
+        const archery = rollType === 'attack' && creature.feats?.includes('Archery') && /Ammunition/.test(weapon?.notes ?? '') ? 2 : 0
+        const hitRoll = d20((rollType === 'attack' ? weapon?.bonus ?? creature.attack : creature.spellAttack) + archery + d20Penalty(creature), odds.advantage, odds.disadvantage)
+        const critical = hitRoll.natural >= (rollType === 'attack' ? criticalFrom(creature) : 20)
         const hit = critical || (hitRoll.natural !== 1 && hitRoll.total >= victim.ac + cover)
         const context = { sceneId: target.id, sourceId: creature.id, targetId: victim.id }
-        saveRoll((weapon?.name ?? rollType) + ' · ' + creature.name, hitRoll, { ...context, outcome: critical ? 'คริติคัล' : hit ? 'โดน' : 'พลาด' })
+        saveRoll((weapon?.name ?? rollType) + ' · ' + creature.name + odds.note, hitRoll, { ...context, outcome: critical ? 'คริติคัล' : hit ? 'โดน' : 'พลาด' })
         if (!hit) return {}
         const receipt = saveRoll('Damage · ' + victim.name, rollDice(rollType === 'attack' ? weapon?.damage ?? creature.damage : text(command.formula), die, critical), {
           ...context, applied: false, critical, damageKind: rollType === 'attack'
@@ -876,7 +1126,10 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         }
         return receipt
       }
-      if (rollType === 'initiative') return saveRoll('Initiative · ' + creature.name, d20(creature.initiative + d20Penalty(creature), advantage, disadvantage))
+      if (rollType === 'initiative') {
+        const odds = decide(rollOdds(creature, 'initiative'))
+        return saveRoll('Initiative · ' + creature.name + odds.note, d20(creature.initiative + d20Penalty(creature), odds.advantage, odds.disadvantage))
+      }
       if (rollType !== 'check' && rollType !== 'save') throw new Invalid('ประเภทการทอยไม่ถูกต้อง')
       if (!abilities.includes(command.ability as typeof abilities[number])) throw new Invalid('เลือกค่าความสามารถ')
       const ability = command.ability as typeof abilities[number]
@@ -884,7 +1137,10 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const trained = rollType === 'save' ? creature.savingThrows?.[ability] : skill ? creature.skillChecks?.[skill] : undefined
       const score = skill && rollType === 'check' ? commonSkills[skill] : ability
       const bonus = trained ? bonusForCheck(creature, trained) : modifier(creature.abilities[score]) + (command.proficient === true ? creature.proficiency : 0)
-      return saveRoll((rollType === 'check' && skill ? skill : ability) + ' ' + rollType + ' · ' + creature.name, d20(bonus + d20Penalty(creature), advantage, disadvantage))
+      const checkOdds = rollOdds(creature, rollType, ability)
+      const odds = decide(checkOdds)
+      return saveRoll((rollType === 'check' && skill ? skill : ability) + ' ' + rollType + ' · ' + creature.name + odds.note,
+        d20(bonus + d20Penalty(creature), odds.advantage, odds.disadvantage), checkOdds.autoFail ? { outcome: 'ล้มเหลวอัตโนมัติ (' + checkOdds.autoFail + ')' } : {})
     }
     case 'castSave': {
       const target = active()
@@ -897,7 +1153,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const damage = command.formula ? text(command.formula) : undefined
       if (damage) parseDice(damage)
       const label = text(command.label)
-      spendSlot(caster, command.slotLevel)
+      spendSlot(caster, command.slotLevel, command.pact === true)
       return saveRoll('Spell · ' + label + (command.slotLevel ? ' (ช่องระดับ ' + command.slotLevel + ')' : ''), { total: caster.spellDC, faces: [], formula: ability + ' Save DC', modifier: 0 }, {
         sceneId: target.id, sourceId: caster.id, targetId: victim.id, cast: { ability, dc: caster.spellDC, targetId: victim.id, damage, half: command.half === true }
       })
@@ -912,11 +1168,14 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const proficient = command.proficient === true ? victim.proficiency : 0
       const saved = victim.savingThrows?.[roll.cast.ability]
       const bonus = saved ? bonusForCheck(victim, saved) : modifier(victim.abilities[roll.cast.ability]) + proficient
-      const result = d20(bonus + d20Penalty(victim), command.advantage === true, command.disadvantage === true)
-      const passed = result.total >= roll.cast.dc
+      const saveOdds = rollOdds(victim, 'save', roll.cast.ability)
+      const decided = chooseMode(saveOdds, chosenMode(command))
+      const result = d20(bonus + d20Penalty(victim), decided.mode === 'advantage', decided.mode === 'disadvantage')
+      const passed = !saveOdds.autoFail && result.total >= roll.cast.dc
       roll.cast.resolved = true
       const context = { sceneId: target.id, sourceId: roll.sourceId, targetId: victim.id }
-      saveRoll('Spell Save · ' + victim.name, result, { ...context, outcome: passed ? 'ผ่าน' : 'พลาด' })
+      saveRoll('Spell Save · ' + victim.name + (decided.note ? ' · ' + decided.note : ''), result,
+        { ...context, outcome: saveOdds.autoFail ? 'พลาดอัตโนมัติ (' + saveOdds.autoFail + ')' : passed ? 'ผ่าน' : 'พลาด' })
       if (roll.cast.damage && (!passed || roll.cast.half)) {
         const damage = rollDice(roll.cast.damage)
         return saveRoll('Spell Damage · ' + victim.name, {
@@ -954,7 +1213,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const combat = target.combat
       if (!combat) throw new Invalid('ยังไม่ได้เริ่มการต่อสู้')
       const currentActor = get(room.actors, combat.order[combat.turn].actorId)
-      if (member.role !== 'dm' && (currentActor.ownerId !== member.id || command.actorId !== currentActor.id)) throw new Forbidden('ยังไม่ถึงเทิร์นของคุณ')
+      if (member.role !== 'dm' && ((!currentActor.temp && currentActor.ownerId !== member.id) || command.actorId !== currentActor.id)) throw new Forbidden('ยังไม่ถึงเทิร์นของคุณ')
       advanceTurn(target, combat)
       return {}
     }
@@ -970,7 +1229,15 @@ export function applyCommand(room: Room, member: Member, command: Command) {
     case 'settings': {
       requireDM(member)
       const input = record(command.settings)
-      room.settings = { ...room.settings, autoDamage: input.autoDamage === true }
+      // Only the rules named in this command change.
+      const next = { ...room.settings }
+      if (input.autoDamage !== undefined) next.autoDamage = input.autoDamage === true
+      if (input.encumbrance !== undefined) next.encumbrance = input.encumbrance === true
+      if (input.advancement !== undefined) {
+        if (input.advancement !== 'milestone' && input.advancement !== 'xp') throw new Invalid('เลือกวิธีเลื่อนระดับ')
+        next.advancement = input.advancement
+      }
+      room.settings = next
       return {}
     }
     case 'spendHitDie': {
@@ -1072,7 +1339,8 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const creature = actor()
       const effect = get(creature.effects ?? [], command.effectId)
       const source = effect.sourceId ? room.actors.find(item => item.id === effect.sourceId) : undefined
-      if (member.role !== 'dm' && creature.ownerId !== member.id && source?.ownerId !== member.id) throw new Forbidden('คุณไม่ได้ควบคุมตัวนี้')
+      if (member.role !== 'dm' && effect.hidden) throw new Forbidden('Condition ลับใช้ได้เฉพาะ DM')
+      if (source?.ownerId !== member.id) owns(member, creature)
       if (effect.condition === 'Concentration') { breakConcentration(room, creature, 'เลิกตั้งสมาธิ'); return {} }
       creature.effects = (creature.effects ?? []).filter(entry => entry.id !== effect.id)
       if (!effect.hidden) addLog(room, { kind: 'combat', text: creature.name + ' พ้นจาก ' + effectName(effect) })
@@ -1081,6 +1349,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
     case 'effectSave': {
       const creature = actor()
       const effect = get(creature.effects ?? [], command.effectId)
+      if (member.role !== 'dm' && effect.hidden) throw new Forbidden('Condition ลับใช้ได้เฉพาะ DM')
       if (!effect.pending) throw new Conflict('ไม่มีการทอยเซฟที่รออยู่')
       if (command.skip === true) {
         requireDM(member)
@@ -1091,11 +1360,14 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const { ability, dc, reason } = effect.pending
       const trained = creature.savingThrows?.[ability]
       const bonus = (trained ? bonusForCheck(creature, trained) : modifier(creature.abilities[ability])) + d20Penalty(creature)
-      const result = d20(bonus, command.advantage === true, command.disadvantage === true)
-      const passed = result.total >= dc
+      const saveOdds = rollOdds(creature, 'save', ability)
+      const decided = chooseMode(saveOdds, chosenMode(command))
+      const result = d20(bonus, decided.mode === 'advantage', decided.mode === 'disadvantage')
+      const passed = !saveOdds.autoFail && result.total >= dc
       effect.pending = undefined
       const label = reason === 'concentration' ? 'Concentration' : effectName(effect)
-      const receipt = saveRoll(ability + ' save · ' + creature.name + ' · ' + label, result, { outcome: (passed ? 'ผ่าน' : 'พลาด') + ' DC ' + dc, ...(effect.hidden ? { privateTo: member.id } : {}) })
+      const receipt = saveRoll(ability + ' save · ' + creature.name + ' · ' + label + (decided.note ? ' · ' + decided.note : ''), result, {
+        outcome: (saveOdds.autoFail ? 'พลาดอัตโนมัติ (' + saveOdds.autoFail + ')' : passed ? 'ผ่าน' : 'พลาด') + ' DC ' + dc, ...(effect.hidden ? { privateTo: member.id } : {}) })
       if (reason === 'concentration' && !passed) breakConcentration(room, creature, 'พลาด CON save')
       if (reason === 'repeat' && passed) {
         creature.effects = (creature.effects ?? []).filter(entry => entry.id !== effect.id)
@@ -1113,6 +1385,13 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       if (command.type === 'end') {
         delete target.combat
         addLog(room, { kind: 'combat', sceneId: target.id, text: 'จบการต่อสู้' })
+        // Rooms that level by XP: the defeated monsters' XP waits for the DM to share out among the characters who fought.
+        if (room.settings?.advancement === 'xp') {
+          const fought = combat.order.map(entry => room.actors.find(item => item.id === entry.actorId)).filter((item): item is Actor => Boolean(item))
+          const total = fought.filter(item => item.kind === 'monster' && item.life === 'dead').reduce((sum, item) => sum + monsterXp(item), 0)
+          const actorIds = fought.filter(item => item.kind === 'pc').map(item => item.id)
+          if (total > 0 && actorIds.length) target.xpAward = { total, actorIds, at: Date.now() }
+        }
       } else if (command.type === 'tie') {
         const index = combat.order.findIndex(entry => entry.actorId === command.actorId)
         if (index < 1 || combat.order[index].initiative !== combat.order[index - 1].initiative) throw new Invalid('สลับได้เฉพาะ Initiative ที่เสมอกัน')
@@ -1209,7 +1488,9 @@ export function applyCommand(room: Room, member: Member, command: Command) {
     case 'slots': {
       const creature = actor()
       owns(member, creature)
-      creature.slots = command.slots === '' ? '' : text(command.slots, 2000)
+      const value = command.slots === '' ? '' : text(command.slots, 2000)
+      if (command.pact === true) creature.pactSlots = value
+      else creature.slots = value
       return {}
     }
     default:

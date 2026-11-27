@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { blankSheet } from '../shared/model.ts'
 import type { Actor, Member, Room } from '../shared/model.ts'
 import { armorFromCatalog, catalogItems, inventoryFromCatalog, itemSummary, weaponAttack } from '../shared/itemCatalog.ts'
@@ -18,11 +18,13 @@ test('every catalog item becomes an inventory item the server accepts', () => {
   for (const [index, template] of catalog.entries()) {
     const item = inventoryFromCatalog(template, { variant: template.details.variants?.[0]?.label })
     assert.ok(item.description.length <= 2000, template.name)
+    assert.ok(item.image && existsSync(new URL('../public' + item.image, import.meta.url)), template.id)
     if (index % 100 === 0) hero.inventory = []
     applyCommand(room, dm, { type: 'inventoryAdd', actorId: hero.id, item })
   }
   assert.ok(hero.inventory!.every(item => item.ref?.startsWith('srd-5.2.1:')))
   assert.throws(() => applyCommand(room, dm, { type: 'inventoryAdd', actorId: hero.id, item: { name: 'Fake', ref: 'homebrew:sword' } }), /SRD/)
+  assert.throws(() => applyCommand(room, dm, { type: 'inventoryAdd', actorId: hero.id, item: { name: 'Fake', image: '/art/srd/inventory/missing.png' } }), /รูป/)
 })
 
 test('variants, long text, tools and magic facts carry over', () => {

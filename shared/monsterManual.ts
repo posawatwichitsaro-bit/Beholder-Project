@@ -2,6 +2,7 @@ import { abilities, blankSheet, damageKinds, sizes } from './model.ts'
 import type { Ability, DamageKind, Sheet, Size } from './model.ts'
 import { abilityModifier, commonSkills } from './characterStats.ts'
 import type { CheckBonus, Skill } from './characterStats.ts'
+import { monsterPortrait } from './catalogArt.ts'
 
 export const detailLabels = {
   senses: 'Senses', languages: 'Languages', skills: 'Skills', immunities: 'Immunities',
@@ -70,7 +71,7 @@ export function monsterSheet(monster: ManualMonster): Sheet {
     .flatMap(key => monster.details?.[key] ? [detailLabels[key] + ' ' + monster.details[key]] : []).join(' · ')
   const skillChecks = skillText ? readSkills(skillText, monster.abilities, proficiency) : {}
   return {
-    ...blankSheet('monster'), name: monster.name, size: monster.size, speed: monster.speed,
+    ...blankSheet('monster'), name: monster.name, size: monster.size, speed: monster.speed, portrait: monsterPortrait(monster.id),
     ac: monster.ac, hp: monster.hp, maxHp: monster.hp, initiative: monster.initiative,
     abilities: { ...monster.abilities }, proficiency,
     classLevel: [monster.type, 'CR ' + monster.cr, monster.alignment].filter(Boolean).join(' · '),
@@ -234,4 +235,25 @@ export function parseMonsterText(source: string): ManualMonster {
     initiative: block.match(/\bInitiative\s*([+-]?\d+)/i)?.[1] === undefined ? undefined : Number(block.match(/\bInitiative\s*([+-]?\d+)/i)![1]),
     attacks, statBlock: source.trim()
   })
+}
+
+/** The SRD entry an older monster sheet was made from: its catalog id, else the same name (ignoring "Goblin 2"-style numbers). */
+export function srdMatch(sheet: Pick<Sheet, 'name' | 'monsterReference'>, catalog: ManualMonster[]) {
+  const id = sheet.monsterReference?.id
+  if (id) return catalog.find(entry => entry.id === id)
+  const name = sheet.name.trim().replace(/\s+\d+$/, '').toLowerCase()
+  return catalog.find(entry => entry.id.startsWith('srd-') && entry.name.toLowerCase() === name)
+}
+
+/**
+ * An older template brought up to the current SRD sheet: stats, saves, skills,
+ * attacks and art come from the catalog; the name the DM gave it and its loot
+ * (items, search DC and skill) stay. Undefined when no SRD entry matches.
+ */
+export function upgradeFromSrd(sheet: Sheet, catalog: ManualMonster[]): Sheet | undefined {
+  const entry = srdMatch(sheet, catalog)
+  if (!entry) return undefined
+  const fresh = monsterSheet(entry)
+  return { ...fresh, name: sheet.name, portrait: sheet.portrait && !sheet.portrait.startsWith('/art/') ? sheet.portrait : fresh.portrait,
+    inventory: sheet.inventory, lootDc: sheet.lootDc, lootSkill: sheet.lootSkill }
 }

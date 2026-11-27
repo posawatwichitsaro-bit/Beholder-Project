@@ -35,7 +35,7 @@ test('account auth upgrades legacy hashes, rotates credentials and enforces sess
     method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body)
   })
   const credentials = { email: 'hero@example.com', name: 'Hero', password: 'old-pass' }
-  assert.equal((await fetch(account + '/session', post({ ...credentials, mode: 'register' }))).status, 400)
+  assert.equal((await fetch(account + '/session', post({ ...credentials, password: 'short-7', mode: 'register' }))).status, 400)
 
   const id = randomUUID()
   const salt = 'fce234a454d63c576458dce79d32ef54'
@@ -114,9 +114,9 @@ test('an empty PUBLIC_ORIGIN still accepts same-origin browser requests', { time
   const address = server.address()
   assert(address && typeof address === 'object')
   const base = 'http://127.0.0.1:' + address.port
-  const register = (origin: string) => fetch(base + '/api/account/session', {
+  const register = (origin: string, password = 'new-pass') => fetch(base + '/api/account/session', {
     method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin },
-    body: JSON.stringify({ mode: 'register', email: randomUUID() + '@example.com', password: 'empty-origin-password', name: 'Origin' })
+    body: JSON.stringify({ mode: 'register', email: randomUUID() + '@example.com', password, name: 'Origin' })
   })
   assert.equal((await register(base)).status, 201)
   assert.equal((await register('http://evil.example')).status, 403)

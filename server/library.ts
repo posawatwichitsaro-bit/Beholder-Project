@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { randomUUID } from 'node:crypto'
 import type { Request } from 'express'
+import { passwordMaxLength, passwordMinLength } from '../shared/auth.ts'
 import type { SavedObject, Template } from '../shared/model.ts'
 import { Conflict, Forbidden, parseObjectDefinition, parseSheet, text } from './commands.ts'
 import type { AuthThrottle } from './authThrottle.ts'
@@ -25,8 +26,8 @@ export function libraryRoutes(database: Database, allowAttempt: AuthThrottle) {
     const key = name.toLowerCase()
     const password = req.body?.password
     const mode = req.body?.mode
-    if (!key || key.length > 40 || (mode !== 'register' && mode !== 'login') || !validPassword(password, mode === 'register')) {
-      throw new Invalid(mode === 'register' ? 'กรอกชื่อโปรไฟล์และรหัสผ่าน 15–128 ตัวอักษร' : 'กรอกชื่อโปรไฟล์และรหัสผ่านให้ถูกต้อง')
+    if (!key || key.length > 40 || (mode !== 'register' && mode !== 'login') || !validPassword(password)) {
+      throw new Invalid(mode === 'register' ? `กรอกชื่อโปรไฟล์และรหัสผ่าน ${passwordMinLength}–${passwordMaxLength} ตัวอักษร` : 'กรอกชื่อโปรไฟล์และรหัสผ่านให้ถูกต้อง')
     }
     if (!allowAttempt(req, res, 'library', key, mode)) return
     let id: string

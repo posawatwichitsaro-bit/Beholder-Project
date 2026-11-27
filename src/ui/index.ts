@@ -20,3 +20,4 @@ export { D20Icon, CrossedSwordsIcon, GrimoireIcon, BeholderEyeIcon } from './ico
 export { hpTone, hpPercent } from './hp.ts'
 export type { HpSide, HpTone } from './hp.ts'
 export { MoveHandle, useMovable } from './Movable.tsx'
+export { RollMenuHost, rollMenuProps } from './RollMenu.tsx'
