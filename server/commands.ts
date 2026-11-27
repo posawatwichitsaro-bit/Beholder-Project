@@ -15,6 +15,8 @@ import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared
 import { attackOdds, chooseMode, chosenMode, rollOdds } from '../shared/advantage.ts'
 import type { Odds } from '../shared/advantage.ts'
 import { criticalFrom, magicalCunning, monsterXp, srdFeats, srdSubclasses } from '../shared/progression.ts'
+import { key, playerView, tokenSeen, wallsForPlayer } from '../shared/vision.ts'
+import type { ActorVision, Ambient, Door, LightSource, SceneVision, Wall } from '../shared/vision.ts'
 import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
 export class Forbidden extends Error {}
@@ -72,6 +74,24 @@ function description(value: unknown) {
 }
 const rarities = ['Common', 'Uncommon', 'Rare', 'Very Rare', 'Legendary', 'Artifact', 'Varies']
 /** Facts copied from the SRD item catalog. Optional, so hand-made items and older rooms stay as they are. */
+function parseActorVision(value: unknown): ActorVision {
+  const input = record(value)
+  const feet = (item: unknown) => item === undefined || item === null || item === '' ? undefined : number(item, 0, 1000)
+  const light = input.light === undefined || input.light === null ? undefined : record(input.light)
+  return {
+    range: feet(input.range), darkvision: feet(input.darkvision),
+    light: light && { bright: number(light.bright, 0, 300), dim: number(light.dim, 0, 300), on: light.on === true }
+  }
+}
+const cellPoint = (value: unknown): { x: number; y: number } => {
+  const point = record(value)
+  return { x: number(point.x, -1000, 1000, .5), y: number(point.y, -1000, 1000, .5) }
+}
+const cellKey = (value: unknown) => {
+  const match = /^(-?\d{1,4}),(-?\d{1,4})$/.exec(String(value))
+  if (!match) throw new Invalid('ช่องไม่ถูกต้อง')
+  return key(Number(match[1]), Number(match[2]))
+}
 function baseRef(value: unknown) {
   const ref = String(value)
   if (!/^srd-5\.2\.1:equipment:[a-z0-9-]+$/.test(ref)) throw new Invalid('ไอเทมพื้นฐานไม่ถูกต้อง')
@@ -140,6 +160,7 @@ function copyScene(room: Room, source: Scene, name: string) {
   const copy: Scene = {
     id: id(), name, cell: source.cell, originX: source.originX, originY: source.originY,
     map: source.map && { ...source.map },
+    ...(source.vision ? { vision: { ...structuredClone(source.vision), explored: undefined } } : {}),
     tokens: source.tokens.map(token => {
       const actor = get(room.actors, token.actorId)
       let actorId = actor.id
@@ -324,6 +345,7 @@ export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory
     if (!Object.values(srdSubclasses).some(entry => entry.name === input.subclass)) throw new Invalid('Subclass นี้ไม่มีใน SRD 5.2.1')
     sheet.subclass = input.subclass as string
   }
+  if (input.vision !== undefined) sheet.vision = parseActorVision(input.vision)
   if (input.feats !== undefined) {
     if (!Array.isArray(input.feats) || input.feats.length > 20) throw new Invalid('Feat ได้สูงสุด 20 รายการ')
     const known = new Set(srdFeats.map(feat => feat.name))
@@ -391,14 +413,37 @@ export function snapshot(room: Room, me: Member): Snapshot {
       lock: object.lock && { ...object.lock, tried: object.lock.tried.filter(id => room.actors.some(actor => actor.id === id && actor.ownerId === me.id)) }
     } : object)
   }))
-  const visible = new Set(scenes.flatMap(scene => scene.tokens.map(token => token.actorId)))
+  // Vision on: a player gets the tokens and objects their own tokens can see, their explored squares,
+  // walls with secret doors shown as plain wall, and no darkness or other players' memories.
+  if (!dm) for (const view of scenes) {
+    const vision = view.vision
+    if (!vision) continue
+    if (!vision.enabled) { view.vision = { enabled: false, ambient: vision.ambient }; continue }
+    const seen = playerView(view, room.actors, me.id)
+    const owned = (actorId: string) => room.actors.some(actor => actor.id === actorId && (actor.ownerId === me.id || actor.temp))
+    view.tokens = view.tokens.filter(token => {
+      const actor = room.actors.find(item => item.id === token.actorId)
+      return owned(token.actorId) || (actor && tokenSeen(token, sizes[actor.size], seen.visible))
+    })
+    view.objects = view.objects?.filter(object => tokenSeen(object, Math.max(object.width, object.height), seen.visible))
+    view.view = { visible: [...seen.visible], dimmed: [...seen.dimmed], darkvision: [...seen.darkvision], explored: vision.explored?.[me.id] ?? [] }
+    view.vision = { enabled: true, ambient: vision.ambient, walls: wallsForPlayer(vision.walls), lights: vision.lights }
+  }
+  // Creatures in a fight here stay listed (the turn order) even when unseen; the board still leaves them out.
+  const visible = new Set(scenes.flatMap(scene => [...scene.tokens.map(token => token.actorId), ...(scene.combat?.order.map(entry => entry.actorId) ?? [])]))
   // Invisible creatures leave the map for other players: no token, so no position. They still show in the turn order.
   if (!dm) {
     const unseen = new Set(room.actors.filter(actor => actor.ownerId !== me.id && !actor.temp && hasCondition(actor, 'Invisible')).map(actor => actor.id))
     if (unseen.size) for (const scene of scenes) scene.tokens = scene.tokens.filter(token => !unseen.has(token.actorId))
   }
-  const rolls = visibleRolls(room, me)
   const active = scenes.find(scene => scene.id === room.activeSceneId)
+  // On a vision scene, names of creatures this player cannot see become "บางสิ่ง" in rolls and the log.
+  const onMap = new Set(active?.tokens.map(token => token.actorId) ?? [])
+  const unseen = !dm && active?.view ? room.actors.filter(actor => actor.ownerId !== me.id && !onMap.has(actor.id) &&
+    room.scenes.find(scene => scene.id === room.activeSceneId)?.tokens.some(token => token.actorId === actor.id)).map(actor => actor.name)
+    .sort((a, b) => b.length - a.length) : [] // longest first: "Goblin 10" before "Goblin 1"
+  const mask = (text: string) => unseen.reduce((value, name) => name ? value.split(name).join('บางสิ่ง') : value, text)
+  const rolls = visibleRolls(room, me).map(roll => unseen.length ? { ...roll, label: mask(roll.label), outcome: roll.outcome && mask(roll.outcome) } : roll)
   return {
     id: room.id, name: room.name, revision: room.revision, me: publicMember(me), members: room.members.map(publicMember),
     activeSceneId: room.activeSceneId, scenes, invite: dm ? room.invite : undefined, dmInvite: dm ? room.dmInvite : undefined,
@@ -408,7 +453,7 @@ export function snapshot(room: Room, me: Member): Snapshot {
       ({ id, name, kind, size, portrait: portrait ?? monsterPortrait(monsterReference?.id), hp, maxHp, tempHp, lootResult, conditions, effects: visibleEffects(effects, dm), lootable: kind === 'monster' && life === 'dead' })),
     templates: dm ? room.templates : [],
     rolls: rolls.slice(-40),
-    log: visibleLog(room, me).slice(-80),
+    log: visibleLog(room, me).slice(-80).map(entry => unseen.length ? { ...entry, text: mask(entry.text) } : entry),
     settings: room.settings,
     combatQueue: dm && active ? rolls.filter(roll =>
       (roll.sceneId === active.id || (!roll.sceneId && active.tokens.some(token => token.actorId === roll.targetId))) &&
@@ -493,6 +538,29 @@ function pasteBoardSelection(target: Scene, room: Room, member: Member, command:
 }
 
 export function applyCommand(room: Room, member: Member, command: Command, clipboard: BoardPiece[] = []) {
+  const output = runCommand(room, member, command, clipboard)
+  rememberSeen(room)
+  return output
+}
+
+/** Players remember the squares they have seen on the active scene (vision on): the map stays visible there, dimmed. */
+export function rememberSeen(room: Room) {
+  const scene = room.scenes.find(item => item.id === room.activeSceneId)
+  const vision = scene?.vision
+  if (!scene || !vision?.enabled) return
+  for (const member of room.members) {
+    if (member.role === 'dm') continue
+    const seen = playerView(scene, room.actors, member.id).visible
+    if (!seen.size) continue
+    const explored = new Set(vision.explored?.[member.id] ?? [])
+    const before = explored.size
+    for (const cell of seen) explored.add(cell)
+    if (explored.size === before) continue
+    vision.explored = { ...vision.explored, [member.id]: [...explored].slice(-40000) }
+  }
+}
+
+function runCommand(room: Room, member: Member, command: Command, clipboard: BoardPiece[] = []) {
   const scene = () => get(room.scenes, command.sceneId)
   const active = () => {
     if (command.sceneId !== room.activeSceneId) throw new Conflict('ฉากเปลี่ยนแล้ว')
@@ -509,6 +577,17 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
   const editableObject = () => {
     requireDM(member)
     return object(scene().objects ?? [])
+  }
+  /** A player's token must stand within one square of the door's middle. */
+  function doorReach(target: Scene, creature: Actor, wall: Wall) {
+    if (creature.life !== 'active') throw new Invalid('ตัวละครนี้ยังโต้ตอบไม่ได้')
+    const token = target.tokens.find(entry => entry.actorId === creature.id)
+    if (!token) throw new Invalid('วาง Token ในฉากก่อน')
+    const middle = { x: (wall.a.x + wall.b.x) / 2, y: (wall.a.y + wall.b.y) / 2 }
+    const span = sizes[creature.size]
+    const gapX = Math.max(0, token.x - middle.x, middle.x - (token.x + span))
+    const gapY = Math.max(0, token.y - middle.y, middle.y - (token.y + span))
+    if (Math.max(gapX, gapY) > 1) throw new Invalid('ให้ Token เข้าใกล้ประตูก่อน')
   }
   function nearby(target: Scene, creature: Actor, item: { x: number; y: number; width: number; height: number }) {
     owns(member, creature)
@@ -680,6 +759,7 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
         if (existing.hp === 0 && sheet.hp === 0) Object.assign(sheet, {
           life: existing.life, successes: existing.successes, failures: existing.failures
         })
+        if (member.role !== 'dm') sheet.vision = existing.vision
         Object.assign(existing, sheet)
         if (!sheet.calculations) delete existing.calculations
       } else room.actors.push({ id: id(), ownerId: member.id, ...sheet })
@@ -932,6 +1012,133 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
       if (box.kind !== 'container') throw new Invalid('เป้าหมายต้องเป็นกล่อง')
       if (box.items.length >= 50) throw new Invalid('ใส่ของในกล่องได้สูงสุด 50 รายการ')
       box.items.push(parseItem(command.item, false))
+      return {}
+    }
+    case 'visionSettings': {
+      // DM: switch vision on for a scene, and set its light.
+      requireDM(member)
+      const target = scene()
+      const vision: SceneVision = target.vision ??= { enabled: false, ambient: 'day' }
+      if (command.enabled !== undefined) vision.enabled = command.enabled === true
+      if (command.ambient !== undefined) {
+        if (!['day', 'dusk', 'night', 'cave'].includes(String(command.ambient))) throw new Invalid('เลือกแสงของฉาก')
+        vision.ambient = command.ambient as Ambient
+      }
+      if (command.clearExplored === true) delete vision.explored
+      return {}
+    }
+    case 'walls': {
+      // DM: add wall segments (doors are walls with a door), or remove some by id.
+      requireDM(member)
+      const vision: SceneVision = scene().vision ??= { enabled: false, ambient: 'day' }
+      const walls = vision.walls ??= []
+      const remove = new Set(Array.isArray(command.remove) ? command.remove.map(String) : [])
+      vision.walls = walls.filter(wall => !remove.has(wall.id))
+      const add = Array.isArray(command.add) ? command.add : []
+      if (vision.walls.length + add.length > 2000) throw new Invalid('ผนังในฉากได้สูงสุด 2000 เส้น')
+      for (const value of add) {
+        const input = record(value)
+        const a = cellPoint(input.a)
+        const b = cellPoint(input.b)
+        if (a.x === b.x && a.y === b.y) continue
+        vision.walls.push({ id: id(), a, b, ...(input.door === true ? { door: { open: false } } : {}) })
+      }
+      return {}
+    }
+    case 'doorSettings': {
+      // DM: lock or unlock, set a DC, hide as a secret door or reveal it, or turn a door back into wall.
+      requireDM(member)
+      const wall = get(scene().vision?.walls ?? [], command.wallId)
+      if (command.door === null) { delete wall.door; return {} }
+      const input = record(command.door)
+      const door: Door = wall.door ?? { open: false }
+      if (input.locked !== undefined) { door.locked = input.locked === true; if (door.locked) door.open = false }
+      if (input.dc !== undefined) door.dc = number(input.dc, 1, 30)
+      if (input.secret !== undefined) door.secret = input.secret === true
+      if (input.open !== undefined) door.open = input.open === true && !door.locked
+      wall.door = door
+      return {}
+    }
+    case 'door': {
+      // Open or shut a door: the DM anywhere; a player with a token within one square of it.
+      const target = board()
+      const wall = get(target.vision?.walls ?? [], command.wallId)
+      if (!wall.door || (wall.door.secret && member.role !== 'dm')) throw new Invalid('ตรงนี้ไม่ใช่ประตู')
+      if (member.role !== 'dm') {
+        const creature = actor()
+        owns(member, creature)
+        doorReach(target, creature, wall)
+      }
+      if (wall.door.locked && command.open === true) throw new Invalid('ประตูล็อกอยู่')
+      wall.door.open = command.open === true
+      return {}
+    }
+    case 'pickDoor': {
+      const target = board()
+      const wall = get(target.vision?.walls ?? [], command.wallId)
+      const door = wall.door
+      if (!door?.locked || door.secret) throw new Invalid('ประตูนี้ไม่ได้ล็อก')
+      const creature = actor()
+      owns(member, creature)
+      doorReach(target, creature, wall)
+      door.tried ??= []
+      if (door.tried.includes(creature.id)) throw new Conflict('ตัวละครนี้ลองสะเดาะประตูนี้ไปแล้ว')
+      if (!creature.inventory?.some(item => item.tool === 'thievesTools')) throw new Invalid('ต้องมี Thieves’ Tools ใน Inventory')
+      const hasTool = creature.itemProficiency?.thievesTools === true
+      const hasSkill = creature.itemProficiency?.sleight === true
+      const dc = door.dc ?? 15
+      const result = d20(modifier(creature.abilities.DEX) + (hasTool || hasSkill ? creature.proficiency : 0), hasTool && hasSkill, false)
+      const passed = result.total >= dc
+      door.tried.push(creature.id)
+      if (passed) { door.locked = false; door.open = true }
+      return saveRoll('สะเดาะประตู · DC ' + dc, result, { sceneId: target.id, sourceId: creature.id, outcome: passed ? 'ปลดล็อกแล้ว' : 'สะเดาะไม่สำเร็จ' })
+    }
+    case 'lights': {
+      // DM: place a light (torch on a wall, campfire), switch one, or remove it.
+      requireDM(member)
+      const vision: SceneVision = scene().vision ??= { enabled: false, ambient: 'day' }
+      const lights = vision.lights ??= []
+      if (command.add !== undefined) {
+        if (lights.length >= 200) throw new Invalid('แหล่งแสงในฉากได้สูงสุด 200 จุด')
+        const input = record(command.add)
+        const at = cellPoint(input)
+        const light: LightSource = { id: id(), x: at.x, y: at.y, bright: number(input.bright ?? 20, 0, 300), dim: number(input.dim ?? 20, 0, 300), on: input.on !== false }
+        lights.push(light)
+      }
+      if (command.toggle !== undefined) { const light = get(lights, command.toggle); light.on = !light.on }
+      if (command.remove !== undefined) vision.lights = lights.filter(light => light.id !== command.remove)
+      return {}
+    }
+    case 'darkness': {
+      // DM: paint darkness ("dark" — Darkvision still sees; "magic" — nothing does) or clear it, cell by cell.
+      requireDM(member)
+      const vision: SceneVision = scene().vision ??= { enabled: false, ambient: 'day' }
+      if (!Array.isArray(command.cells) || command.cells.length > 5000) throw new Invalid('ระบายได้ครั้งละไม่เกิน 5000 ช่อง')
+      const cells = new Set(command.cells.map(cellKey))
+      const dark = new Set(vision.darkness ?? [])
+      const magic = new Set(vision.magicDarkness ?? [])
+      for (const cell of cells) {
+        dark.delete(cell)
+        magic.delete(cell)
+        if (command.mode === 'dark') dark.add(cell)
+        else if (command.mode === 'magic') magic.add(cell)
+        else if (command.mode !== 'clear') throw new Invalid('เลือกชนิดความมืด')
+      }
+      if (dark.size + magic.size > 40000) throw new Invalid('ความมืดในฉากมากเกินไป')
+      vision.darkness = [...dark]
+      vision.magicDarkness = [...magic]
+      return {}
+    }
+    case 'actorVision': {
+      // DM sets range, Darkvision and a carried light; a player may only light or put out their own light.
+      const creature = actor()
+      owns(member, creature)
+      if (member.role === 'dm') {
+        creature.vision = parseActorVision(command.vision)
+        return {}
+      }
+      if (!creature.vision?.light) throw new Forbidden('ให้ DM ตั้งแหล่งแสงก่อน')
+      creature.vision.light.on = command.lightOn === true
       return {}
     }
     case 'moveObject': {

@@ -1,4 +1,5 @@
 import type { Area } from './area.ts'
+import type { ActorVision, SceneVision } from './vision.ts'
 import type { CharacterCalculations, CheckBonus, Skill } from './characterStats.ts'
 
 export const abilities = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'] as const
@@ -60,6 +61,8 @@ export type Sheet = {
   /** SRD subclass and feats picked when levelling; a few have effects worked out for you (shared/progression.ts). */
   subclass?: string
   feats?: string[]
+  /** Vision range, Darkvision and a carried light (the DM sets these; players can light or put out their own light). */
+  vision?: ActorVision
 }
 /**
  * One condition from one source. Poisoned from two sources is two effects shown as one mark;
@@ -163,6 +166,10 @@ export type Scene = {
   /** Who fought in this scene's last encounter, pre-selected for the next one. */
   lastParticipants?: string[]
   damageEvents?: DamageEvent[]; areaEffect?: { area: Area; kind: DamageKind; at: number }
+  /** Walls, doors, light, darkness and what each player has explored (see shared/vision.ts). */
+  vision?: SceneVision
+  /** Sent to a player only: what their tokens see on this scene right now, as "x,y" cells. */
+  view?: { visible: string[]; dimmed: string[]; darkvision: string[]; explored: string[] }
 }
 export type Roll = {
   id: string; name: string; label: string; formula: string; faces: number[]
