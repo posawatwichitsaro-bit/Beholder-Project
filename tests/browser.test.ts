@@ -12,6 +12,20 @@ const exact = (name: string) => ({ name, exact: true })
 const roomIdOf = (url: string) => /\/room\/([^/?#]+)/.exec(new URL(url).pathname)?.[1] ?? new URL(url).searchParams.get('room')
 
 /**
+ * Poll an async check in the page until it is truthy. Playwright's waitForFunction
+ * does not await an async predicate (the Promise itself counts as true), so waits
+ * on room state fetched in the page go through here instead.
+ */
+async function waitInPage<A>(page: Page, check: (arg: A) => Promise<unknown>, arg: A, timeout = 10000) {
+  const end = Date.now() + timeout
+  for (;;) {
+    if (await page.evaluate(check as never, arg as never)) return
+    if (Date.now() > end) throw new Error('timed out waiting for: ' + check.toString().replace(/\s+/g, ' ').slice(0, 200))
+    await page.waitForTimeout(100)
+  }
+}
+
+/**
  * A browser seat that has already seen the first-run tour, so the tour card
  * never sits over what a test clicks. The tour itself has its own test.
  */
@@ -548,7 +562,7 @@ test('a player takes gear from the SRD item catalog, wields the weapon and wears
   await sheet.getByRole('button', exact('ใช้เป็นการโจมตี')).click()
   await sheet.getByRole('button', exact('อยู่ในการโจมตีแล้ว')).waitFor()
   await sheet.getByRole('button', exact('สวมใส่')).click()
-  await page.waitForFunction(async url => (await (await fetch(url)).json()).actors[0].ac === 14, path)
+  await waitInPage(page, async url => (await (await fetch(url)).json()).actors[0].ac === 14, path)
   const vex = await actorOf()
   assert.deepEqual(vex.attacks?.[0] && { ...vex.attacks[0], notes: undefined }, { name: 'Rapier', bonus: 5, damage: '1d8+3', damageKind: 'piercing', notes: undefined })
   assert.equal(vex.ac, 11 + 3, 'Leather Armor: 11 + Dex')
@@ -666,7 +680,7 @@ test('the DM opens token conditions from the board, sets Poisoned and steps Exha
   await openPanel(page, 'ชีตในห้อง')
   await page.getByRole('button', exact('วาง Mira')).click()
   await page.locator('canvas').click({ position: { x: 210, y: 160 } })
-  await page.waitForFunction(async url => (await (await fetch(url)).json()).scenes[0].tokens.length === 1, path)
+  await waitInPage(page, async url => (await (await fetch(url)).json()).scenes[0].tokens.length === 1, path)
 
   await page.locator('canvas').click({ position: { x: 210, y: 160 }, button: 'right' })
   await page.locator('.context-popover').getByRole('button', exact('Condition')).click()
@@ -710,7 +724,7 @@ test('Hold Person from the board: a repeat save comes due at the end of the targ
     await openPanel(page, 'ชีตในห้อง')
     await page.getByRole('button', exact('วาง ' + name)).click()
     await page.locator('canvas').click({ position: { x, y: 160 } })
-    await page.waitForFunction(async ([url, count]) => (await (await fetch(url)).json()).scenes[0].tokens.length === count, [path, name === 'Kael' ? 1 : 2] as const)
+    await waitInPage(page, async ([url, count]) => (await (await fetch(url)).json()).scenes[0].tokens.length === count, [path, name === 'Kael' ? 1 : 2] as const)
   }
   const actorId = async (name: string) => (await state()).actors.find(actor => actor.name === name)!.id
   const kael = await actorId('Kael')
@@ -776,7 +790,7 @@ test('a player clicks a monster to target it and attacks from the token bar; the
   await openPanel(player, 'ชีตในห้อง')
   await player.getByRole('button', exact('วาง Vex')).click()
   await player.locator('canvas').click({ position: { x: 210, y: 160 } })
-  await player.waitForFunction(async url => (await (await fetch(url)).json()).scenes[0].tokens.length === 1, path)
+  await waitInPage(player, async url => (await (await fetch(url)).json()).scenes[0].tokens.length === 1, path)
   const vexToken = (await state(dm)).scenes[0].tokens[0]
   await command(dm, { type: 'place', sceneId: (await state(dm)).scenes[0].id, kind: 'monster',
     sheet: { ...blankSheet('monster'), name: 'Bandit', hp: 11, maxHp: 11, ac: 12 }, x: vexToken.x + 2, y: vexToken.y })
@@ -800,7 +814,7 @@ test('a player clicks a monster to target it and attacks from the token bar; the
   await bar.waitFor()
   await sheet.waitFor()
   await bar.getByRole('button', { name: /^โจมตีด้วย Vex \(\+5\)/ }).click()
-  await player.waitForFunction(async ([url, target]) => (await (await fetch(url)).json()).rolls.some((roll: { label: string; targetId?: string }) =>
+  await waitInPage(player, async ([url, target]) => (await (await fetch(url)).json()).rolls.some((roll: { label: string; targetId?: string }) =>
     roll.label.startsWith('attack · Vex') && roll.targetId === target), [path, bandit] as const)
   await bar.getByRole('button', { name: /^Shortbow \(\+4\)/ }).waitFor()
   assert.equal(await picker.inputValue(), bandit, 'the sheet follows the board target')
@@ -832,9 +846,9 @@ test('0.06: dice pool, signed quick HP, box selection, encounter end, and a mova
   for (const die of ['d6', 'd6', 'd4']) await page.getByRole('button', exact('เพิ่ม ' + die)).click()
   await page.getByRole('button', exact('เพิ่มตัวปรับ')).click()
   await page.getByRole('button', exact('ทอย 2d6+1d4+1')).click()
-  await page.waitForFunction(async url => (await (await fetch(url)).json()).rolls.some((roll: { formula: string; faces: number[] }) => roll.formula === '2d6+1d4+1' && roll.faces.length === 3), path)
+  await waitInPage(page, async url => (await (await fetch(url)).json()).rolls.some((roll: { formula: string; faces: number[] }) => roll.formula === '2d6+1d4+1' && roll.faces.length === 3), path)
   await page.getByRole('button', exact('d20 Advantage')).click()
-  await page.waitForFunction(async url => (await (await fetch(url)).json()).rolls.some((roll: { label: string; faces: number[] }) => roll.label.endsWith('Advantage') && roll.faces.length === 2), path)
+  await waitInPage(page, async url => (await (await fetch(url)).json()).rolls.some((roll: { label: string; faces: number[] }) => roll.label.endsWith('Advantage') && roll.faces.length === 2), path)
   await page.keyboard.press('Escape')
 
   // Press and hold on empty map, then drag around both monsters: a selection box.
@@ -857,10 +871,10 @@ test('0.06: dice pool, signed quick HP, box selection, encounter end, and a mova
   const quick = page.getByLabel('ปรับ HP ของ Rat')
   await quick.fill('-5')
   await quick.press('Enter')
-  await page.waitForFunction(async url => (await (await fetch(url)).json()).actors.find((actor: { name: string }) => actor.name === 'Rat')?.hp === 15, path)
+  await waitInPage(page, async url => (await (await fetch(url)).json()).actors.find((actor: { name: string }) => actor.name === 'Rat')?.hp === 15, path)
   await quick.fill('3')
   await quick.press('Enter')
-  await page.waitForFunction(async url => (await (await fetch(url)).json()).actors.find((actor: { name: string }) => actor.name === 'Rat')?.hp === 18, path)
+  await waitInPage(page, async url => (await (await fetch(url)).json()).actors.find((actor: { name: string }) => actor.name === 'Rat')?.hp === 18, path)
 
   // Ending a fight shows the encounter-end banner.
   const s = await state()
@@ -921,7 +935,7 @@ test('0.07: a player sets an SRD item on the map, drops a bag item to the floor,
   const cellAt = (x: number, y: number) => ({ x: frame.x + 36 + x * 48, y: frame.y + 36 + y * 48 })
   const spot = cellAt(3.5, 2.5)
   await mira.mouse.click(spot.x, spot.y)
-  await mira.waitForFunction(async url => (await (await fetch(url)).json()).scenes[0].objects?.some((object: { name: string; temp?: boolean }) => object.name === 'Rope' && object.temp), path)
+  await waitInPage(mira, async url => (await (await fetch(url)).json()).scenes[0].objects?.some((object: { name: string; temp?: boolean }) => object.name === 'Rope' && object.temp), path)
   const rope = (await state()).scenes[0].objects!.find(object => object.name === 'Rope')!
   assert.equal(rope.image, '/art/srd/objects/rope.webp')
   assert.ok((await state()).log!.some(entry => entry.text === 'Mira วาง Rope'), 'the DM can see who placed it')
@@ -932,7 +946,7 @@ test('0.07: a player sets an SRD item on the map, drops a bag item to the floor,
   const sheet = mira.getByRole('article', { name: 'ชีต Lyra' })
   await sheet.getByRole('tab', { name: /Inventory|ของ/ }).first().click()
   await sheet.getByRole('button', exact('ทิ้ง Gem ลงพื้น')).click()
-  await mira.waitForFunction(async url => (await (await fetch(url)).json()).scenes[0].objects?.some((object: { pile?: boolean }) => object.pile), path)
+  await waitInPage(mira, async url => (await (await fetch(url)).json()).scenes[0].objects?.some((object: { pile?: boolean }) => object.pile), path)
   const after = await state()
   assert.equal(after.actors.find(actor => actor.id === lyra.id)!.inventory?.length ?? 0, 0)
 
@@ -975,7 +989,7 @@ test('0.07: conditions pick Advantage or Disadvantage on their own, and right-cl
 
   // Poisoned: a plain click on a check rolls with Disadvantage and says why.
   await sheet.getByRole('button', exact('STR check')).click()
-  await mira.waitForFunction(async url => (await (await fetch(url)).json()).rolls.length === 1, path)
+  await waitInPage(mira, async url => (await (await fetch(url)).json()).rolls.length === 1, path)
   let roll = (await lastRoll())!
   assert.equal(roll.faces.length, 2)
   assert.match(roll.label, /Disadvantage · Poisoned/)
@@ -985,7 +999,7 @@ test('0.07: conditions pick Advantage or Disadvantage on their own, and right-cl
   const menu = mira.getByRole('menu', { name: /เลือกการทอย/ })
   await menu.getByRole('menuitem', { name: /Disadvantage.*แนะนำ/ }).waitFor()
   await menu.getByRole('menuitem', { name: /^Advantage/ }).click()
-  await mira.waitForFunction(async url => (await (await fetch(url)).json()).rolls.length === 2, path)
+  await waitInPage(mira, async url => (await (await fetch(url)).json()).rolls.length === 2, path)
   roll = (await lastRoll())!
   assert.equal(roll.faces.length, 2)
   assert.match(roll.label, /Advantage \(เลือกเอง\)/)
@@ -1040,12 +1054,66 @@ test('0.07: phone and tablet seats (touch): no sideways scroll, panels open, and
     await menu.waitFor()
     assert.equal(((await (await page.request.get(path)).json()) as Snapshot).rolls.length, before, device.name + ': holding does not roll by itself')
     await menu.getByRole('menuitem', { name: /^Disadvantage/ }).tap()
-    await page.waitForFunction(async ([url, count]) => (await (await fetch(url as string)).json()).rolls.length > (count as number), [path, before])
+    await waitInPage(page, async ([url, count]) => (await (await fetch(url as string)).json()).rolls.length > (count as number), [path, before])
     const roll = ((await (await page.request.get(path)).json()) as Snapshot).rolls.at(-1)!
     assert.equal(roll.faces.length, 2)
     assert.match(roll.label, /Disadvantage \(เลือกเอง\)/)
     await page.close()
   }
+})
+
+test('0.08: the board draws with Pixi, tokens glide to a new square, and an attack plays on the board', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+  const room: Snapshot = await (await page.request.post(base + '/api/rooms', { data: { name: 'Release 0.08 board', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const command = async (body: Record<string, unknown>) => {
+    const state = await (await page.request.get(path)).json() as Snapshot
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: state.revision } })
+    assert.equal(response.status(), 200, await response.text())
+    return (await page.request.get(path)).json() as Promise<Snapshot>
+  }
+  const sceneId = (await command({ type: 'scene', name: 'Road', cell: 48, originX: 0, originY: 0 })).scenes[0].id
+  for (const [name, x] of [['Bandit', 1], ['Wolf', 2]] as const) {
+    await command({ type: 'place', sceneId, kind: 'monster', sheet: { ...blankSheet('monster'), name, hp: 9, maxHp: 9, ac: 1 }, x, y: 1 })
+  }
+  await page.goto(base + '/room/' + room.id)
+  await page.locator('canvas[data-renderer=pixi]').waitFor()
+  const board = await page.evaluate(() => {
+    const b = (window as unknown as { beholderBoard: { app: { renderer: { name: string }; ticker: { started: boolean }; stage: { children: unknown[] } } } }).beholderBoard
+    return { backend: b.app.renderer.name, running: b.app.ticker.started, layers: b.app.stage.children.length }
+  })
+  assert.ok(['webgl', 'webgpu', 'canvas'].includes(board.backend), 'a Pixi backend: ' + board.backend)
+  assert.equal(board.running, true)
+  assert.ok(board.layers > 0)
+
+  // Moving a token: it glides (between squares mid-way), then rests on the new square.
+  const state = await (await page.request.get(path)).json() as Snapshot
+  const bandit = state.scenes[0].tokens[0]
+  const tokenX = () => page.evaluate(id => {
+    const b = (window as unknown as { beholderBoard: { tokenCenter: (id: string) => { x: number } | undefined } }).beholderBoard
+    return b.tokenCenter(id)!.x
+  }, bandit.id)
+  const before = await tokenX()
+  await command({ type: 'move', sceneId, tokenId: bandit.id, x: 6, y: 1 })
+  await page.waitForFunction(([id, start]) => {
+    const b = (window as unknown as { beholderBoard: { tokenCenter: (id: string) => { x: number } | undefined } }).beholderBoard
+    return (b.tokenCenter(id as string)?.x ?? 0) > (start as number) + 48 * 5 - .5
+  }, [bandit.id, before] as const)
+  const after = await tokenX()
+  assert.equal(Math.round(after), Math.round(before + 48 * 5), 'glide from ' + before + ' ended at ' + after)
+
+  // An attack plays an effect inside the board (no DOM overlay any more).
+  const wolf = state.scenes[0].tokens[1]
+  await command({ type: 'move', sceneId, tokenId: wolf.id, x: 6, y: 2 })
+  await command({ type: 'sheetRoll', sceneId, rollType: 'attack', actorId: state.scenes[0].tokens[0].actorId, targetId: wolf.actorId })
+  await page.waitForFunction(() => (window as unknown as { beholderBoard: { effectLayer: { children: unknown[] } } }).beholderBoard.effectLayer.children.length > 0)
+  assert.equal(await page.locator('.strike-bolt, .strike-slash').count(), 0)
+  assert.deepEqual(errors, [])
 })
 
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
@@ -1330,11 +1398,20 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await playerRail.getByRole('button', exact('ไปที่ Token Rat 1')).getByText('RA', { exact: true }).waitFor()
   await playerRail.locator('[aria-current=step]').waitFor()
   await playerRail.getByRole('button', exact('ไปที่ Token Scout')).click()
-  await one.waitForFunction(() => {
+  // Focus centres the board on Scout: the token's centre sits at the middle of the canvas (the view is on data attributes).
+  await waitInPage(one, async url => {
     const canvas = document.querySelector('canvas')!
-    const [red, green, blue] = canvas.getContext('2d')!.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data
-    return red > 160 && green > 55 && green < 115 && blue < 85
-  })
+    const [x, y] = canvas.dataset.camera!.split(',').map(Number)
+    const zoom = Number(canvas.dataset.zoom)
+    const room = await (await fetch(url)).json()
+    const scene = room.scenes[0]
+    const scout = room.actors.find((actor: { name: string }) => actor.name === 'Scout')
+    const token = scene.tokens.find((item: { actorId: string }) => item.actorId === scout.id)
+    const rect = canvas.getBoundingClientRect()
+    const cx = x + (scene.originX + (token.x + .5) * scene.cell) * zoom
+    const cy = y + (scene.originY + (token.y + .5) * scene.cell) * zoom
+    return Math.abs(cx - rect.width / 2) < 2 && Math.abs(cy - rect.height / 2) < 2
+  }, base + '/api/rooms/' + roomIdOf(one.url()))
   const roomUrl = base + '/api/rooms/' + roomIdOf(dm.url())
   const fight = await (await dm.request.get(roomUrl)).json()
   const acting = fight.scenes[0].combat.order[0].actorId

@@ -1,6 +1,6 @@
 {
   "name": "beholder-table",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.25.0",
@@ -10,6 +10,7 @@
     "test": "node --test server/*.test.ts src/**/*.test.ts",
     "test:browser": "node --test tests/browser.test.ts",
     "playtest": "node tests/playtest.ts",
+    "perf": "node tests/perf.ts",
     "import:dndbeyond": "node scripts/import-dndbeyond.ts",
     "check": "tsc --noEmit"
   },
@@ -18,6 +19,7 @@
     "lucide-react": "^1.79.0",
     "pdfjs-dist": "^6.5.438",
     "pg": "^8.16.0",
+    "pixi.js": "8.22.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router": "^8.5.2",

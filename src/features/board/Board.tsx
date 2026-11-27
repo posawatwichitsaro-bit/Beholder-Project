@@ -6,7 +6,6 @@ import { areaContains, areaOutline, validArea } from '../../../shared/area.ts'
 import type { Area, AreaKind, AreaOutline } from '../../../shared/area.ts'
 import { tokenColor, tokenInitials } from './tokenAppearance.ts'
 import { newStrikes } from './strikes.ts'
-import type { Strike } from './strikes.ts'
 import type { Scene, SceneObject, Snapshot, Token } from '../../../shared/model.ts'
 import { clampZoom, dragThreshold, holdToSelectMs, longPressMs, pinchView, wheelIntent, zoomAround } from './gestures.ts'
 import type { Point } from './gestures.ts'
@@ -21,6 +20,8 @@ import { rollMenuProps } from '../../ui/index.ts'
 import type { Odds, RollMode } from '../../../shared/advantage.ts'
 import { hasCondition } from '../../../shared/effects.ts'
 import { isMonsterArt, sceneArtByImage } from '../../../shared/catalogArt.ts'
+import { boardTransform, bounds, pieceAt, piecesIn, rulerFeet } from './geometry.ts'
+import type { ObjectLook, PixiBoard, TokenLook } from './pixiBoard.ts'
 
 /** A token-bar / context command. `roll` makes it a d20 roll with a right-click menu for Advantage or Disadvantage. */
 type Action = { label: string; run: () => void; disabled?: boolean; roll?: (mode: RollMode) => void; odds?: () => Odds | undefined }
@@ -49,29 +50,6 @@ type Mode = 'pan' | 'measure' | 'select' | 'move' | 'area' | 'object' | 'calibra
 type Gesture = {
   from: Point; camera: Point; mode: Mode; tokens: Token[]; delta?: Point
   moved: boolean; token?: Token; object?: SceneObject
-}
-const bounds = (from: Point, to: Point) => ({
-  x: Math.min(from.x, to.x), y: Math.min(from.y, to.y),
-  width: Math.abs(from.x - to.x), height: Math.abs(from.y - to.y)
-})
-function hpBar(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, hp: number, maxHp: number, temp = 0, foe = false) {
-  const ratio = Math.max(0, Math.min(1, hp / maxHp))
-  ctx.fillStyle = '#120b09'
-  ctx.fillRect(x - 1, y - 1, width + 2, 7)
-  ctx.fillStyle = '#3a1c16'
-  ctx.fillRect(x, y, width, 5)
-  ctx.fillStyle = ratio > .5 ? (foe ? '#c0503a' : '#6aae58') : ratio > .25 ? '#d0902a' : '#e0473a'
-  ctx.fillRect(x, y, width * ratio, 5)
-  if (temp > 0) {
-    ctx.fillStyle = '#8fb0e0'
-    ctx.fillRect(x, y + 5, width * Math.min(1, temp / maxHp), 2)
-  }
-}
-function drawContained(ctx: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, width: number, height: number) {
-  const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight)
-  const w = image.naturalWidth * scale
-  const h = image.naturalHeight * scale
-  ctx.drawImage(image, x + (width - w) / 2, y + (height - h) / 2, w, h)
 }
 const editableTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && Boolean(target.closest('input,select,textarea,[contenteditable]'))
@@ -179,17 +157,10 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
   // Calibration always shows the grid: it is what the DM is lining up.
   const gridPref = usePrefs(state => state.showGrid)
   const showGrid = gridPref || Boolean(calibrate)
-  const grid = gridCell * zoom
-  const origin = { x: camera.x + (gridOverride?.originX ?? scene.originX) * zoom, y: camera.y + (gridOverride?.originY ?? scene.originY) * zoom }
-  const pixel = (point: Point): Point => ({ x: origin.x + point.x * grid, y: origin.y + point.y * grid })
-  const cell = (point: Point, step = 1): Point => ({
-    x: Math.floor((point.x - origin.x) / grid / step) * step,
-    y: Math.floor((point.y - origin.y) / grid / step) * step
-  })
-  const areaPoint = (point: Point): Point => ({
-    x: Math.round((point.x - origin.x) / grid * 2) / 2,
-    y: Math.round((point.y - origin.y) / grid * 2) / 2
-  })
+  const gridSpec = { cell: gridCell, originX: gridOverride?.originX ?? scene.originX, originY: gridOverride?.originY ?? scene.originY }
+  const transformNow = boardTransform({ camera, zoom }, gridSpec)
+  const grid = transformNow.size
+  const { pixel, cell, areaPoint } = transformNow
   const creature = (token: Token) => room.publicActors.find(actor => actor.id === token.actorId)
   function span(token: Token) { return sizes[creature(token)?.size ?? 'Medium'] }
   const current = scene.combat?.order[scene.combat.turn]?.actorId
@@ -211,24 +182,16 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
   }, [focus])
   const activeArea = areaDraft ?? preview
   const outline = activeArea && validArea(activeArea) ? areaOutline(activeArea) : undefined
-  const [effectTime, setEffectTime] = useState(Date.now)
   const toolsMovable = useMovable('board-tools')
   // Attack animations: a slash for melee, a bolt for ranged, played once per new attack roll.
   const seenRolls = useRef<Set<string> | undefined>(undefined)
-  const [strikes, setStrikes] = useState<Strike[]>([])
   useEffect(() => {
     if (!seenRolls.current) { seenRolls.current = new Set(room.rolls.map(roll => roll.id)); return }
     const fresh = newStrikes(room.rolls, scene.tokens, scene.id, seenRolls.current, Date.now(), span)
-    if (!fresh.length) return
-    setStrikes(current => [...current, ...fresh])
-    const timer = setTimeout(() => setStrikes(current => current.filter(strike => !fresh.includes(strike))), 1100)
-    return () => clearTimeout(timer)
+    for (const strike of fresh) pixi.current?.strike(strike.from, strike.to, strike.ranged, strike.outcome)
   }, [room.rolls])
-  useEffect(() => {
-    setEffectTime(Date.now())
-    const timer = setTimeout(() => setEffectTime(Date.now()), 1500)
-    return () => clearTimeout(timer)
-  }, [scene.areaEffect?.at])
+  // A spell area that just went off bursts once on the board (not again after a reload).
+  const seenArea = useRef<number | undefined>(undefined)
   function zoomAt(factor: number, at: Point) {
     const previous = transform.current
     const next = clampZoom(previous.zoom * factor)
@@ -263,216 +226,103 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
     if (selectedObject && !scene.objects?.some(object => object.id === selectedObject)) setSelectedObject(undefined)
   }, [scene.objects, selectedObject])
 
+  // The Pixi renderer: created once per canvas, then fed the view, the pieces and the overlays separately,
+  // so panning and zooming only move the camera container.
+  const pixi = useRef<PixiBoard>(undefined)
+  const [ready, setReady] = useState(false)
+  const reduceMotion = usePrefs(state => state.reduceMotion)
+  // Zooming scales the pieces on the GPU; their lines and text are rebuilt for the new zoom once it settles.
+  const [detailZoom, setDetailZoom] = useState(1)
   useEffect(() => {
-    const element = canvas.current!
-    const ctx = element.getContext('2d')!
-    const ratio = window.devicePixelRatio || 1
-    element.width = Math.floor(size.x * ratio)
-    element.height = Math.floor(size.y * ratio)
-    ctx.scale(ratio, ratio)
-    ctx.fillStyle = '#1d1714'
-    ctx.fillRect(0, 0, size.x, size.y)
-    if (map) ctx.drawImage(map, camera.x, camera.y, map.width * zoom, map.height * zoom)
-    const wrap = (value: number) => ((value % grid) + grid) % grid
-    if (showGrid) {
-      ctx.beginPath()
-      ctx.strokeStyle = map ? '#140d0a99' : '#f5e3c01c'
-      for (let x = wrap(origin.x); x < size.x; x += grid) { ctx.moveTo(x, 0); ctx.lineTo(x, size.y) }
-      for (let y = wrap(origin.y); y < size.y; y += grid) { ctx.moveTo(0, y); ctx.lineTo(size.x, y) }
-      ctx.stroke()
+    // Detail steps of about 26 % (2^⅓): small zoom changes, or zooming back, never rebuild the pieces.
+    const timer = setTimeout(() => setDetailZoom(2 ** (Math.round(Math.log2(zoom) * 3) / 3)), 160)
+    return () => clearTimeout(timer)
+  }, [zoom])
+  useEffect(() => {
+    let cancelled = false
+    let created: PixiBoard | undefined
+    // PixiJS loads with the first board, not with the lobby.
+    import('./pixiBoard.ts').then(({ PixiBoard }) => PixiBoard.create(canvas.current!, size)).then(board => {
+      if (cancelled) { board.destroy(); return }
+      created = board
+      pixi.current = board
+      Object.assign(window, { beholderBoard: board })
+      setReady(true)
+    }).catch(error => console.error('board renderer', error))
+    return () => {
+      cancelled = true
+      created?.destroy()
+      pixi.current = undefined
     }
-    function drawArea(shape: AreaOutline, color: string) {
-      ctx.save()
-      ctx.beginPath()
-      if ('radius' in shape) {
-        const point = pixel(shape.center)
-        ctx.arc(point.x, point.y, shape.radius * grid, 0, 2 * Math.PI)
-      } else {
-        for (const [index, point] of shape.points.entries()) {
-          const at = pixel(point)
-          if (index === 0) ctx.moveTo(at.x, at.y)
-          else ctx.lineTo(at.x, at.y)
-        }
-        ctx.closePath()
-      }
-      ctx.fillStyle = color + '45'
-      ctx.strokeStyle = color
-      ctx.lineWidth = 2
-      ctx.fill()
-      ctx.stroke()
-      ctx.restore()
-    }
-    if (scene.areaEffect && effectTime - scene.areaEffect.at < 1450) drawArea(areaOutline(scene.areaEffect.area), damageKinds[scene.areaEffect.kind][1])
-    if (outline) drawArea(outline, '#ffb384')
-    if (dropCell) {
-      const at = pixel(dropCell)
-      ctx.save()
-      ctx.fillStyle = '#e0b87833'
-      ctx.strokeStyle = '#e0b878'
-      ctx.lineWidth = 2
-      ctx.setLineDash([6, 4])
-      ctx.fillRect(at.x, at.y, grid, grid)
-      ctx.strokeRect(at.x + 1, at.y + 1, grid - 2, grid - 2)
-      ctx.restore()
-    }
-    for (const object of scene.objects ?? []) {
+  }, [])
+  useEffect(() => { if (ready) pixi.current!.resize(size) }, [ready, size])
+  useEffect(() => {
+    if (ready) pixi.current!.setMotionPreference(reduceMotion || matchMedia('(prefers-reduced-motion: reduce)').matches)
+  }, [ready, reduceMotion])
+  useEffect(() => {
+    if (ready) pixi.current!.setView({ camera, zoom }, gridSpec, transformNow, showGrid, Boolean(map), size)
+  }, [ready, camera, zoom, size, gridSpec.cell, gridSpec.originX, gridSpec.originY, showGrid, map])
+  useEffect(() => { if (ready) pixi.current!.setMap(map) }, [ready, map])
+  useEffect(() => {
+    const effect = scene.areaEffect
+    if (!ready || !effect || seenArea.current === effect.at) return
+    const fresh = seenArea.current !== undefined || Date.now() - effect.at < 1500
+    seenArea.current = effect.at
+    if (fresh) pixi.current!.areaBurst(areaOutline(effect.area), damageKinds[effect.kind][1])
+  }, [ready, scene.areaEffect?.at])
+  useEffect(() => {
+    if (!ready) return
+    const board = pixi.current!
+    board.setDetail(detailZoom)
+    const ready2 = (picture?: HTMLImageElement) => picture && picture.complete && picture.naturalWidth ? picture : undefined
+    const objects: ObjectLook[] = (scene.objects ?? []).map(object => {
       const shift = objectDraft?.id === object.id ? objectDraft.delta : { x: 0, y: 0 }
-      const at = pixel({ x: object.x + shift.x, y: object.y + shift.y })
-      const width = object.width * grid
-      const height = object.height * grid
-      const destroyed = object.kind === 'structure' && object.hp <= 0
-      const picture = object.image && images.current.get(object.image)
-      ctx.save()
-      ctx.globalAlpha = destroyed ? .38 : .92
-      if (object.image && sceneArtByImage(object.image) && picture && picture.complete && picture.naturalWidth) {
-        drawContained(ctx, picture, at.x + 2, at.y + 2, Math.max(1, width - 4), Math.max(1, height - 4))
-      } else {
-        ctx.fillStyle = objectColors[object.kind]
-        ctx.fillRect(at.x + 2, at.y + 2, width - 4, height - 4)
-        if (picture && picture.complete && picture.naturalWidth) ctx.drawImage(picture, at.x + 2, at.y + 2, width - 4, height - 4)
+      const picture = ready2(object.image ? images.current.get(object.image) : undefined)
+      return {
+        id: object.id, x: object.x + shift.x, y: object.y + shift.y, width: object.width, height: object.height, name: object.name,
+        color: objectColors[object.kind], picture, contained: Boolean(object.image && sceneArtByImage(object.image)),
+        faded: object.kind === 'structure' && object.hp <= 0, selected: selectedObject === object.id || objectGroup.includes(object.id),
+        hp: object.kind === 'structure' && object.hp > 0 ? { hp: object.hp, maxHp: object.maxHp } : undefined
       }
-      ctx.fillStyle = '#150e0bee'
-      ctx.fillRect(at.x + 2, at.y + Math.max(2, height - 16), width - 4, Math.min(height - 4, 14))
-      ctx.fillStyle = '#f6e7cc'
-      ctx.font = '11px Sarabun, system-ui'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      if (height >= 18 && width >= 18) ctx.fillText(object.name, at.x + width / 2, at.y + height - 9, width - 7)
-      if (selectedObject === object.id || objectGroup.includes(object.id)) {
-        ctx.globalAlpha = 1
-        ctx.strokeStyle = '#e0b878'
-        ctx.lineWidth = 3
-        ctx.strokeRect(at.x + 1, at.y + 1, width - 2, height - 2)
-      }
-      ctx.restore()
-      if (object.kind === 'structure' && !destroyed && width > 16) hpBar(ctx, at.x + 5, at.y + 5, width - 10, object.hp, object.maxHp)
-    }
-    for (const [index, token] of scene.tokens.entries()) {
+    })
+    const tokens: TokenLook[] = scene.tokens.map((token, index) => {
       const delta = draft?.tokenIds.includes(token.id) ? draft.delta : undefined
-      const position = pixel({ x: token.x + (delta?.x ?? 0), y: token.y + (delta?.y ?? 0) })
       const actor = creature(token)
-      // Invisible: only its owner and the DM still get the token, drawn faint.
-      ctx.globalAlpha = actor && hasCondition(actor, 'Invisible') ? .42 : 1
-      const width = grid * span(token)
-      const radius = width * .42
-      const x = position.x + width / 2
-      const y = position.y + width / 2
-      ctx.beginPath()
-      ctx.arc(x, y, radius, 0, Math.PI * 2)
-      const portrait = actor?.portrait && images.current.get(actor.portrait)
-      const ready = portrait && portrait.complete && portrait.naturalWidth
-      if (ready && actor?.portrait && isMonsterArt(actor.portrait)) {
-        drawContained(ctx, portrait, position.x, position.y, width, width)
-      } else {
-        ctx.fillStyle = '#2a1f18'
-        ctx.fill()
-      }
-      if (ready && actor?.portrait && !isMonsterArt(actor.portrait)) {
-        const edge = Math.min(portrait.naturalWidth, portrait.naturalHeight)
-        ctx.save()
-        ctx.clip()
-        ctx.drawImage(portrait, (portrait.naturalWidth - edge) / 2, (portrait.naturalHeight - edge) / 2, edge, edge,
-          x - radius, y - radius, 2 * radius, 2 * radius)
-        ctx.restore()
-      }
-      const affected = outline && areaContains(outline, { x: token.x + span(token) / 2, y: token.y + span(token) / 2 })
-      ctx.strokeStyle = affected || targetId === token.actorId ? '#ff9e88' : group.includes(token.id) ? '#9fc4f0' : current === token.actorId ? '#ffd08a' : selected === token.actorId ? '#e0b878' : tokenColor(index)
-      ctx.lineWidth = affected || targetId === token.actorId || group.includes(token.id) || selected === token.actorId ? 4 : 2
-      ctx.stroke()
-      if (current === token.actorId) {
-        ctx.save()
-        ctx.beginPath()
-        ctx.arc(x, y, radius + 5, 0, Math.PI * 2)
-        ctx.strokeStyle = '#ff8a3d99'
-        ctx.lineWidth = 3
-        ctx.shadowColor = '#ff8a3d'
-        ctx.shadowBlur = 12
-        ctx.stroke()
-        ctx.restore()
-      }
-      if (mainTokenId === token.id) {
-        ctx.beginPath()
-        ctx.arc(x, y, radius + 3, 0, Math.PI * 2)
-        ctx.strokeStyle = '#ffd08a'
-        ctx.lineWidth = 1.5
-        ctx.stroke()
-      }
-      ctx.fillStyle = '#fbefd8'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.font = '700 ' + Math.max(7, Math.min(width / 3, 25)) + 'px "Cormorant Garamond", Sarabun, serif'
-      if (!portrait || !portrait.complete || !portrait.naturalWidth) ctx.fillText(actor ? tokenInitials(actor.name) : '?', x, y)
-      if (actor && width >= 16) hpBar(ctx, x - radius, y + radius - 4, 2 * radius, actor.hp, actor.maxHp, actor.tempHp, actor.kind === 'monster')
+      const affected = Boolean(outline && areaContains(outline, { x: token.x + span(token) / 2, y: token.y + span(token) / 2 }))
       const conditions = actor ? rankConditions(activeConditions(actor)) : []
       const waiting = actor?.effects?.some(effect => effect.pending)
-      if ((conditions.length || waiting) && width >= 20) {
-        // Leather-and-brass marks above the token: the two most limiting conditions, then "+N".
-        // Zoomed far out there is only room for one mark with the count.
-        const size = Math.max(11, Math.min(18, width / 3.2))
-        const room = width >= 40 ? 2 : 1
-        const marks = conditions.slice(0, room).map(item => conditionGlyph(item.name))
-        if (conditions.length > room) marks.push('+' + (conditions.length - room))
-        if (waiting) marks.unshift('!')
-        const gap = 2
-        const total = marks.length * size + (marks.length - 1) * gap
-        let mx = x - total / 2
-        const my = y - radius - size * .6
-        ctx.font = '700 ' + Math.round(size * .55) + 'px Sarabun, system-ui'
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        for (const mark of marks) {
-          ctx.beginPath()
-          ctx.roundRect(mx, my - size / 2, size, size, size * .25)
-          ctx.fillStyle = mark === '!' ? '#9e3b3b' : mark.startsWith('+') ? '#3a2b20' : '#2a1f18'
-          ctx.fill()
-          ctx.strokeStyle = '#c79a5b'
-          ctx.lineWidth = 1.25
-          ctx.stroke()
-          ctx.fillStyle = '#f6e7cc'
-          ctx.fillText(mark, mx + size / 2, my + .5)
-          mx += size + gap
-        }
+      // The two most limiting conditions as marks, then "+N"; zoomed far out only one fits.
+      const room = gridCell * detailZoom * span(token) >= 40 ? 2 : 1
+      const marks = conditions.slice(0, room).map(item => conditionGlyph(item.name))
+      if (conditions.length > room) marks.push('+' + (conditions.length - room))
+      if (waiting) marks.unshift('!')
+      const highlighted = affected || targetId === token.actorId || group.includes(token.id) || selected === token.actorId
+      return {
+        id: token.id, x: token.x + (delta?.x ?? 0), y: token.y + (delta?.y ?? 0), span: span(token),
+        name: actor?.name ?? '?', initials: actor ? tokenInitials(actor.name) : '?',
+        portrait: ready2(actor?.portrait ? images.current.get(actor.portrait) : undefined),
+        monsterArt: Boolean(actor?.portrait && isMonsterArt(actor.portrait)),
+        ring: affected || targetId === token.actorId ? '#ff9e88' : group.includes(token.id) ? '#9fc4f0' : current === token.actorId ? '#ffd08a' : selected === token.actorId ? '#e0b878' : tokenColor(index),
+        ringWidth: highlighted ? 4 : 2, current: current === token.actorId, main: mainTokenId === token.id,
+        faint: Boolean(actor && hasCondition(actor, 'Invisible')),
+        hp: actor ? { hp: actor.hp, maxHp: actor.maxHp, temp: actor.tempHp, foe: actor.kind === 'monster' } : undefined, marks
       }
-    }
-    ctx.globalAlpha = 1
-    if (ruler) {
-      const center = (point: Point) => pixel({ x: point.x + .5, y: point.y + .5 })
-      const start = center(ruler.from)
-      const end = center(ruler.to)
-      const feet = 5 * Math.max(Math.abs(ruler.from.x - ruler.to.x), Math.abs(ruler.from.y - ruler.to.y))
-      ctx.strokeStyle = '#ffd08a'
-      ctx.lineWidth = 2
-      ctx.beginPath()
-      ctx.moveTo(start.x, start.y)
-      ctx.lineTo(end.x, end.y)
-      ctx.stroke()
-      ctx.fillStyle = '#211814'
-      ctx.fillRect(end.x + 8, end.y - 30, 72, 25)
-      ctx.fillStyle = '#ffd08a'
-      ctx.textAlign = 'left'
-      ctx.font = '14px Sarabun, system-ui'
-      ctx.fillText(feet + ' ฟุต', end.x + 15, end.y - 17)
-    }
-    if (calibration) {
-      const rect = bounds(calibration.from, calibration.to)
-      ctx.save()
-      ctx.fillStyle = '#e0b87833'
-      ctx.strokeStyle = '#ffd08a'
-      ctx.lineWidth = 2
-      ctx.setLineDash([6, 4])
-      ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
-      ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
-      ctx.restore()
-    }
-    if (selection) {
-      const rect = bounds(selection.from, selection.to)
-      ctx.fillStyle = '#9fc4f033'
-      ctx.strokeStyle = '#9fc4f0'
-      ctx.lineWidth = 1
-      ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
-      ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
-    }
-  }, [size, map, camera, zoom, grid, scene, room.publicActors, selected, targetId, mainTokenId, draft, objectDraft, selectedObject, objectGroup, ruler, group, selection, imageRevision, outline, effectTime, dropCell, calibration, showGrid])
+    })
+    board.setObjects(objects)
+    board.setTokens(tokens, new Set(draft?.tokenIds ?? []))
+    const inUse = new Set([map, ...tokens.map(item => item.portrait), ...objects.map(item => item.picture)].filter((item): item is HTMLImageElement => Boolean(item)))
+    board.prune(inUse)
+  }, [ready, scene, room.publicActors, selected, targetId, mainTokenId, draft, objectDraft, selectedObject, objectGroup, group, imageRevision, outline, map, detailZoom, gridSpec.cell, gridSpec.originX, gridSpec.originY])
+  useEffect(() => {
+    if (!ready) return
+    const areas = outline ? [{ shape: outline, color: '#ffb384' }] : []
+    pixi.current!.setOverlay({
+      areas, dropCell,
+      ruler: ruler && { ...ruler, feet: rulerFeet(ruler.from, ruler.to) },
+      selection: selection && bounds(selection.from, selection.to),
+      calibration: calibration && bounds(calibration.from, calibration.to)
+    })
+  }, [ready, outline, dropCell, ruler, selection, calibration, Math.round(zoom * 16), gridSpec.cell, gridSpec.originX, gridSpec.originY])
 
   function pointer(event: { clientX: number; clientY: number; currentTarget: Element }) {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -482,17 +332,10 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
     return dm || room.actors.some(actor => actor.id === token.actorId)
   }
   function objectAt(point: Point) {
-    return [...(scene.objects ?? [])].reverse().find(object => {
-      const at = pixel(object)
-      return point.x >= at.x && point.x < at.x + object.width * grid && point.y >= at.y && point.y < at.y + object.height * grid
-    })
+    return pieceAt(transformNow, scene.objects ?? [], point, object => object)
   }
   function tokenAt(point: Point) {
-    return [...scene.tokens].reverse().find(token => {
-      const at = pixel(token)
-      const width = span(token) * grid
-      return point.x >= at.x && point.x < at.x + width && point.y >= at.y && point.y < at.y + width
-    })
+    return pieceAt(transformNow, scene.tokens, point, token => ({ width: span(token), height: span(token) }))
   }
   function openMenuAt(point: Point) {
     const token = tokenAt(point)
@@ -649,13 +492,8 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       setCalibration(undefined)
     } else if (action?.mode === 'select') {
       const rect = bounds(action.from, pointer(event))
-      const intersects = (piece: Point, width: number, height: number) => {
-        const at = pixel(piece)
-        return rect.width > 3 && rect.height > 3 && at.x < rect.x + rect.width && at.x + width * grid > rect.x &&
-          at.y < rect.y + rect.height && at.y + height * grid > rect.y
-      }
-      const found = scene.tokens.filter(token => intersects(token, span(token), span(token))).slice(0, 100)
-      const objects = (scene.objects ?? []).filter(object => intersects(object, object.width, object.height)).slice(0, 100 - found.length)
+      const found = piecesIn(transformNow, scene.tokens, rect, token => ({ width: span(token), height: span(token) })).slice(0, 100)
+      const objects = piecesIn(transformNow, scene.objects ?? [], rect, object => object).slice(0, 100 - found.length)
       setGroup(found.map(token => token.id))
       setObjectGroup(objects.map(object => object.id))
       setSelectedObject(found.length === 0 && objects.length === 1 ? objects[0].id : undefined)
@@ -729,7 +567,8 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
 
   return <section className="board">
     <canvas ref={canvas} className={(areaKind || calibrate ? 'drawing-aoe' : '') + (panning ? ' panning' : '') + (tool === 'measure' ? ' measuring' : '')}
-      tabIndex={0} aria-label="กระดานแผนที่" onPointerDown={down} onPointerMove={drag} onPointerUp={up}
+      tabIndex={0} aria-label="กระดานแผนที่" data-camera={Math.round(camera.x) + ',' + Math.round(camera.y)} data-zoom={zoom}
+      data-renderer={ready ? 'pixi' : 'loading'} onPointerDown={down} onPointerMove={drag} onPointerUp={up}
       onContextMenu={event => {
         event.preventDefault()
         cancelGesture()
@@ -752,18 +591,6 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         event.preventDefault()
         drop(payload, cell(pointer(event)))
       }} />
-    {strikes.map(strike => {
-      const from = scene.tokens.find(token => token.id === strike.from)
-      const to = scene.tokens.find(token => token.id === strike.to)
-      if (!from || !to) return null
-      const a = pixel({ x: from.x + span(from) / 2, y: from.y + span(from) / 2 })
-      const b = pixel({ x: to.x + span(to) / 2, y: to.y + span(to) / 2 })
-      const angle = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI
-      const style = { left: a.x, top: a.y, '--dx': (b.x - a.x) + 'px', '--dy': (b.y - a.y) + 'px', '--angle': angle + 'deg', '--reach': grid * .6 + 'px' } as CSSProperties
-      return strike.ranged
-        ? <span key={strike.id} className="strike-bolt" data-outcome={strike.outcome} style={style} aria-hidden="true" />
-        : <span key={strike.id} className="strike-slash" data-outcome={strike.outcome} style={{ ...style, left: b.x, top: b.y }} aria-hidden="true" />
-    })}
     {(scene.damageEvents ?? []).filter(event => Date.now() - event.at < 2400).map(event => {
       const token = scene.tokens.find(item => item.actorId === event.actorId)
       if (!token) return null
