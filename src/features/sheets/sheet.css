@@ -198,3 +198,6 @@
 .level-up-choice { display: grid; gap: 6px; }
 .level-up-choice small { color: var(--bh-ink-muted); }
 .xp-award { position: fixed; right: 72px; bottom: 120px; z-index: 40; width: min(320px, calc(100vw - 32px)); }
+.sheet-vision { display: grid; gap: 6px; margin-top: 10px; }
+.sheet-vision h3 { display: flex; gap: 6px; align-items: center; margin: 0; font-size: .95rem; }
+.sheet-vision-form { display: grid; gap: 6px; }

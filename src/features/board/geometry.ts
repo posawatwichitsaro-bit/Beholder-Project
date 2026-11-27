@@ -32,6 +32,8 @@ export function boardTransform(view: View, grid: Grid) {
       x: Math.round((point.x - origin.x) / size * 2) / 2,
       y: Math.round((point.y - origin.y) / size * 2) / 2
     }),
+    /** The board position (fractional cells) under a screen point. */
+    at: (point: Point): Point => ({ x: (point.x - origin.x) / size, y: (point.y - origin.y) / size }),
     /** World (map pixel) position of a cell, for pieces drawn inside the camera container. */
     world: (point: Point): Point => ({ x: grid.originX + point.x * grid.cell, y: grid.originY + point.y * grid.cell })
   }

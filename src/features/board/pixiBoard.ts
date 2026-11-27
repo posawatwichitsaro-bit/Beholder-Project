@@ -5,6 +5,22 @@ import { gridLines } from './geometry.ts'
 import { BoardEffects } from './effects.ts'
 import type { Outcome } from './effects.ts'
 import type { BoardTransform, Grid, View } from './geometry.ts'
+import type { LightSource, Wall } from '../../../shared/vision.ts'
+
+/**
+ * What the fog shows, by cell ("x,y"): `visible` cells are clear (lighter in `dimmed`, grey in
+ * `darkvision`), `explored` ones show the map faintly, everything else is black.
+ * `walls`, `doors` and `lights` are drawn for the DM; players see only doors they know of.
+ */
+export type VisionLook = {
+  fog?: { visible: Set<string>; dimmed: Set<string>; darkvision: Set<string>; explored: Set<string>; opaque: boolean }
+  walls: Wall[]; showWalls: boolean
+  doors: Wall[]
+  lights: LightSource[]
+  darkness?: { dark: string[]; magic: string[] }
+  /** Points of a wall being drawn (cells), and the pointer, while the DM draws. */
+  drawing?: Point[]; cursor?: Point
+}
 
 /**
  * The board drawn with PixiJS 8 (WebGL, with Pixi's own canvas fallback).
@@ -54,6 +70,11 @@ export class PixiBoard {
   private objectLayer = new Container()
   private tokenLayer = new Container()
   private rulerLayer = new Container()
+  private fogLayer = new Container()
+  private fogBorder = new Graphics()
+  private fogSprite?: Sprite
+  private fogCanvas = document.createElement('canvas')
+  private wallLayer = new Graphics()
   readonly effectLayer = new Container()
   private gridLayer = new Graphics()
   private boxLayer = new Graphics()
@@ -76,7 +97,8 @@ export class PixiBoard {
   private constructor(app: Application) {
     this.app = app
     this.gridHolder.addChild(this.gridLayer)
-    this.world.addChild(this.mapLayer, this.gridHolder, this.areaLayer, this.objectLayer, this.tokenLayer, this.rulerLayer, this.effectLayer)
+    this.fogLayer.addChild(this.fogBorder)
+    this.world.addChild(this.mapLayer, this.gridHolder, this.areaLayer, this.objectLayer, this.tokenLayer, this.fogLayer, this.wallLayer, this.rulerLayer, this.effectLayer)
     this.screen.addChild(this.boxLayer)
     app.stage.addChild(this.world, this.screen)
     this.effects = new BoardEffects(this.effectLayer)
@@ -385,6 +407,105 @@ export class PixiBoard {
   /** A spell area going off: flash, spreading ring and embers (kept even with reduced motion: it shows who was caught). */
   areaBurst(shape: AreaOutline, color: string) {
     this.effects.area(shape, color, point => this.cellToWorld(point), this.grid.cell, 1 / this.view.zoom)
+  }
+
+  /**
+   * Fog, walls, doors, lights and painted darkness. The fog is a small canvas
+   * with one pixel per cell, stretched over the board with smooth filtering,
+   * so its edges fade over half a square.
+   */
+  setVision(look: VisionLook) {
+    this.dirty = true
+    const cell = this.grid.cell
+    const zoom = this.view.zoom
+    const fog = look.fog
+    this.fogSprite?.destroy({ texture: true, textureSource: true })
+    this.fogSprite = undefined
+    this.fogBorder.clear()
+    if (fog) {
+      // The fogged region: every cell anyone knows of, plus a margin; outside it, solid black.
+      const cells = [...fog.visible, ...fog.explored].map(item => item.split(',').map(Number))
+      const xs = cells.map(([x]) => x)
+      const ys = cells.map(([, y]) => y)
+      const margin = 4
+      const minX = (xs.length ? Math.min(...xs) : 0) - margin
+      const minY = (ys.length ? Math.min(...ys) : 0) - margin
+      const width = (xs.length ? Math.max(...xs) : 0) + margin - minX + 1
+      const height = (ys.length ? Math.max(...ys) : 0) + margin - minY + 1
+      const canvas = this.fogCanvas
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')!
+      const image = ctx.createImageData(width, height)
+      const unknown = fog.opaque ? 255 : 150
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const k = (minX + x) + ',' + (minY + y)
+        const alpha = fog.visible.has(k) ? (fog.darkvision.has(k) ? 120 : fog.dimmed.has(k) ? 70 : 0)
+          : fog.explored.has(k) ? 170 : unknown
+        const at = (y * width + x) * 4
+        image.data[at] = fog.darkvision.has(k) ? 24 : 11
+        image.data[at + 1] = fog.darkvision.has(k) ? 26 : 8
+        image.data[at + 2] = fog.darkvision.has(k) ? 30 : 6
+        image.data[at + 3] = alpha
+      }
+      ctx.putImageData(image, 0, 0)
+      const texture = Texture.from(canvas, true)
+      texture.source.scaleMode = 'linear'
+      const sprite = new Sprite(texture)
+      // One texel per cell: texel centres land on cell centres, so the blend between two cells crosses their shared edge.
+      sprite.scale.set(cell)
+      sprite.position.set(this.grid.originX + minX * cell, this.grid.originY + minY * cell)
+      this.fogLayer.addChild(sprite)
+      this.fogSprite = sprite
+      const left = this.grid.originX + minX * cell
+      const top = this.grid.originY + minY * cell
+      this.fogBorder.rect(-100000, -100000, 200000, 200000).fill({ color: '#0b0806', alpha: unknown / 255 })
+        .rect(left, top, width * cell, height * cell).cut()
+    }
+    const g = this.wallLayer.clear()
+    const at = (point: Point) => ({ x: this.grid.originX + point.x * cell, y: this.grid.originY + point.y * cell })
+    if (look.darkness) {
+      for (const [list, color, alpha] of [[look.darkness.dark, '#1a1030', .45], [look.darkness.magic, '#3a0a4a', .6]] as const) {
+        for (const item of list) {
+          const [x, y] = item.split(',').map(Number)
+          const p = at({ x, y })
+          g.rect(p.x, p.y, cell, cell)
+        }
+        if (list.length) g.fill({ color, alpha })
+      }
+    }
+    if (look.showWalls) for (const wall of look.walls) {
+      if (wall.door) continue
+      const a = at(wall.a)
+      const b = at(wall.b)
+      g.moveTo(a.x, a.y).lineTo(b.x, b.y)
+    }
+    if (look.showWalls && look.walls.some(wall => !wall.door)) g.stroke({ width: 4 / zoom, color: '#e0b878', alpha: .85, cap: 'round' })
+    for (const door of look.doors) {
+      const a = at(door.a)
+      const b = at(door.b)
+      const state = door.door!
+      const color = state.secret ? '#a070d0' : state.locked ? '#d04a3a' : state.open ? '#7fc06a' : '#c08a4a'
+      if (state.open) {
+        // An open door: two short posts at the ends of the doorway.
+        const dx = (b.x - a.x) * .18
+        const dy = (b.y - a.y) * .18
+        g.moveTo(a.x, a.y).lineTo(a.x + dx, a.y + dy).moveTo(b.x, b.y).lineTo(b.x - dx, b.y - dy).stroke({ width: 6 / zoom, color, cap: 'round' })
+      } else g.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 7 / zoom, color, cap: 'round' })
+      g.circle((a.x + b.x) / 2, (a.y + b.y) / 2, 5 / zoom).fill(color)
+    }
+    for (const light of look.lights) {
+      const p = { x: this.grid.originX + light.x * cell, y: this.grid.originY + light.y * cell }
+      if (light.on) g.circle(p.x, p.y, (light.bright / 5) * cell).stroke({ width: 1.5 / zoom, color: '#ffd08a', alpha: .5 })
+      g.circle(p.x, p.y, 8 / zoom).fill({ color: light.on ? '#ffb347' : '#5a4a3a' }).stroke({ width: 2 / zoom, color: '#2a1f18' })
+    }
+    if (look.drawing?.length) {
+      const points = [...look.drawing, ...(look.cursor ? [look.cursor] : [])].map(at)
+      g.moveTo(points[0].x, points[0].y)
+      for (const p of points.slice(1)) g.lineTo(p.x, p.y)
+      g.stroke({ width: 3 / zoom, color: '#ffd08a', alpha: .9 })
+      for (const p of points) g.circle(p.x, p.y, 4 / zoom).fill('#ffd08a')
+    }
   }
 
   /** Release images the board no longer shows. */

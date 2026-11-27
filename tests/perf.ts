@@ -65,13 +65,34 @@ for (let index = 0; index < 50; index++) {
     x: index % 10, y: 6 + Math.floor(index / 10) })
 }
 
-await page.goto(base + '/room/' + room.id)
-const canvas = page.locator('canvas')
+// BEHOLDER_PERF_VISION=1: night, 60 walls, 4 torches, and the board measured from a player's seat (fog drawn there).
+let seatPage = page
+if (process.env.BEHOLDER_PERF_VISION === '1') {
+  const walls = []
+  for (let index = 0; index < 30; index++) walls.push({ a: { x: 12 + index, y: 2 }, b: { x: 12 + index, y: 8 } }, { a: { x: 12, y: 10 + index }, b: { x: 30, y: 10 + index } })
+  await command({ type: 'walls', sceneId, add: walls })
+  for (const [x, y] of [[14, 4], [20, 6], [16, 14], [26, 20]]) await command({ type: 'lights', sceneId, add: { x: x + .5, y: y + .5, bright: 20, dim: 20 } })
+  await command({ type: 'visionSettings', sceneId, enabled: true, ambient: 'night' })
+  seatPage = await browser.newPage({ viewport, deviceScaleFactor: ratio })
+  await seatPage.addInitScript(() => localStorage.setItem('beholder.prefs', JSON.stringify({ tourSeen: { dm: true, player: true } })))
+  assert.equal((await seatPage.request.post(base + '/api/join', { data: { invite: room.invite, name: 'Scout', role: 'player' } })).status(), 200)
+  const sheet = { ...blankSheet(), name: 'Scout', characterDetails: { species: 'Dwarf' } }
+  const created = await seatPage.request.post(path + '/commands', { data: { type: 'sheet', kind: 'pc', sheet, commandId: randomUUID(), revision: ((await (await seatPage.request.get(path)).json()) as Snapshot).revision } })
+  assert.equal(created.status(), 200)
+  const scout = ((await (await seatPage.request.get(path)).json()) as Snapshot).actors.find(actor => actor.name === 'Scout')!
+  const placed = await seatPage.request.post(path + '/commands', { data: { type: 'place', sceneId, actorId: scout.id, role: 'character', x: 11, y: 5, commandId: randomUUID(), revision: ((await (await seatPage.request.get(path)).json()) as Snapshot).revision } })
+  assert.equal(placed.status(), 200)
+  await page.close()
+}
+const seat = seatPage
+await seat.goto(base + '/room/' + room.id)
+const canvas = seat.locator('canvas')
 await canvas.waitFor()
-await page.waitForTimeout(1500)
+await seat.waitForTimeout(1500)
 const box = (await canvas.boundingBox())!
 
 async function measure(name: string, act: () => Promise<void>) {
+  const page = seat
   await page.evaluate(() => {
     const w = window as unknown as { __frames: number[]; __run: number }
     // A new run number stops any earlier counting loop that is still scheduled.
@@ -119,19 +140,19 @@ async function zoom(page: Page) {
 }
 
 // CPU slowdown stands in for a tablet (×4) and a phone (×6); the screen's own refresh rate is the idle figure.
-const cdp = await page.context().newCDPSession(page)
+const cdp = await seat.context().newCDPSession(seat)
 const results = []
 for (const rate of [1, 4, 6]) {
   await cdp.send('Emulation.setCPUThrottlingRate', { rate })
   const tag = rate === 1 ? '' : ' ×' + rate + ' CPU'
-  results.push(await measure('idle' + tag, () => page.waitForTimeout(1500)))
-  results.push(await measure('pan' + tag, () => pan(page)))
-  results.push(await measure('wheel zoom' + tag, () => zoom(page)))
+  results.push(await measure('idle' + tag, () => seat.waitForTimeout(1500)))
+  results.push(await measure('pan' + tag, () => pan(seat)))
+  results.push(await measure('wheel zoom' + tag, () => zoom(seat)))
 }
 await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
 mkdirSync('.data/perf', { recursive: true })
 const file = '.data/perf/board-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json'
-writeFileSync(file, JSON.stringify({ at: new Date().toISOString(), ratio, headless: process.env.BEHOLDER_PERF_HEADLESS === '1', results }, null, 2))
+writeFileSync(file, JSON.stringify({ at: new Date().toISOString(), ratio, vision: process.env.BEHOLDER_PERF_VISION === '1', headless: process.env.BEHOLDER_PERF_HEADLESS === '1', results }, null, 2))
 console.log('saved ' + file)
 await browser.close()
 if (process.env.BEHOLDER_PERF_ASSERT === '1') {

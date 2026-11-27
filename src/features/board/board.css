@@ -73,3 +73,15 @@
 /* ---------- Attack animations ---------- */
 /* The token bar sits above the bottom row (turn button, dice tray) so it never covers them. */
 .table .board-tools .move-handle { color: var(--bh-text-muted); background: transparent; border: 0; min-width: 20px; padding: 0; }
+
+/* ---------- 0.09: vision tools (DM) ---------- */
+.table .vision-tools { position: absolute; top: 58px; right: 12px; z-index: 6; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  max-width: min(720px, calc(100% - 24px)); padding: 6px 8px; border-radius: 8px; background: #1b1411f2; border: 1px solid #685445; font-size: .82rem; }
+.vision-tools select { max-width: 11rem; }
+.vision-tools .vision-switch { display: inline-flex; gap: 4px; align-items: center; font-weight: 600; }
+.vision-tool-buttons { display: inline-flex; gap: 2px; }
+.vision-tool-buttons button { min-width: 30px; height: 30px; padding: 0; display: inline-grid; place-items: center; }
+.vision-tool-buttons button[aria-pressed=true] { background: var(--bh-brass, #8a6d3b); color: #1b140f; }
+.vision-viewas { display: inline-flex; gap: 4px; align-items: center; }
+.vision-hint { flex-basis: 100%; color: var(--bh-text-muted); }
+.vision-warn { color: #f0b060; }
