@@ -2,6 +2,8 @@ import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js
 import type { AreaOutline } from '../../../shared/area.ts'
 import type { Point } from './gestures.ts'
 import { gridLines } from './geometry.ts'
+import { BoardEffects } from './effects.ts'
+import type { Outcome } from './effects.ts'
 import type { BoardTransform, Grid, View } from './geometry.ts'
 
 /**
@@ -76,8 +78,11 @@ export class PixiBoard {
     this.world.addChild(this.mapLayer, this.gridHolder, this.areaLayer, this.objectLayer, this.tokenLayer, this.rulerLayer, this.effectLayer)
     this.screen.addChild(this.boxLayer)
     app.stage.addChild(this.world, this.screen)
-    app.ticker.add(() => this.step())
+    this.effects = new BoardEffects(this.effectLayer)
+    app.ticker.add(() => { this.step(); this.effects.step() })
   }
+
+  private effects: BoardEffects
 
   static async create(canvas: HTMLCanvasElement, size: Point) {
     const app = new Application()
@@ -90,6 +95,7 @@ export class PixiBoard {
   }
 
   destroy() {
+    this.effects.clear()
     for (const texture of this.textures.values()) texture.destroy(false)
     this.textures.clear()
     this.app.destroy({ removeView: false }, { children: true })
@@ -338,6 +344,21 @@ export class PixiBoard {
       const r = overlay.selection
       box.rect(r.x, r.y, r.width, r.height).fill({ color: '#9fc4f0', alpha: .2 }).stroke({ width: 1, color: '#9fc4f0' })
     }
+  }
+
+  /** An attack between two tokens: a melee swing when adjacent, a bolt from farther away. Skipped when motion is reduced. */
+  strike(fromId: string, toId: string, ranged: boolean, outcome: Outcome) {
+    if (this.reduceMotion) return
+    const from = this.tokenCenter(fromId)
+    const to = this.tokenCenter(toId)
+    if (!from || !to) return
+    if (ranged) this.effects.ranged(from, to, outcome, 1 / this.view.zoom)
+    else this.effects.melee(from, to, outcome, 1 / this.view.zoom)
+  }
+
+  /** A spell area going off: flash, spreading ring and embers (kept even with reduced motion: it shows who was caught). */
+  areaBurst(shape: AreaOutline, color: string) {
+    this.effects.area(shape, color, point => this.cellToWorld(point), this.grid.cell, 1 / this.view.zoom)
   }
 
   /** Release images the board no longer shows. */

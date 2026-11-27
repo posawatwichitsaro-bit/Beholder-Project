@@ -6,7 +6,6 @@ import { areaContains, areaOutline, validArea } from '../../../shared/area.ts'
 import type { Area, AreaKind, AreaOutline } from '../../../shared/area.ts'
 import { tokenColor, tokenInitials } from './tokenAppearance.ts'
 import { newStrikes } from './strikes.ts'
-import type { Strike } from './strikes.ts'
 import type { Scene, SceneObject, Snapshot, Token } from '../../../shared/model.ts'
 import { clampZoom, dragThreshold, holdToSelectMs, longPressMs, pinchView, wheelIntent, zoomAround } from './gestures.ts'
 import type { Point } from './gestures.ts'
@@ -184,24 +183,16 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
   }, [focus])
   const activeArea = areaDraft ?? preview
   const outline = activeArea && validArea(activeArea) ? areaOutline(activeArea) : undefined
-  const [effectTime, setEffectTime] = useState(Date.now)
   const toolsMovable = useMovable('board-tools')
   // Attack animations: a slash for melee, a bolt for ranged, played once per new attack roll.
   const seenRolls = useRef<Set<string> | undefined>(undefined)
-  const [strikes, setStrikes] = useState<Strike[]>([])
   useEffect(() => {
     if (!seenRolls.current) { seenRolls.current = new Set(room.rolls.map(roll => roll.id)); return }
     const fresh = newStrikes(room.rolls, scene.tokens, scene.id, seenRolls.current, Date.now(), span)
-    if (!fresh.length) return
-    setStrikes(current => [...current, ...fresh])
-    const timer = setTimeout(() => setStrikes(current => current.filter(strike => !fresh.includes(strike))), 1100)
-    return () => clearTimeout(timer)
+    for (const strike of fresh) pixi.current?.strike(strike.from, strike.to, strike.ranged, strike.outcome)
   }, [room.rolls])
-  useEffect(() => {
-    setEffectTime(Date.now())
-    const timer = setTimeout(() => setEffectTime(Date.now()), 1500)
-    return () => clearTimeout(timer)
-  }, [scene.areaEffect?.at])
+  // A spell area that just went off bursts once on the board (not again after a reload).
+  const seenArea = useRef<number | undefined>(undefined)
   function zoomAt(factor: number, at: Point) {
     const previous = transform.current
     const next = clampZoom(previous.zoom * factor)
@@ -272,6 +263,13 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
   }, [ready, camera, zoom, size, gridSpec.cell, gridSpec.originX, gridSpec.originY, showGrid, map])
   useEffect(() => { if (ready) pixi.current!.setMap(map) }, [ready, map])
   useEffect(() => {
+    const effect = scene.areaEffect
+    if (!ready || !effect || seenArea.current === effect.at) return
+    const fresh = seenArea.current !== undefined || Date.now() - effect.at < 1500
+    seenArea.current = effect.at
+    if (fresh) pixi.current!.areaBurst(areaOutline(effect.area), damageKinds[effect.kind][1])
+  }, [ready, scene.areaEffect?.at])
+  useEffect(() => {
     if (!ready) return
     const board = pixi.current!
     board.setDetail(detailZoom)
@@ -316,17 +314,14 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
   }, [ready, scene, room.publicActors, selected, targetId, mainTokenId, draft, objectDraft, selectedObject, objectGroup, group, imageRevision, outline, map, detailZoom, gridSpec.cell, gridSpec.originX, gridSpec.originY])
   useEffect(() => {
     if (!ready) return
-    const areas = [
-      ...(scene.areaEffect && effectTime - scene.areaEffect.at < 1450 ? [{ shape: areaOutline(scene.areaEffect.area), color: damageKinds[scene.areaEffect.kind][1] }] : []),
-      ...(outline ? [{ shape: outline, color: '#ffb384' }] : [])
-    ]
+    const areas = outline ? [{ shape: outline, color: '#ffb384' }] : []
     pixi.current!.setOverlay({
       areas, dropCell,
       ruler: ruler && { ...ruler, feet: rulerFeet(ruler.from, ruler.to) },
       selection: selection && bounds(selection.from, selection.to),
       calibration: calibration && bounds(calibration.from, calibration.to)
     })
-  }, [ready, outline, scene.areaEffect, effectTime, dropCell, ruler, selection, calibration, Math.round(zoom * 16), gridSpec.cell, gridSpec.originX, gridSpec.originY])
+  }, [ready, outline, dropCell, ruler, selection, calibration, Math.round(zoom * 16), gridSpec.cell, gridSpec.originX, gridSpec.originY])
 
   function pointer(event: { clientX: number; clientY: number; currentTarget: Element }) {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -595,18 +590,6 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         event.preventDefault()
         drop(payload, cell(pointer(event)))
       }} />
-    {strikes.map(strike => {
-      const from = scene.tokens.find(token => token.id === strike.from)
-      const to = scene.tokens.find(token => token.id === strike.to)
-      if (!from || !to) return null
-      const a = pixel({ x: from.x + span(from) / 2, y: from.y + span(from) / 2 })
-      const b = pixel({ x: to.x + span(to) / 2, y: to.y + span(to) / 2 })
-      const angle = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI
-      const style = { left: a.x, top: a.y, '--dx': (b.x - a.x) + 'px', '--dy': (b.y - a.y) + 'px', '--angle': angle + 'deg', '--reach': grid * .6 + 'px' } as CSSProperties
-      return strike.ranged
-        ? <span key={strike.id} className="strike-bolt" data-outcome={strike.outcome} style={style} aria-hidden="true" />
-        : <span key={strike.id} className="strike-slash" data-outcome={strike.outcome} style={{ ...style, left: b.x, top: b.y }} aria-hidden="true" />
-    })}
     {(scene.damageEvents ?? []).filter(event => Date.now() - event.at < 2400).map(event => {
       const token = scene.tokens.find(item => item.actorId === event.actorId)
       if (!token) return null
