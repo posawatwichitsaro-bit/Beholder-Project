@@ -219,6 +219,8 @@ test('a new player builds a character step by step and rolls from the sheet', { 
   const sheet = page.getByRole('article', { name: 'ชีต Lyra' })
   await sheet.getByText('20/20', { exact: true }).waitFor()
   await sheet.getByRole('button', exact('Advantage')).click()
+  // The dice reveal is brief: start watching for it before the roll, or a quick one can come and go first.
+  const revealed = page.locator('.dice-reveal').waitFor({ state: 'attached' })
   await sheet.getByRole('button', exact('INT check')).click()
   // The result shows in the table's dice tray; the sheet stays open instead of being squeezed by the dice panel.
   await page.getByRole('complementary', { name: 'ถาดผลเต๋า' }).getByText(/INT check/).waitFor()
@@ -227,7 +229,7 @@ test('a new player builds a character step by step and rolls from the sheet', { 
   await sheet.getByRole('button', exact('Damage การโจมตีหลัก')).waitFor()
 
   // Every new roll gets a short dice animation; the Adventure Log keeps chat and rolls in one timeline.
-  await page.locator('.dice-reveal').waitFor({ state: 'attached' })
+  await revealed
   await openPanel(page, 'บันทึกการผจญภัย')
   const log = page.getByRole('region', exact('บันทึกการผจญภัย')).locator('.adventure-log-list')
   await log.getByText(/INT check/).waitFor()
@@ -982,6 +984,62 @@ test('0.07: conditions pick Advantage or Disadvantage on their own, and right-cl
   assert.equal(roll.faces.length, 2)
   assert.match(roll.label, /Advantage \(เลือกเอง\)/)
   await menu.waitFor({ state: 'detached' })
+})
+
+test('0.07: phone and tablet seats (touch): no sideways scroll, panels open, and holding a roll opens its menu', { timeout: 90000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const host = await seat(browser)
+  const room: Snapshot = await (await host.request.post(base + '/api/rooms', { data: { name: 'Release 0.07 touch', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const state = await (await page.request.get(path)).json() as Snapshot
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: state.revision } })
+    assert.equal(response.status(), 200, await response.text())
+    return (await page.request.get(path)).json() as Promise<Snapshot>
+  }
+  const sceneId = (await command(host, { type: 'scene', name: 'Road', cell: 48, originX: 0, originY: 0 })).scenes[0].id
+  const devices = [
+    { name: 'iPhone', viewport: { width: 390, height: 844 }, deviceScaleFactor: 3 },
+    { name: 'iPad', viewport: { width: 820, height: 1180 }, deviceScaleFactor: 2 }
+  ]
+  for (const device of devices) {
+    const page = await seat(browser, { viewport: device.viewport, deviceScaleFactor: device.deviceScaleFactor, hasTouch: true, isMobile: true })
+    page.setDefaultTimeout(10000)
+    assert.equal((await page.request.post(base + '/api/join', { data: { invite: room.invite, name: device.name, role: 'player' } })).status(), 200)
+    const hero = (await command(page, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: device.name + ' Hero' } })).actors.find(actor => actor.name === device.name + ' Hero')!
+    await command(page, { type: 'place', sceneId, actorId: hero.id, role: 'character', x: devices.indexOf(device) + 1, y: 1 })
+    await page.goto(base + '/room/' + room.id)
+    await page.getByRole('button', exact('เมนูโต๊ะ')).waitFor()
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+    assert.ok(overflow <= 1, device.name + ': the page does not scroll sideways (' + overflow + 'px)')
+
+    // Panels open from the folded rail by tapping.
+    await openPanel(page, 'ชีตในห้อง')
+    await page.getByRole('button', exact(device.name + ' Hero')).tap()
+    const sheet = page.getByRole('article', { name: 'ชีต ' + device.name + ' Hero' })
+    const check = sheet.getByRole('button', exact('WIS check'))
+    await check.scrollIntoViewIfNeeded()
+    const box = (await check.boundingBox())!
+    assert.ok(box.x >= 0 && box.x + box.width <= device.viewport.width + 1, device.name + ': the sheet fits on screen')
+
+    // Press and hold a roll: the roll menu opens and the lifting finger does not also roll.
+    const before = ((await (await page.request.get(path)).json()) as Snapshot).rolls.length
+    const at = { clientX: box.x + box.width / 2, clientY: box.y + box.height / 2, pointerType: 'touch', isPrimary: true, bubbles: true }
+    await check.dispatchEvent('pointerdown', at)
+    await page.waitForTimeout(650)
+    await check.dispatchEvent('pointerup', at)
+    await check.dispatchEvent('click', at)
+    const menu = page.getByRole('menu', { name: /เลือกการทอย/ })
+    await menu.waitFor()
+    assert.equal(((await (await page.request.get(path)).json()) as Snapshot).rolls.length, before, device.name + ': holding does not roll by itself')
+    await menu.getByRole('menuitem', { name: /^Disadvantage/ }).tap()
+    await page.waitForFunction(async ([url, count]) => (await (await fetch(url as string)).json()).rolls.length > (count as number), [path, before])
+    const roll = ((await (await page.request.get(path)).json()) as Snapshot).rolls.at(-1)!
+    assert.equal(roll.faces.length, 2)
+    assert.match(roll.label, /Disadvantage \(เลือกเอง\)/)
+    await page.close()
+  }
 })
 
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
