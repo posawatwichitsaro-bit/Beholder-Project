@@ -1330,11 +1330,20 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await playerRail.getByRole('button', exact('ไปที่ Token Rat 1')).getByText('RA', { exact: true }).waitFor()
   await playerRail.locator('[aria-current=step]').waitFor()
   await playerRail.getByRole('button', exact('ไปที่ Token Scout')).click()
-  await one.waitForFunction(() => {
+  // Focus centres the board on Scout: the token's centre sits at the middle of the canvas (the view is on data attributes).
+  await one.waitForFunction(async url => {
     const canvas = document.querySelector('canvas')!
-    const [red, green, blue] = canvas.getContext('2d')!.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data
-    return red > 160 && green > 55 && green < 115 && blue < 85
-  })
+    const [x, y] = canvas.dataset.camera!.split(',').map(Number)
+    const zoom = Number(canvas.dataset.zoom)
+    const room = await (await fetch(url)).json()
+    const scene = room.scenes[0]
+    const scout = room.actors.find((actor: { name: string }) => actor.name === 'Scout')
+    const token = scene.tokens.find((item: { actorId: string }) => item.actorId === scout.id)
+    const rect = canvas.getBoundingClientRect()
+    const cx = x + (scene.originX + (token.x + .5) * scene.cell) * zoom
+    const cy = y + (scene.originY + (token.y + .5) * scene.cell) * zoom
+    return Math.abs(cx - rect.width / 2) < 2 && Math.abs(cy - rect.height / 2) < 2
+  }, base + '/api/rooms/' + roomIdOf(one.url()))
   const roomUrl = base + '/api/rooms/' + roomIdOf(dm.url())
   const fight = await (await dm.request.get(roomUrl)).json()
   const acting = fight.scenes[0].combat.order[0].actorId
