@@ -17,6 +17,7 @@ import type { RollMode } from '../../../shared/advantage.ts'
 import { rollMenuProps } from '../../ui/index.ts'
 import { readyToLevel, srdLink, srdFeats, xpForLevel, characterLevel } from '../../../shared/progression.ts'
 import { GiveXp } from '../combat/XpAward.tsx'
+import { VisionFields } from './VisionFields.tsx'
 import { RestPanel } from './RestPanel.tsx'
 
 type Tab = 'overview' | 'actions' | 'spells' | 'rest' | 'inventory' | 'notes'
@@ -256,6 +257,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
       </>}
 
       {tab === 'overview' && dm && xpRoom && actor.kind === 'pc' && <GiveXp actorId={actor.id} send={send} />}
+      {tab === 'overview' && <VisionFields key={actor.id + JSON.stringify(actor.vision ?? null)} actor={actor} dm={dm} send={send} />}
       {tab === 'rest' && <RestPanel actor={actor} send={send} inCombat={room.scenes.some(item => item.combat?.order.some(entry => entry.actorId === actor.id))} />}
       {tab === 'inventory' && <InventoryPanel key={actor.id} actor={actor} send={send} expanded />}
 

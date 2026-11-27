@@ -21,6 +21,12 @@ import type { Odds, RollMode } from '../../../shared/advantage.ts'
 import { hasCondition } from '../../../shared/effects.ts'
 import { isMonsterArt, sceneArtByImage } from '../../../shared/catalogArt.ts'
 import { boardTransform, bounds, pieceAt, piecesIn, rulerFeet } from './geometry.ts'
+import { VisionToolbar } from './VisionToolbar.tsx'
+import { doorAt, knownDoor, lightAt, snapCorner, strokeCells, wallAt } from './visionTools.ts'
+import type { VisionTool } from './visionTools.ts'
+import { playerView } from '../../../shared/vision.ts'
+import type { Wall } from '../../../shared/vision.ts'
+import { Eye as EyeIcon } from 'lucide-react'
 import type { ObjectLook, PixiBoard, TokenLook } from './pixiBoard.ts'
 
 /** A token-bar / context command. `roll` makes it a d20 roll with a right-click menu for Advantage or Disadvantage. */
@@ -44,9 +50,11 @@ type Props = {
   quickHp?: (actorId: string, text: string) => Promise<boolean>
   /** Preview grid while calibrating (map pixels). */
   gridOverride?: { cell: number; originX: number; originY: number }
+  /** Sends a command for this scene: vision tools, doors. */
+  command?: (command: Record<string, unknown>) => Promise<boolean>
 }
 const objectColors = { container: '#6e5432', prop: '#4b5e58', structure: '#5c5a66', item: '#6a5470' }
-type Mode = 'pan' | 'measure' | 'select' | 'move' | 'area' | 'object' | 'calibrate'
+type Mode = 'pan' | 'measure' | 'select' | 'move' | 'area' | 'object' | 'calibrate' | 'paint'
 type Gesture = {
   from: Point; camera: Point; mode: Mode; tokens: Token[]; delta?: Point
   moved: boolean; token?: Token; object?: SceneObject
@@ -54,7 +62,7 @@ type Gesture = {
 const editableTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && Boolean(target.closest('input,select,textarea,[contenteditable]'))
 
-export function Board({ room, scene, selected, targetId, select, move, copy, paste, place, placementLabel, mainTokenId, actions, focus, areaKind, preview, onArea, drop, moveObject, calibrate, gridOverride, quickHp }: Props) {
+export function Board({ room, scene, selected, targetId, select, move, copy, paste, place, placementLabel, mainTokenId, actions, focus, areaKind, preview, onArea, drop, moveObject, calibrate, gridOverride, quickHp, command }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ x: 640, y: 480 })
   const [camera, setCamera] = useState({ x: 36, y: 36 })
@@ -72,7 +80,7 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
   const [ruler, setRuler] = useState<{ from: Point; to: Point }>()
   const [dropCell, setDropCell] = useState<Point>()
   const [panning, setPanning] = useState(false)
-  const [menu, setMenu] = useState<{ pixel: Point; cell: Point; token?: Token; object?: SceneObject }>()
+  const [menu, setMenu] = useState<{ pixel: Point; cell: Point; token?: Token; object?: SceneObject; door?: Wall }>()
   const menuRef = useRef<HTMLDivElement>(null)
   const gesture = useRef<Gesture | null>(null)
   const pointers = useRef(new Map<number, Point>())
@@ -83,6 +91,15 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
   const images = useRef(new Map<string, HTMLImageElement>())
   const [imageRevision, repaintImages] = useState(0)
   const placing = Boolean(place)
+  // Vision (DM): the toolbar, the active tool, a wall being drawn, darkness being painted, and "see as" a player.
+  const [visionOpen, setVisionOpen] = useState(false)
+  const [visionTool, setVisionTool] = useState<VisionTool>()
+  const [drawing, setDrawing] = useState<Point[]>([])
+  const [cursor, setCursor] = useState<Point>()
+  const [painting, setPainting] = useState<Set<string>>()
+  const [viewAs, setViewAs] = useState('')
+  useEffect(() => { if (!visionOpen) { setVisionTool(undefined); setViewAs('') } }, [visionOpen])
+  useEffect(() => { setDrawing([]); setCursor(undefined) }, [visionTool])
   useEffect(() => { if (placing) setTool('token') }, [placing])
 
   useEffect(() => {
@@ -108,7 +125,7 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       if (event.key.toLowerCase() === 'r') setTool('measure')
       if (event.key.toLowerCase() === 'v') setTool('token')
       if (event.key.toLowerCase() === 'g') usePrefs.getState().update({ showGrid: !usePrefs.getState().showGrid })
-      if (event.key === 'Escape') { setGroup([]); setObjectGroup([]); setSelectedObject(undefined); setRuler(undefined) }
+      if (event.key === 'Escape') { setGroup([]); setObjectGroup([]); setSelectedObject(undefined); setRuler(undefined); setDrawing([]) }
     }
     const keyUp = (event: KeyboardEvent) => {
       if (event.key === ' ') { spaceHeld.current = false; setPanning(false) }
@@ -324,6 +341,37 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
     })
   }, [ready, outline, dropCell, ruler, selection, calibration, Math.round(zoom * 16), gridSpec.cell, gridSpec.originX, gridSpec.originY])
 
+  // Doors this seat can click: all of them for the DM, known ones for players (seen or explored, never secret).
+  const knownCells = new Set([...(scene.view?.visible ?? []), ...(scene.view?.explored ?? [])])
+  const knownDoors = (scene.vision?.walls ?? []).filter(wall => wall.door && (dm || !scene.vision?.enabled || knownDoor(wall, knownCells)))
+  /** A player opens or shuts a door with their selected token, else their main token, else any token of theirs here. */
+  async function useDoor(wall: Wall) {
+    if (!command || !wall.door) return
+    if (dm) return command({ type: 'doorSettings', wallId: wall.id, door: { open: !wall.door.open } })
+    const mine = scene.tokens.filter(token => room.actors.some(actor => actor.id === token.actorId))
+    const actorId = mine.find(token => token.actorId === selected)?.actorId ?? mine.find(token => token.id === mainTokenId)?.actorId ?? mine[0]?.actorId
+    if (!actorId) return
+    return command(wall.door.locked ? { type: 'pickDoor', wallId: wall.id, actorId } : { type: 'door', wallId: wall.id, actorId, open: !wall.door.open })
+  }
+  useEffect(() => {
+    if (!ready) return
+    const vision = scene.vision
+    const player = !dm && vision?.enabled && scene.view
+    const watched = dm && viewAs && vision?.enabled ? playerView(scene, room.actors, viewAs) : undefined
+    const fog = player ? {
+      visible: new Set(scene.view!.visible), dimmed: new Set(scene.view!.dimmed), darkvision: new Set(scene.view!.darkvision),
+      explored: new Set(scene.view!.explored), opaque: true
+    } : watched ? { ...watched, explored: new Set(vision?.explored?.[viewAs] ?? []), opaque: false } : undefined
+    pixi.current!.setVision({
+      fog, walls: dm ? vision?.walls ?? [] : [], showWalls: dm,
+      doors: knownDoors,
+      lights: dm ? vision?.lights ?? [] : [],
+      darkness: dm && visionOpen ? { dark: [...(vision?.darkness ?? []), ...(painting && visionTool === 'dark' ? painting : [])],
+        magic: [...(vision?.magicDarkness ?? []), ...(painting && visionTool === 'magic' ? painting : [])] } : undefined,
+      drawing, cursor
+    })
+  }, [ready, scene.vision, scene.view, scene.tokens, room.actors, viewAs, visionOpen, visionTool, painting, drawing, cursor, detailZoom, gridSpec.cell, gridSpec.originX, gridSpec.originY])
+
   function pointer(event: { clientX: number; clientY: number; currentTarget: Element }) {
     const rect = event.currentTarget.getBoundingClientRect()
     return { x: event.clientX - rect.left, y: event.clientY - rect.top }
@@ -387,6 +435,37 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       return
     }
     if (place && tool === 'token' && !pan) { place(cell(point)); return }
+    const spot = transformNow.at(point)
+    if (dm && visionTool && command && !pan) {
+      const walls = scene.vision?.walls ?? []
+      if (visionTool === 'wall' || visionTool === 'door') {
+        const corner = snapCorner(spot, event.shiftKey)
+        const last = drawing.at(-1)
+        if (!last) setDrawing([corner])
+        else if (last.x !== corner.x || last.y !== corner.y) {
+          void command({ type: 'walls', add: [{ a: last, b: corner, door: visionTool === 'door' }] })
+          setDrawing(visionTool === 'wall' ? [corner] : [])
+        }
+      } else if (visionTool === 'light') {
+        const existing = lightAt(scene.vision?.lights ?? [], spot)
+        void command(existing ? { type: 'lights', toggle: existing.id } : { type: 'lights', add: { x: Math.floor(spot.x) + .5, y: Math.floor(spot.y) + .5 } })
+      } else if (visionTool === 'erase') {
+        const wall = wallAt(walls, spot)
+        const light = wall ? undefined : lightAt(scene.vision?.lights ?? [], spot)
+        if (wall) void command({ type: 'walls', remove: [wall.id] })
+        else if (light) void command({ type: 'lights', remove: light.id })
+      } else {
+        gesture.current = { from: point, camera, mode: 'paint', tokens: [], moved: false }
+        setPainting(strokeCells(spot, spot))
+      }
+      return
+    }
+    // Doors open and shut with a click on their handle (players: the nearest of their own tokens does it).
+    const door = !pan && tool === 'token' && command ? doorAt(knownDoors, spot) : undefined
+    if (door) {
+      void useDoor(door)
+      return
+    }
     const measure = tool === 'measure' && !pan
     if (measure) setRuler({ from: cell(point), to: cell(point) })
     else setRuler(undefined)
@@ -431,8 +510,16 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
     }
   }
   function drag(event: PointerEvent<HTMLCanvasElement>) {
+    if (drawing.length) setCursor(snapCorner(transformNow.at(pointer(event)), event.shiftKey))
     if (!pointers.current.has(event.pointerId)) return
     const point = pointer(event)
+    if (gesture.current?.mode === 'paint') {
+      const from = transformNow.at(gesture.current.from)
+      const to = transformNow.at(point)
+      gesture.current.from = point
+      setPainting(current => new Set([...(current ?? []), ...strokeCells(from, to)]))
+      return
+    }
     pointers.current.set(event.pointerId, point)
     const pinching = pinch.current
     if (pinching) {
@@ -477,7 +564,10 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       return
     }
     const action = gesture.current
-    if (action?.mode === 'area' && areaKind) {
+    if (action?.mode === 'paint' && painting && command) {
+      void command({ type: 'darkness', cells: [...painting], mode: visionTool === 'magic' ? 'magic' : visionTool === 'dark' ? 'dark' : 'clear' })
+      setPainting(undefined)
+    } else if (action?.mode === 'area' && areaKind) {
       const area = { kind: areaKind, from: areaPoint(action.from), to: areaPoint(pointer(event)) }
       if (validArea(area)) onArea?.(area)
       setAreaDraft(undefined)
@@ -513,7 +603,18 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
   }
 
   const center = { x: size.x / 2, y: size.y / 2 }
-  const boardActions: Action[] = menu ? [
+  const doorActions = (wall: Wall): Action[] => {
+    const state = wall.door!
+    const set = (door: Record<string, unknown> | null) => void command?.({ type: 'doorSettings', wallId: wall.id, door })
+    return [
+      { label: state.open ? 'ปิดประตู' : 'เปิดประตู', run: () => set({ open: !state.open }), disabled: state.locked },
+      { label: state.locked ? 'ปลดล็อก' : 'ล็อกประตู', run: () => set({ locked: !state.locked }) },
+      ...[10, 15, 20].map(dc => ({ label: 'DC สะเดาะ ' + dc + (state.dc === dc ? ' ✓' : ''), run: () => set({ dc }) })),
+      { label: state.secret ? 'เปิดเผยประตูลับ' : 'ทำเป็นประตูลับ', run: () => set({ secret: !state.secret }) },
+      { label: 'เปลี่ยนเป็นผนัง', run: () => set(null) }
+    ]
+  }
+  const boardActions: Action[] = menu?.door ? doorActions(menu.door) : menu ? [
     ...actions(menu.token, menu.cell, menu.object),
     ...(menu.token || menu.object ? [] : [
       { label: 'วัดระยะ', run: () => setTool('measure') },
@@ -571,6 +672,13 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       data-renderer={ready ? 'pixi' : 'loading'} onPointerDown={down} onPointerMove={drag} onPointerUp={up}
       onContextMenu={event => {
         event.preventDefault()
+        if (drawing.length) { setDrawing([]); setCursor(undefined); return }
+        const doorHere = dm && command ? doorAt(scene.vision?.walls ?? [], transformNow.at(pointer(event))) : undefined
+        if (doorHere) {
+          const rect = event.currentTarget.getBoundingClientRect()
+          setMenu({ pixel: { x: event.clientX - rect.left, y: event.clientY - rect.top }, cell: cell(pointer(event)), door: doorHere })
+          return
+        }
         cancelGesture()
         const rect = event.currentTarget.getBoundingClientRect()
         openMenuAt(event.clientX || event.clientY ? { x: event.clientX - rect.left, y: event.clientY - rect.top } : center)
@@ -607,6 +715,8 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         <Ruler size={16} aria-hidden="true" /><span className="board-tool-label">วัดระยะ</span></button>
       <button aria-label="แสดง Grid" aria-pressed={gridPref} onClick={() => usePrefs.getState().update({ showGrid: !gridPref })} title="แสดงหรือซ่อนเส้น Grid (G)">
         <Grid3x3 size={16} aria-hidden="true" /></button>
+      {dm && command && <button aria-label="การมองเห็น" aria-pressed={visionOpen} onClick={() => setVisionOpen(open => !open)} title="ผนัง ประตู แสง ความมืด และการมองเห็นของผู้เล่น">
+        <EyeIcon size={16} aria-hidden="true" /></button>}
       <span className="board-tools-sep" aria-hidden="true" />
       <button aria-label="ซูมออก" title="ซูมออก (ล้อเมาส์ หรือหยิกสองนิ้ว)" onClick={() => zoomAt(1 / 1.2, center)}><Minus size={16} aria-hidden="true" /></button>
       <button aria-label="พอดีกระดาน" title="พอดีกระดาน" className="board-zoom" onClick={fit}>{Math.round(zoom * 100)}%</button>
@@ -616,9 +726,11 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         setMenu({ pixel: center, cell: cell(center), token })
       }}><MoreHorizontal size={16} aria-hidden="true" /></button>
     </div>
+    {dm && command && visionOpen && <VisionToolbar scene={scene} members={room.members} tool={visionTool} setTool={setVisionTool}
+      viewAs={viewAs} setViewAs={setViewAs} command={command} />}
     {menu && <div className="context-popover" ref={menuRef} aria-label="คำสั่งตามตำแหน่ง" role="group"
       onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); closeMenu() } }}>
-      <strong>{menu.token ? creature(menu.token)?.name ?? 'Token' : menu.object?.name ?? 'กระดาน'}</strong>
+      <strong>{menu.door ? 'ประตู' : menu.token ? creature(menu.token)?.name ?? 'Token' : menu.object?.name ?? 'กระดาน'}</strong>
       {boardActions.map(action => <button key={action.label} disabled={action.disabled} onClick={() => {
         closeMenu()
         action.run()

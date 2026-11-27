@@ -553,7 +553,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     <Dock items={dock.open.map(id => ({ id, title: panelById(id).label, body: bodies[id]() }))}
       pinned={dock.pinned} pin={id => dispatchDock({ type: 'pin', id })} close={id => dispatchDock({ type: 'close', id })} />
     <section className="workspace" aria-label="ฉากปัจจุบัน">
-      {scene ? <Board key={scene.id} scene={scene} room={room} selected={boardSelected} targetId={combatOpen ? combatTarget : attackTarget || undefined}
+      {scene ? <Board key={scene.id} command={commandHere} scene={scene} room={room} selected={boardSelected} targetId={combatOpen ? combatTarget : attackTarget || undefined}
         mainTokenId={mainTokenId}
         quickHp={dm ? async (actorId, text) => {
           const change = readHpChange(text)

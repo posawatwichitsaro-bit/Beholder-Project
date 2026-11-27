@@ -1116,6 +1116,72 @@ test('0.08: the board draws with Pixi, tokens glide to a new square, and an atta
   assert.deepEqual(errors, [])
 })
 
+test('0.09: two players see different parts of a walled map; the DM draws a wall, opens a door and watches as a player', { timeout: 90000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const mira = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const bram = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const room: Snapshot = await (await dm.request.post(base + '/api/rooms', { data: { name: 'Release 0.09 vision', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const state = await (await page.request.get(path)).json() as Snapshot
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: state.revision } })
+    assert.equal(response.status(), 200, await response.text())
+    return (await page.request.get(path)).json() as Promise<Snapshot>
+  }
+  const sceneId = (await command(dm, { type: 'scene', name: 'Crypt', cell: 48, originX: 0, originY: 0 })).scenes[0].id
+  // Two rooms split by a wall at x = 6 with a door between y = 3 and 4; Mira west, Bram east, a ghoul east.
+  await command(dm, { type: 'walls', sceneId, add: [
+    { a: { x: 6, y: 0 }, b: { x: 6, y: 3 } }, { a: { x: 6, y: 3 }, b: { x: 6, y: 4 }, door: true }, { a: { x: 6, y: 4 }, b: { x: 6, y: 9 } }] })
+  await command(dm, { type: 'visionSettings', sceneId, enabled: true, ambient: 'day' })
+  await command(dm, { type: 'place', sceneId, kind: 'monster', sheet: { ...blankSheet('monster'), name: 'Ghoul', hp: 9, maxHp: 9 }, x: 10, y: 3 })
+  for (const [page, name, x] of [[mira, 'Mira', 2], [bram, 'Bram', 9]] as const) {
+    assert.equal((await page.request.post(base + '/api/join', { data: { invite: room.invite, name, role: 'player' } })).status(), 200)
+    const hero = (await command(page, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: name + ' Hero' } })).actors.find(actor => actor.name === name + ' Hero')!
+    await command(page, { type: 'place', sceneId, actorId: hero.id, role: 'character', x, y: 3 })
+  }
+  for (const page of [dm, mira, bram]) {
+    await page.goto(base + '/room/' + room.id)
+    await page.locator('canvas[data-renderer=pixi]').waitFor()
+  }
+  const sees = async (page: Page) => ((await (await page.request.get(path)).json()) as Snapshot).scenes[0].tokens.length
+  assert.equal(await sees(mira), 1, 'Mira sees only herself: the door is shut')
+  assert.equal(await sees(bram), 2, 'Bram shares the east room with the ghoul')
+  await mira.waitForTimeout(400)
+  await mira.screenshot({ path: '.data/0.09-mira-door-shut.png' })
+
+  // Mira walks to the door and clicks its handle: it opens, and she sees into the east room.
+  const state = await (await mira.request.get(path)).json() as Snapshot
+  const miraToken = state.scenes[0].tokens[0]
+  await command(mira, { type: 'move', sceneId, tokenId: miraToken.id, x: 5, y: 3 })
+  await mira.waitForTimeout(500)
+  const frame = (await mira.locator('canvas').boundingBox())!
+  await mira.mouse.click(frame.x + 36 + 6 * 48, frame.y + 36 + 3.5 * 48)
+  await waitInPage(mira, async url => (await (await fetch(url)).json()).scenes[0].tokens.length === 3, path)
+  await mira.waitForTimeout(400)
+  await mira.screenshot({ path: '.data/0.09-mira-door-open.png' })
+
+  // The DM draws a wall with the tool (two clicks, then right-click to finish) and watches as Mira.
+  await dm.getByRole('button', exact('การมองเห็น')).click()
+  const tools = dm.getByRole('toolbar', { name: 'เครื่องมือการมองเห็น' })
+  await tools.getByRole('button', exact('ผนัง')).click()
+  const board = (await dm.locator('canvas').boundingBox())!
+  await dm.mouse.click(board.x + 36 + 2 * 48, board.y + 36 + 6 * 48)
+  await dm.mouse.click(board.x + 36 + 4 * 48, board.y + 36 + 6 * 48)
+  await dm.mouse.click(board.x + 36 + 4 * 48, board.y + 36 + 6 * 48, { button: 'right' })
+  await waitInPage(dm, async url => (await (await fetch(url)).json()).scenes[0].vision.walls.length === 4, path)
+  const added = ((await (await dm.request.get(path)).json()) as Snapshot).scenes[0].vision!.walls!.at(-1)!
+  assert.deepEqual([added.a, added.b], [{ x: 2, y: 6 }, { x: 4, y: 6 }])
+  await tools.getByLabel('ดูจากมุมมองของ').selectOption({ label: 'มุมมองของ Mira' })
+  await dm.waitForTimeout(400)
+  await dm.screenshot({ path: '.data/0.09-dm-as-mira.png' })
+
+  // Night: the ghoul's room goes dark for Mira unless light reaches it.
+  await tools.getByLabel('แสงของฉาก').selectOption({ label: 'กลางคืน' })
+  await waitInPage(mira, async url => (await (await fetch(url)).json()).scenes[0].tokens.length === 1, path)
+})
+
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')
