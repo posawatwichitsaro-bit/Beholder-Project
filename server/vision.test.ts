@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { blankSheet } from '../shared/model.ts'
-import { inside, key, playerView, sightPolygon, speciesDarkvision, visionOf, wallsForPlayer } from '../shared/vision.ts'
+import { inside, insideStar, key, playerView, sightPolygon, speciesDarkvision, star, visionOf, wallsForPlayer } from '../shared/vision.ts'
 import type { SceneVision, Wall } from '../shared/vision.ts'
 import { species } from '../src/features/sheets/origins.ts'
 
@@ -54,4 +54,16 @@ test('sight polygon and helpers', () => {
   assert.deepEqual(wallsForPlayer([wall('s', 0, 0, 1, 0, { open: false, secret: true, dc: 15, tried: ['x'] })]), [{ id: 's', a: { x: 0, y: 0 }, b: { x: 1, y: 0 } }], 'a secret door is just wall to players')
   assert.equal(visionOf({ ...goblin, monsterReference: { statBlock: 'Senses Darkvision 60 ft.; Passive Perception 9' } }).darkvision, 60)
   for (const [name, entry] of Object.entries(species)) assert.equal(speciesDarkvision[name], entry.darkvision, name + ' Darkvision matches the character builder')
+})
+
+test('the fast star test agrees with the plain polygon test (edge points aside)', () => {
+  const corridors = Array.from({ length: 20 }, (_, i) => ({ a: { x: 3 + i, y: -2 }, b: { x: 3 + i, y: 4 } }))
+  const shape = star({ x: 1.5, y: 1.5 }, 30, corridors)
+  let disagree = 0
+  let total = 0
+  for (let y = -30; y < 30; y++) for (let x = -30; x < 30; x++) {
+    total++
+    if (insideStar(shape, { x: x + .5, y: y + .5 }) !== inside(shape.points, { x: x + .5, y: y + .5 })) disagree++
+  }
+  assert.ok(disagree <= total / 1000, disagree + ' of ' + total + ' cells disagree')
 })

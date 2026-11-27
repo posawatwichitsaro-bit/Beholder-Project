@@ -94,6 +94,33 @@ export function sightPolygon(eye: Point, radius: number, walls: Segment[]): Poin
   })
 }
 
+/**
+ * A sight polygon with its eye and vertex angles, for a fast inside test: the
+ * polygon is star-shaped around the eye, so a point is inside when it is on the
+ * eye's side of the one edge whose angles bracket it (a binary search, not a walk round every edge).
+ */
+export type Star = { eye: Point; points: Point[]; angles: number[] }
+export function star(eye: Point, radius: number, walls: Segment[]): Star {
+  const points = sightPolygon(eye, radius, walls)
+  return { eye, points, angles: points.map(p => Math.atan2(p.y - eye.y, p.x - eye.x)) }
+}
+export function insideStar(shape: Star, p: Point) {
+  const { eye, points, angles } = shape
+  const n = points.length
+  if (n < 3) return false
+  const angle = Math.atan2(p.y - eye.y, p.x - eye.x)
+  let lo = 0
+  let hi = n
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (angles[mid] <= angle) lo = mid + 1; else hi = mid }
+  const a = points[(lo - 1 + n) % n]
+  const b = points[lo % n]
+  // Same side of edge a→b as the eye (or on it) means inside.
+  const side = (q: Point) => (b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x)
+  const sp = side(p)
+  const se = side(eye)
+  return sp === 0 || Math.sign(sp) === Math.sign(se)
+}
+
 function segmentDistance(p: Point, s: Segment) {
   const ex = s.b.x - s.a.x
   const ey = s.b.y - s.a.y
@@ -112,7 +139,7 @@ export function inside(polygon: Point[], p: Point) {
   return result
 }
 
-type Lit = { center: Point; bright: number; dim: number; polygon: Point[] }
+type Lit = { center: Point; bright: number; dim: number; polygon: Star }
 
 /** Light sources on the scene: placed lights that are on, and lights carried by tokens. Radii in cells. */
 export function lightsOf(scene: Pick<Scene, 'tokens'> & { vision?: SceneVision }, actors: Pick<Actor, 'id' | 'size'>[], visionById: (id: string) => ActorVision): Lit[] {
@@ -122,7 +149,7 @@ export function lightsOf(scene: Pick<Scene, 'tokens'> & { vision?: SceneVision }
     const bright = brightFeet / feetPerCell
     const dim = dimFeet / feetPerCell
     if (bright + dim <= 0) return
-    lit.push({ center, bright, dim, polygon: sightPolygon(center, bright + dim, walls) })
+    lit.push({ center, bright, dim, polygon: star(center, bright + dim, walls) })
   }
   for (const light of scene.vision?.lights ?? []) if (light.on) add({ x: light.x, y: light.y }, light.bright, light.dim)
   for (const token of scene.tokens) {
@@ -138,16 +165,29 @@ export const tokenCenter = (token: Pick<Token, 'x' | 'y'>, actor: Pick<Actor, 's
   return { x: token.x + span / 2, y: token.y + span / 2 }
 }
 
+type Dark = { dark: Set<string>; magic: Set<string> }
+const cellSets = new WeakMap<string[], Set<string>>()
+const none = new Set<string>()
+/** A painted list as a set, cached per array (commands replace the arrays, so a change is never stale). */
+function asSet(list?: string[]) {
+  if (!list) return none
+  let set = cellSets.get(list)
+  if (!set) cellSets.set(list, set = new Set(list))
+  return set
+}
+const darkOf = (vision: SceneVision): Dark => ({ dark: asSet(vision.darkness), magic: asSet(vision.magicDarkness) })
+
 /** The light level of a cell (its middle). */
 export function levelAt(cell: Point, vision: SceneVision, lights: Lit[]): Level {
   const k = key(cell.x, cell.y)
-  if (vision.magicDarkness?.includes(k)) return 'dark'
-  let level: Level = vision.darkness?.includes(k) ? 'dark' : ambientLevel[vision.ambient]
+  const { dark, magic } = darkOf(vision)
+  if (magic.has(k)) return 'dark'
+  let level: Level = dark.has(k) ? 'dark' : ambientLevel[vision.ambient]
   const p = { x: cell.x + .5, y: cell.y + .5 }
   for (const light of lights) {
     if (level === 'bright') break
     const distance = Math.hypot(p.x - light.center.x, p.y - light.center.y)
-    if (distance > light.bright + light.dim || !inside(light.polygon, p)) continue
+    if (distance > light.bright + light.dim || !insideStar(light.polygon, p)) continue
     level = distance <= light.bright ? 'bright' : level === 'dark' ? 'dim' : level
   }
   return level
@@ -162,20 +202,21 @@ export type Seen = { visible: Set<string>; dimmed: Set<string>; darkvision: Set<
 export function seenBy(eye: Point, sight: ActorVision, vision: SceneVision, lights: Lit[], into: Seen = { visible: new Set(), dimmed: new Set(), darkvision: new Set() }) {
   const reach = Math.min(maxSight, sight.range !== undefined ? sight.range / feetPerCell : maxSight)
   const darkvision = (sight.darkvision ?? 0) / feetPerCell
-  const polygon = sightPolygon(eye, reach + .01, blockers(vision.walls))
-  const magic = new Set(vision.magicDarkness ?? [])
+  const polygon = star(eye, reach + .01, blockers(vision.walls))
+  const magic = darkOf(vision).magic
   for (let y = Math.floor(eye.y - reach); y <= Math.ceil(eye.y + reach); y++) {
     for (let x = Math.floor(eye.x - reach); x <= Math.ceil(eye.x + reach); x++) {
       const p = { x: x + .5, y: y + .5 }
       const distance = Math.hypot(p.x - eye.x, p.y - eye.y)
-      // The eye's own square is always seen, even when the middle of a Large token sits on a corner.
-      if (distance > reach || (distance > .75 && !inside(polygon, p))) continue
+      if (distance > reach) continue
+      // Light first (cheap): a dark cell out of Darkvision range is unseen whatever the walls do.
       const k = key(x, y)
       const level = levelAt({ x, y }, vision, lights)
-      if (level === 'dark') {
-        if (magic.has(k) || distance > darkvision) continue
-        into.darkvision.add(k)
-      } else if (level === 'dim') into.dimmed.add(k)
+      if (level === 'dark' && (magic.has(k) || distance > darkvision)) continue
+      // The eye's own square is always seen, even when the middle of a Large token sits on a corner.
+      if (distance > .75 && !insideStar(polygon, p)) continue
+      if (level === 'dark') into.darkvision.add(k)
+      else if (level === 'dim') into.dimmed.add(k)
       into.visible.add(k)
     }
   }
