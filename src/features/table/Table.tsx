@@ -83,6 +83,14 @@ export function Table({ account, changeAccount }: AccountProps) {
   const online = useRoomStore(state => state.online)
   const error = useRoomStore(state => state.error)
   const notice = useRoomStore(state => state.notice)
+  // Shown only when a command takes a moment, so quick clicks don't flicker.
+  const pendingCount = useRoomStore(state => state.pending)
+  const [sending, setSending] = useState(0)
+  useEffect(() => {
+    if (!pendingCount) { setSending(0); return }
+    const timer = setTimeout(() => setSending(useRoomStore.getState().pending), 350)
+    return () => clearTimeout(timer)
+  }, [pendingCount])
   const privateRoll = useRoomStore(state => state.privateRoll)
   const { setError, setNotice, clearMessages, setPrivateRoll } = useRoomStore.getState()
   const [dock, dispatchDock] = useReducer(dockReducer, emptyDock)
@@ -623,6 +631,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       chooseArea={kind => { setAreaPreview(undefined); setAreaKind(kind) }}
       send={commandHere} close={() => setDmCombat(false)}
       advanced={(acting, target) => <ActorActions key={acting.id} actor={acting} room={room} scene={scene} send={commandHere} combatTarget={target} />} />}
+    {sending && <div className="send-status" aria-live="polite">กำลังส่ง…{sending > 1 ? ` (${sending})` : ''}</div>}
     {(error || notice) && <div className="toast" role={error ? 'alert' : 'status'}>{error || notice}<button aria-label="ปิดข้อความ" onClick={clearMessages}>×</button></div>}
     {manageOpen && dm && <ManageScreen room={room} send={send} close={() => setManageOpen(false)}
       openSheet={target => { setManageOpen(false); showActor(target.id) }}

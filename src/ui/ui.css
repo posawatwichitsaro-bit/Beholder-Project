@@ -204,3 +204,7 @@
 .bh-on-parchment .move-handle, .pending-saves .move-handle, .damage-queue .move-handle { color: var(--bh-ink-muted); }
 .pending-saves h2 { display: flex; align-items: center; gap: 4px; }
 .combat-panel > header { align-items: center; }
+
+/* ---------- Commands on their way ---------- */
+.send-status { position: fixed; left: 50%; top: 64px; z-index: 60; transform: translateX(-50%); padding: 4px 12px; border-radius: 999px;
+  background: #0d0a08d9; color: var(--bh-text-muted); font-size: .8rem; pointer-events: none; border: 1px solid #ffffff1a; }

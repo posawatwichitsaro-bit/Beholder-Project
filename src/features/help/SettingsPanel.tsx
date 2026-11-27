@@ -1,5 +1,6 @@
 import { usePrefs, uiScales } from '../../state/prefs.ts'
 import type { Role } from '../shell/panelRegistry.ts'
+import { appVersion } from '../../../shared/version.ts'
 import { panelsFor } from '../shell/panelRegistry.ts'
 
 /**
@@ -36,6 +37,7 @@ export function SettingsPanel({ role, replayTour }: { role: Role; replayTour: ()
     <fieldset className="settings-group">
       <legend>ความช่วยเหลือ</legend>
       <button type="button" onClick={replayTour}>เริ่มทัวร์แนะนำอีกครั้ง</button>
+      <small className="settings-note settings-version">Beholder {appVersion}</small>
       <button type="button" disabled={!Object.keys(prefs.layout).length} onClick={() => prefs.update({ layout: {} })}>รีเซ็ตตำแหน่ง UI</button>
       <small className="settings-note">ลากที่ปุ่ม ⋮ ของแผง ถาดผลเต๋า แถบเทิร์น หรือแถบเครื่องมือ เพื่อย้ายตำแหน่ง (ยกเว้นเมนูด้านขวา)</small>
       <dl className="settings-shortcuts" aria-label="ปุ่มลัด">

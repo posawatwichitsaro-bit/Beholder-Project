@@ -20,6 +20,7 @@ function respond(handler: (call: Call) => Response | Promise<Response>) {
   }) as typeof fetch
 }
 const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+const fail = (status: number, error: string) => new Response(JSON.stringify({ error }), { status, headers: { 'Content-Type': 'application/json' } })
 
 beforeEach(() => {
   calls = []
@@ -50,17 +51,34 @@ test('a command carries the current revision, refreshes the room and clears pend
   assert.equal(created, 'scene-9')
 })
 
-test('only one command runs at a time', async () => {
+test('commands queue in order instead of being dropped, each with the revision it goes out with', async () => {
   let release!: () => void
+  let revision = 5
   respond(call => call.url.endsWith('/commands')
-    ? new Promise(resolve => { release = () => resolve(ok({})) })
-    : ok(room(6)))
-  const first = sendCommand({ type: 'roll' })
-  assert.equal(useRoomStore.getState().pending, 1)
-  assert.equal(await sendCommand({ type: 'roll' }), false)
+    ? (call.body?.type === 'first' ? new Promise(resolve => { release = () => resolve(ok({})) }) : ok({}))
+    : ok(room(++revision)))
+  const first = sendCommand({ type: 'first' })
+  const second = sendCommand({ type: 'second' })
+  assert.equal(useRoomStore.getState().pending, 2)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(calls.filter(call => call.url.endsWith('/commands')).length, 1, 'the second waits for the first')
   release()
   assert.equal(await first, true)
-  assert.equal(calls.filter(call => call.url.endsWith('/commands')).length, 1)
+  assert.equal(await second, true)
+  const sent = calls.filter(call => call.url.endsWith('/commands'))
+  assert.deepEqual(sent.map(call => call.body?.type), ['first', 'second'])
+  assert.equal(sent[1].body?.revision, 6, 'the second reads the revision after the first refreshed it')
+  assert.equal(useRoomStore.getState().pending, 0)
+})
+
+test('a failed command does not block the ones behind it', async () => {
+  respond(call => call.url.endsWith('/commands')
+    ? (call.body?.type === 'bad' ? fail(409, 'ห้องเปลี่ยนแล้ว') : ok({}))
+    : ok(room(6)))
+  const bad = sendCommand({ type: 'bad' })
+  const good = sendCommand({ type: 'good' })
+  assert.equal(await bad, false)
+  assert.equal(await good, true)
 })
 
 test('a lost response is retried once with the same command id', async () => {
