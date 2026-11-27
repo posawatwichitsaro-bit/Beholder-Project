@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import { blankSheet } from '../shared/model.ts'
 import type { Actor, Member, Room } from '../shared/model.ts'
 import { actionCount, attacksPerAction, extraAttacks, multiattack } from '../shared/economy.ts'
-import { applyCommand } from './commands.ts'
+import { applyCommand, snapshot } from './commands.ts'
 
 test('Multiattack from stat blocks and Extra Attack from class levels; the sheet number wins', () => {
   assert.equal(multiattack('Multiattack. The goblin boss makes two attacks, using Scimitar or Shortbow in any combination.'), 2)
@@ -51,4 +51,36 @@ test('in a fight: weapon attacks share an Action, a spell takes one, Action Surg
   run(dm, { type: 'next' })
   assert.deepEqual(use('hero'), { weaponAttacks: 0, spellActions: 0, manualActions: 0, extraActions: 0, bonus: 0, reaction: false, disengaged: false })
   assert.throws(() => run(dm, { type: 'turnAction', actorId: 'hero', kind: 'surge' }), /Action Surge/)
+})
+
+test('leaving an enemy\'s reach offers it an Opportunity Attack; Disengage, a spent Reaction or a DM rearrange do not', () => {
+  const dm: Member = { id: 'dm', name: 'DM', role: 'dm' }
+  const mira: Member = { id: 'm', name: 'Mira', role: 'player' }
+  const hero: Actor = { ...blankSheet(), id: 'hero', ownerId: 'm', name: 'Hero', hp: 30, maxHp: 30, ac: 1 }
+  const ogre: Actor = { ...blankSheet('monster'), id: 'ogre', ownerId: 'dm', name: 'Ogre', attack: 99, damage: '1d4',
+    monsterReference: { statBlock: 'Greatclub. Melee Attack Roll: +6, reach 5 ft.' } }
+  const room: Room = { id: 'r', name: 'R', invite: 'i', revision: 0, activeSceneId: 's', members: [dm, mira], templates: [], rolls: [], actors: [hero, ogre],
+    scenes: [{ id: 's', name: 'S', cell: 48, originX: 0, originY: 0, tokens: [{ id: 't1', actorId: 'hero', x: 1, y: 0 }, { id: 't2', actorId: 'ogre', x: 2, y: 0 }],
+      combat: { round: 1, turn: 0, order: [{ actorId: 'hero', initiative: 20 }, { actorId: 'ogre', initiative: 5 }] } }] }
+  const run = (who: Member, body: Record<string, unknown>) => applyCommand(room, who, { sceneId: 's', ...body })
+  const prompts = () => room.scenes[0].combat!.prompts ?? []
+  run(dm, { type: 'move', tokenId: 't1', x: 0, y: 3 })
+  assert.equal(prompts().length, 0, "the DM rearranging Mira's hero is not her moving")
+  run(dm, { type: 'move', tokenId: 't1', x: 1, y: 0 })
+  run(mira, { type: 'turnAction', actorId: 'hero', kind: 'disengage', value: true })
+  run(mira, { type: 'move', tokenId: 't1', x: 0, y: 3 })
+  assert.equal(prompts().length, 0, 'Disengage')
+  run(mira, { type: 'turnAction', actorId: 'hero', kind: 'disengage', value: false })
+  run(mira, { type: 'move', tokenId: 't1', x: 1, y: 0 })
+  assert.equal(prompts().length, 0, 'moving into reach offers nothing')
+  run(mira, { type: 'move', tokenId: 't1', x: 0, y: 3 })
+  assert.equal(prompts().length, 1)
+  assert.equal(snapshot(room, mira).scenes[0].combat!.prompts!.length, 0, "Mira doesn't see the Ogre's card")
+  const before = hero.hp
+  run(dm, { type: 'opportunity', promptId: prompts()[0].id, attack: true })
+  assert.ok(hero.hp < before || room.rolls.some(roll => roll.targetId === 'hero'), 'the Ogre swings')
+  assert.equal(room.scenes[0].combat!.uses!.ogre.reaction, true, 'and spends its Reaction')
+  run(mira, { type: 'move', tokenId: 't1', x: 1, y: 0 })
+  run(mira, { type: 'move', tokenId: 't1', x: 0, y: 3 })
+  assert.equal(prompts().length, 0, 'no Reaction left, no card')
 })

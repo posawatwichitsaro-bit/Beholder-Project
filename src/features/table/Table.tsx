@@ -54,6 +54,7 @@ import { sendCommand } from '../../state/useCommand.ts'
 import { attackOdds, withinReach } from '../../../shared/advantage.ts'
 import type { RollMode } from '../../../shared/advantage.ts'
 import { XpAward } from '../combat/XpAward.tsx'
+import { OpportunityCards } from '../combat/OpportunityCards.tsx'
 import type { Command } from '../../state/useCommand.ts'
 
 type Point = { x: number; y: number }
@@ -720,6 +721,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       <DamageQueue room={room} send={send} />
       <EncounterEnd scene={scene} />
       <PendingSaves room={room} send={commandHere} />
+      <OpportunityCards room={room} scene={scene} send={commandHere} />
       {calibratingScene && <GridCalibrator key={calibratingScene.id} scene={calibratingScene} rect={calibrating?.rect} preview={setGridPreview} cancel={endCalibration}
         save={async fit => {
           const ok = await send({ type: 'scene', sceneId: calibratingScene.id, name: calibratingScene.name, ...fit })

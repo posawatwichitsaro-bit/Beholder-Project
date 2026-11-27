@@ -51,3 +51,15 @@ export function actionCount(use: TurnUse, perAction: number) {
     allowed: 1 + use.extraActions
   }
 }
+
+/** Melee reach in feet: 10 for a Reach weapon or a stat block "reach 10 ft", else 5. */
+export function reachOf(sheet: Pick<Sheet, 'attacks' | 'monsterReference'>) {
+  const block = /reach\s+(\d+)\s*ft/i.exec(sheet.monsterReference?.statBlock ?? '')
+  if (block) return Number(block[1])
+  return sheet.attacks?.some(attack => /\bReach\b/.test(attack.notes ?? '')) ? 10 : 5
+}
+
+/** Squares between two tokens' edges (0 = touching or overlapping). */
+export function gapBetween(a: { x: number; y: number }, aSize: number, b: { x: number; y: number }, bSize: number) {
+  return Math.max(0, b.x - (a.x + aSize), a.x - (b.x + bSize), b.y - (a.y + aSize), a.y - (b.y + bSize))
+}

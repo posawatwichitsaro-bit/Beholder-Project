@@ -155,6 +155,8 @@ export type Combat = {
   moved?: { actorId: string; turnKey: string; feet: number }
   /** Action, Bonus Action and Reaction use per creature (shared/economy.ts); a creature's entry resets when its turn starts. */
   uses?: Record<string, TurnUse>
+  /** Opportunity Attacks waiting for an answer this turn: the creature that may strike and the one that left its reach. */
+  prompts?: { id: string; attackerId: string; targetId: string; at: number }[]
 }
 export function nextLivingTurn(combat: Combat, isDead: (actorId: string) => boolean) {
   for (let offset = 1; offset <= combat.order.length; offset++) {

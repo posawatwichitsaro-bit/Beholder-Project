@@ -15,11 +15,11 @@ import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared
 import { attackOdds, chooseMode, chosenMode, rollOdds } from '../shared/advantage.ts'
 import type { Odds } from '../shared/advantage.ts'
 import { criticalFrom, magicalCunning, monsterXp, srdFeats, srdSubclasses } from '../shared/progression.ts'
-import { key, playerView, tokenSeen, wallsForPlayer } from '../shared/vision.ts'
+import { key, lightsOf, playerView, seenBy, tokenCenter, tokenSeen, visionOf, wallsForPlayer } from '../shared/vision.ts'
 import type { ActorVision, Ambient, Door, LightSource, SceneVision, Wall } from '../shared/vision.ts'
 import { gridFeet } from '../shared/movement.ts'
 import { afterCommand, beforeCommand, isUndoable, undoLast } from './undo.ts'
-import { freshUse } from '../shared/economy.ts'
+import { freshUse, gapBetween, reachOf } from '../shared/economy.ts'
 import type { TurnUse } from '../shared/economy.ts'
 import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
@@ -434,6 +434,10 @@ export function snapshot(room: Room, me: Member): Snapshot {
     view.view = { visible: [...seen.visible], dimmed: [...seen.dimmed], darkvision: [...seen.darkvision], explored: vision.explored?.[me.id] ?? [] }
     view.vision = { enabled: true, ambient: vision.ambient, walls: wallsForPlayer(vision.walls), lights: vision.lights }
   }
+  // Opportunity Attack cards go only to whoever controls the creature that may strike.
+  if (!dm) for (const view of scenes) if (view.combat?.prompts) {
+    view.combat = { ...view.combat, prompts: view.combat.prompts.filter(prompt => room.actors.some(actor => actor.id === prompt.attackerId && (actor.ownerId === me.id || actor.temp))) }
+  }
   // Creatures in a fight here stay listed (the turn order) even when unseen; the board still leaves them out.
   const visible = new Set(scenes.flatMap(scene => [...scene.tokens.map(token => token.actorId), ...(scene.combat?.order.map(entry => entry.actorId) ?? [])]))
   // Invisible creatures leave the map for other players: no token, so no position. They still show in the turn order.
@@ -612,6 +616,35 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
     else use.spellActions++
     combat.uses = { ...combat.uses, [creatureId]: use }
   }
+  /**
+   * A creature moved by its own controller left an enemy's reach: if that enemy is in the fight,
+   * standing, has its Reaction and can see the mover (vision scenes), its controller gets a card.
+   */
+  function opportunities(target: Scene, moverId: string, from: { x: number; y: number }, to: { x: number; y: number }) {
+    const combat = target.combat
+    const mover = room.actors.find(item => item.id === moverId)
+    if (!combat || !mover || !combat.order.some(entry => entry.actorId === moverId)) return
+    const controls = member.role === 'dm' ? mover.kind === 'monster' || mover.ownerId === member.id || mover.temp : mover.ownerId === member.id || mover.temp
+    if (!controls || combat.uses?.[moverId]?.disengaged) return
+    const side = (creature: Actor) => creature.kind === 'monster' ? 'foe' : 'party'
+    const size = (creature: Actor) => sizes[creature.size]
+    for (const token of target.tokens) {
+      const enemy = room.actors.find(item => item.id === token.actorId)
+      if (!enemy || enemy.id === moverId || side(enemy) === side(mover) || enemy.life !== 'active') continue
+      if (!combat.order.some(entry => entry.actorId === enemy.id) || combat.uses?.[enemy.id]?.reaction) continue
+      if (combat.prompts?.some(prompt => prompt.attackerId === enemy.id && prompt.targetId === moverId)) continue
+      const reach = reachOf(enemy) / 5
+      const was = gapBetween(from, size(mover), token, size(enemy)) < reach
+      const now = gapBetween(to, size(mover), token, size(enemy)) < reach
+      if (!was || now) continue
+      if (target.vision?.enabled) {
+        const lights = lightsOf(target, room.actors, id => { const item = room.actors.find(entry => entry.id === id); return item ? visionOf(item) : {} })
+        const sees = seenBy(tokenCenter(token, enemy), visionOf(enemy), target.vision, lights)
+        if (!tokenSeen(from, size(mover), sees.visible)) continue
+      }
+      combat.prompts = [...(combat.prompts ?? []), { id: id(), attackerId: enemy.id, targetId: moverId, at: Date.now() }].slice(-20)
+    }
+  }
   /** A player's token must stand within one square of the door's middle. */
   function doorReach(target: Scene, creature: Actor, wall: Wall) {
     if (creature.life !== 'active') throw new Invalid('ตัวละครนี้ยังโต้ตอบไม่ได้')
@@ -656,6 +689,8 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
   function passTurn(target: Scene, ended?: string, started?: string) {
     // A creature's Action, Bonus Action and Reaction come back as its own turn starts.
     if (started && target.combat) target.combat.uses = { ...target.combat.uses, [started]: freshUse() }
+    // Unanswered Opportunity Attacks lapse when the turn moves on.
+    if (target.combat) delete target.combat.prompts
     for (const creature of room.actors) {
       if (!creature.effects?.length) continue
       const result = advanceEffects(creature.id, creature.effects, ended, started)
@@ -973,6 +1008,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       const x = number(token.x + dx, -1000, 1000, .5)
       const y = number(token.y + dy, -1000, 1000, .5)
       countMove(target, token.actorId, gridFeet(token, { x, y }))
+      opportunities(target, token.actorId, token, { x, y })
       Object.assign(get(target.tokens, token.id), { x, y })
       return {}
     }
@@ -982,6 +1018,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       owns(member, get(room.actors, token.actorId))
       const to = { x: number(command.x, -1000, 1000, .5), y: number(command.y, -1000, 1000, .5) }
       countMove(target, token.actorId, gridFeet(token, to))
+      opportunities(target, token.actorId, { x: token.x, y: token.y }, to)
       Object.assign(token, to)
       return {}
     }
@@ -997,6 +1034,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       })
       for (const { token, x, y } of moves) {
         countMove(target, token.actorId, gridFeet(token, { x, y }))
+        opportunities(target, token.actorId, { x: token.x, y: token.y }, { x, y })
         Object.assign(token, { x, y })
       }
       return {}
@@ -1482,6 +1520,18 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       if (outcome.result === 'empty') throw new Invalid('ไม่มีอะไรให้ย้อนแล้ว')
       if (outcome.result === 'blocked') return { notice: 'ย้อน' + outcome.label + 'ไม่ได้ เพราะมีคนแก้ต่อแล้ว · กด Ctrl+Z อีกครั้งเพื่อย้อนขั้นก่อนหน้า' }
       return { notice: 'ย้อน' + outcome.label + 'แล้ว' }
+    }
+    case 'opportunity': {
+      // The controller of the creature that may strike answers: attack (main attack, uses the Reaction) or pass.
+      const target = active()
+      const combat = target.combat
+      const prompt = combat?.prompts?.find(item => item.id === command.promptId)
+      if (!combat || !prompt) throw new Conflict('Opportunity Attack นี้หมดเวลาแล้ว')
+      owns(member, get(room.actors, prompt.attackerId))
+      combat.prompts = combat.prompts!.filter(item => item.id !== prompt.id)
+      if (command.attack !== true) return {}
+      if (!target.tokens.some(token => token.actorId === prompt.targetId)) throw new Invalid('เป้าหมายออกจากฉากแล้ว')
+      return runCommand(room, member, { type: 'sheetRoll', rollType: 'attack', sceneId: target.id, actorId: prompt.attackerId, targetId: prompt.targetId })
     }
     case 'turnAction': {
       // Owner or DM marks Action / Bonus Action / Reaction / Disengage by hand, or uses Action Surge. Counting only.
