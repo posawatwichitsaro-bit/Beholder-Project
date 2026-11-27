@@ -1,4 +1,5 @@
-import { BedDouble, Coffee, Dices, Minus, Plus } from 'lucide-react'
+import { BedDouble, Coffee, Dices, Minus, Plus, Sparkles } from 'lucide-react'
+import { magicalCunning } from '../../../shared/progression.ts'
 import type { Actor, ClassResource, HitDie } from '../../../shared/model.ts'
 import { classResources, hitDiceLeft } from '../../../shared/rest.ts'
 import type { Send } from '../../state/useCommand.ts'
@@ -16,6 +17,7 @@ export function RestPanel({ actor, send, inCombat }: { actor: Actor; send: Send;
   const resources = actor.resources ?? []
   const suggested = classResources(actor)
   const { id: _id, ownerId: _owner, templateId: _template, lootResult: _loot, ...sheet } = actor
+  const cunning = magicalCunning(actor)
   const canRest = !inCombat && actor.hp > 0 && actor.life === 'active'
   const use = (index: number, used: number) => send({ type: 'useResource', actorId: actor.id, index, used })
 
@@ -30,6 +32,13 @@ export function RestPanel({ actor, send, inCombat }: { actor: Actor; send: Send;
       </div>)}</div>
         : <p className="sheet-note">ใส่คลาสและเลเวลในชีต (เช่น “Fighter 3”) หรือ Hit Dice ในรายละเอียด เพื่อใช้ Hit Dice ตอนพักสั้น</p>}
     </section>
+
+    {/Warlock\s*([2-9]|1\d|20)\b/i.test(actor.classLevel) && <section aria-label="Magical Cunning">
+      <h3>Magical Cunning</h3>
+      <button type="button" disabled={!cunning} onClick={() => void send({ type: 'magicalCunning', actorId: actor.id })}>
+        <Sparkles size={14} aria-hidden="true" /> พิธี 1 นาที · คืนช่อง Pact {cunning ? cunning.regained : ''}</button>
+      <small className="sheet-note">{actor.cunningUsed ? 'ใช้ไปแล้ว · กลับมาเมื่อ Long Rest' : cunning ? 'คืนช่อง Pact ที่ใช้ไปได้ไม่เกินครึ่งหนึ่ง (ปัดขึ้น) วันละครั้ง' : 'ยังไม่มีช่อง Pact ที่ใช้ไป'}</small>
+    </section>}
 
     <section aria-label="ทรัพยากรของคลาส">
       <h3>ทรัพยากรของคลาส</h3>

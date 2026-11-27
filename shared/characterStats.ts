@@ -57,7 +57,10 @@ export function calculatedSheet(sheet: Sheet): Sheet {
   const ac = armor ? Math.max(0, armor.base + (armor.dex === 'full' ? dex : armor.dex === 'medium' ? Math.min(2, dex) : 0)
     + (armor.shield ? 2 + (armor.shieldMagic ?? 0) : 0) + (armor.armorMagic ?? 0) + armor.bonus + (armor.extra ? abilityModifier(sheet.abilities[armor.extra]) : 0)) : sheet.ac
   const spellAttack = config.spellAbility ? proficiency + abilityModifier(sheet.abilities[config.spellAbility]) : sheet.spellAttack
-  return { ...sheet, maxHp, hp: Math.min(sheet.hp, maxHp), ac, proficiency,
-    initiative: config.initiativeBonus === undefined ? sheet.initiative : dex + config.initiativeBonus,
+  // Feats with plain numbers: Alert adds Proficiency to Initiative, Defense +1 AC while wearing armor.
+  const feats = sheet.feats ?? []
+  const wearing = armor && (armor.dex !== 'full' || armor.base > 10)
+  return { ...sheet, maxHp, hp: Math.min(sheet.hp, maxHp), ac: ac + (armor && wearing && feats.includes('Defense') ? 1 : 0), proficiency,
+    initiative: config.initiativeBonus === undefined ? sheet.initiative : dex + config.initiativeBonus + (feats.includes('Alert') ? proficiency : 0),
     spellAttack, spellDC: config.spellAbility ? 8 + spellAttack : sheet.spellDC }
 }

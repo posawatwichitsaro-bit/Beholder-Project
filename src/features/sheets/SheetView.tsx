@@ -15,6 +15,8 @@ import { carryingLoad } from '../../../shared/encumbrance.ts'
 import { attackOdds, rollOdds, withinReach } from '../../../shared/advantage.ts'
 import type { RollMode } from '../../../shared/advantage.ts'
 import { rollMenuProps } from '../../ui/index.ts'
+import { readyToLevel, srdLink, srdFeats, xpForLevel, characterLevel } from '../../../shared/progression.ts'
+import { GiveXp } from '../combat/XpAward.tsx'
 import { RestPanel } from './RestPanel.tsx'
 
 type Tab = 'overview' | 'actions' | 'spells' | 'rest' | 'inventory' | 'notes'
@@ -34,6 +36,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
   chooseTarget?: (id: string) => void
 }) {
   const dm = room.me.role === 'dm'
+  const xpRoom = room.settings?.advancement === 'xp'
   const overloaded = actor.kind === 'pc' && room.settings?.encumbrance !== false && carryingLoad(actor).over
   const [tab, setTab] = useState<Tab>('overview')
   const [levelling, setLevelling] = useState(false)
@@ -55,8 +58,11 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
   const slotLevels = parseSlots(actor.slots) ?? []
   // A leveled cast spends a slot: default to the lowest level still available; pick Cantrip for free casts.
   const [slotLevel, setSlotLevel] = useState<number>()
-  const lowest = slotLevels.find(slot => slot.left > 0)?.level ?? 0
-  const castLevel = slotLevel !== undefined && (slotLevel === 0 || slotLevels.some(slot => slot.level === slotLevel && slot.left > 0)) ? slotLevel : lowest
+  // A Warlock multiclass casts from either pool: ordinary slots or Pact Magic.
+  const pactLevels = parseSlots(actor.pactSlots ?? '') ?? []
+  const [usePact, setUsePact] = useState(false)
+  const lowest = (usePact ? pactLevels : slotLevels).find(slot => slot.left > 0)?.level ?? 0
+  const castLevel = slotLevel !== undefined && (slotLevel === 0 || (usePact ? pactLevels : slotLevels).some(slot => slot.level === slotLevel && slot.left > 0)) ? slotLevel : lowest
   type RollExtra = { ability?: Ability; skill?: Skill; weaponIndex?: number; slotLevel?: number }
   /** A sheet roll. `chosen` comes from the right-click menu; otherwise the Mode toggle, else the conditions decide. */
   function roll(rollType: string, extra: RollExtra = {}, chosen?: RollMode) {
@@ -64,6 +70,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
       type: 'sheetRoll', rollType, actorId: actor.id, sceneId: scene?.id, targetId,
       ability: extra.ability ?? 'STR', skill: extra.skill, weaponIndex: extra.weaponIndex, slotLevel: extra.slotLevel || undefined,
       ...(chosen ? { rollMode: chosen } : { advantage: mode === 'advantage', disadvantage: mode === 'disadvantage' }),
+      ...(usePact && extra.slotLevel ? { pact: true } : {}),
       proficient, cover, formula: spellDamage
     })
   }
@@ -119,11 +126,18 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
       </span>
       <div className="sheet-title">
         <h2>{actor.name}</h2>
-        <span>{[actor.classLevel, actor.kind === 'monster' ? 'Monster' : '', actor.life === 'active' ? '' : actor.life].filter(Boolean).join(' · ')}</span>
+        <span>{[actor.classLevel, actor.subclass, actor.kind === 'monster' ? 'Monster' : '', actor.life === 'active' ? '' : actor.life].filter(Boolean).join(' · ')}</span>
+        {xpRoom && actor.kind === 'pc' && <span className="sheet-xp">{(actor.xp ?? 0).toLocaleString()} XP
+          {characterLevel(actor) < 20 && <> / {xpForLevel[Math.max(1, characterLevel(actor))].toLocaleString()}</>}
+          {readyToLevel(actor) && <b className="sheet-level-ready">เลื่อนระดับได้</b>}</span>}
+        {actor.feats?.length ? <span className="sheet-feats">{actor.feats.map(name => {
+          const feat = srdFeats.find(entry => entry.name === name)
+          return <a key={name} href={srdLink} target="_blank" rel="noreferrer" title={feat ? feat.summary + (feat.automatic ? ' · คิดให้แล้ว: ' + feat.automatic : '') : undefined}>{name}</a>
+        })}</span> : null}
       </div>
       <div className="sheet-head-actions">
         <button type="button" className="sheet-icon" onClick={edit} aria-label="แก้ชีต" title="แก้ชีต (เปิดโหมดแก้ไขและตัวคำนวณ D&D)"><Pencil size={16} aria-hidden="true" /></button>
-        {actor.kind === 'pc' && actor.calculations?.hp && <button type="button" className="sheet-icon" onClick={() => setLevelling(true)} aria-label="เลเวลอัป" title="เลเวลอัป">
+        {actor.kind === 'pc' && actor.calculations?.hp && <button type="button" className={'sheet-icon' + (xpRoom && readyToLevel(actor) ? ' sheet-level-glow' : '')} onClick={() => setLevelling(true)} aria-label="เลเวลอัป" title="เลเวลอัป">
           <ArrowBigUpDash size={16} aria-hidden="true" /></button>}
         <button type="button" className="sheet-icon" onClick={copy} aria-label="คัดลอกเข้าคลังส่วนตัว" title="คัดลอกเข้าคลังส่วนตัว"><Copy size={16} aria-hidden="true" /></button>
       </div>
@@ -212,9 +226,14 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
           <div className="sheet-stat"><b>{actor.spellDC}</b><span>Spell DC</span></div>
         </div>
         {targeting}
-        <label className="sheet-slot-pick">ใช้ช่องเวท<select aria-label="ใช้ช่องเวท" value={castLevel} onChange={event => setSlotLevel(Number(event.target.value))}>
+        <label className="sheet-slot-pick">ใช้ช่องเวท<select aria-label="ใช้ช่องเวท" value={(usePact ? 'p' : '') + castLevel} onChange={event => {
+          const value = event.target.value
+          setUsePact(value.startsWith('p'))
+          setSlotLevel(Number(value.replace('p', '')))
+        }}>
           <option value={0}>Cantrip / ไม่ใช้ช่อง</option>
           {slotLevels.map(slot => <option key={slot.level} value={slot.level} disabled={slot.left < 1}>ระดับ {slot.level} (เหลือ {slot.left}/{slot.max})</option>)}
+          {pactLevels.map(slot => <option key={'p' + slot.level} value={'p' + slot.level} disabled={slot.left < 1}>Pact ระดับ {slot.level} (เหลือ {slot.left}/{slot.max})</option>)}
         </select></label>
         <div className="sheet-inline">
           <label>สูตร Spell Damage<input value={spellDamage} onChange={event => setSpellDamage(event.target.value)} /></label>
@@ -222,7 +241,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
         </div>
         <form className="sheet-cast" onSubmit={event => {
           event.preventDefault()
-          void send({ type: 'castSave', actorId: actor.id, targetId, sceneId: scene?.id, ability: saveAbility, label: spellName, half, formula: spellDamage, slotLevel: castLevel || undefined })
+          void send({ type: 'castSave', actorId: actor.id, targetId, sceneId: scene?.id, ability: saveAbility, label: spellName, half, formula: spellDamage, slotLevel: castLevel || undefined, ...(usePact && castLevel ? { pact: true } : {}) })
         }}>
           <h3>เวทที่ให้เป้าหมายทอย Save</h3>
           <label>ชื่อเวท<input value={spellName} onChange={event => setSpellName(event.target.value)} placeholder="เช่น Fireball" /></label>
@@ -233,8 +252,10 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
         </form>
         {actor.spells && <p className="sheet-note">เวท / ความสามารถ · {actor.spells}</p>}
         <SlotTracker key={actor.slots} actor={actor} send={send} />
+        {actor.pactSlots && <SlotTracker key={'pact' + actor.pactSlots} actor={actor} send={send} pact />}
       </>}
 
+      {tab === 'overview' && dm && xpRoom && actor.kind === 'pc' && <GiveXp actorId={actor.id} send={send} />}
       {tab === 'rest' && <RestPanel actor={actor} send={send} inCombat={room.scenes.some(item => item.combat?.order.some(entry => entry.actorId === actor.id))} />}
       {tab === 'inventory' && <InventoryPanel key={actor.id} actor={actor} send={send} expanded />}
 

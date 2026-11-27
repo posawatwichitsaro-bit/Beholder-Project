@@ -14,6 +14,7 @@ import type { ClassResource, Effect, HitDie as RestDie } from '../shared/model.t
 import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared/characterStats.ts'
 import { attackOdds, chooseMode, chosenMode, rollOdds } from '../shared/advantage.ts'
 import type { Odds } from '../shared/advantage.ts'
+import { criticalFrom, magicalCunning, monsterXp, srdFeats, srdSubclasses } from '../shared/progression.ts'
 import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
 export class Forbidden extends Error {}
@@ -213,13 +214,15 @@ function parseResources(value: unknown): ClassResource[] {
   })
 }
 /** Spend one spell slot of `level` (1–9) for a cast; 0 or none means a cantrip or a free cast. */
-function spendSlot(caster: Actor, level: unknown) {
+/** Spend one slot of a level: from Pact Magic when `pact` is set (a Warlock multiclass picks which pool), else the ordinary slots. */
+function spendSlot(caster: Actor, level: unknown, pact = false) {
   if (level === undefined || level === 0) return
   const wanted = number(level, 1, 9)
-  const slots = parseSlots(caster.slots)
+  const field = pact && caster.pactSlots !== undefined ? 'pactSlots' : 'slots'
+  const slots = parseSlots(caster[field] ?? '')
   const slot = slots?.find(entry => entry.level === wanted)
-  if (!slots || !slot || slot.left < 1) throw new Invalid('ไม่มีช่องเวทระดับ ' + wanted + ' เหลือ')
-  caster.slots = formatSlots(slots.map(entry => entry === slot ? { ...entry, left: entry.left - 1 } : entry))
+  if (!slots || !slot || slot.left < 1) throw new Invalid('ไม่มีช่องเวท' + (field === 'pactSlots' ? ' Pact ' : '') + 'ระดับ ' + wanted + ' เหลือ')
+  caster[field] = formatSlots(slots.map(entry => entry === slot ? { ...entry, left: entry.left - 1 } : entry))
 }
 function parseChecks<K extends string>(value: unknown, keys: readonly K[]) {
   const source = record(value)
@@ -314,6 +317,21 @@ export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory
   if (input.skillChecks !== undefined) sheet.skillChecks = parseChecks(input.skillChecks, Object.keys(commonSkills) as Skill[])
   if (input.savingThrows !== undefined) sheet.savingThrows = parseChecks(input.savingThrows, abilities)
   if (input.resources !== undefined) sheet.resources = parseResources(input.resources)
+  if (input.pactSlots !== undefined && input.pactSlots !== '') sheet.pactSlots = text(input.pactSlots, 200)
+  if (input.cunningUsed === true) sheet.cunningUsed = true
+  if (input.xp !== undefined) sheet.xp = number(input.xp, 0, 1000000)
+  if (input.subclass !== undefined && input.subclass !== '') {
+    if (!Object.values(srdSubclasses).some(entry => entry.name === input.subclass)) throw new Invalid('Subclass นี้ไม่มีใน SRD 5.2.1')
+    sheet.subclass = input.subclass as string
+  }
+  if (input.feats !== undefined) {
+    if (!Array.isArray(input.feats) || input.feats.length > 20) throw new Invalid('Feat ได้สูงสุด 20 รายการ')
+    const known = new Set(srdFeats.map(feat => feat.name))
+    sheet.feats = input.feats.map(feat => {
+      if (typeof feat !== 'string' || !known.has(feat)) throw new Invalid('Feat นี้ไม่มีใน SRD 5.2.1')
+      return feat
+    })
+  }
   if (input.hitDiceSpent !== undefined) {
     const spent = record(input.hitDiceSpent)
     sheet.hitDiceSpent = Object.fromEntries(restDice.flatMap(key => spent[key] === undefined ? [] : [[key, number(spent[key], 0, 20)]]))
@@ -694,6 +712,38 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
       else { delete item.bonus; item.name = plain }
       return {}
     }
+    case 'awardXp': {
+      // The DM shares XP (after a fight, or by hand): each named character gets `amount`.
+      requireDM(member)
+      const ids = command.actorIds
+      if (!Array.isArray(ids) || !ids.length || ids.length > 20) throw new Invalid('เลือกตัวละครที่จะได้ XP')
+      const amount = number(command.amount, 0, 100000)
+      const names: string[] = []
+      for (const key of new Set(ids)) {
+        const creature = get(room.actors, key)
+        if (creature.kind !== 'pc') throw new Invalid('ให้ XP ได้เฉพาะตัวละครผู้เล่น')
+        creature.xp = Math.min(1000000, (creature.xp ?? 0) + amount)
+        names.push(creature.name)
+      }
+      if (command.fromFight === true) delete scene().xpAward
+      if (amount) addLog(room, { kind: 'combat', text: names.join(', ') + ' ได้ ' + amount + ' XP' })
+      return {}
+    }
+    case 'skipXp': {
+      requireDM(member)
+      delete scene().xpAward
+      return {}
+    }
+    case 'magicalCunning': {
+      const creature = actor()
+      owns(member, creature)
+      const result = magicalCunning(creature)
+      if (!result) throw new Invalid('ใช้ Magical Cunning ไม่ได้ตอนนี้ (Warlock 2+, มีช่อง Pact ที่ใช้ไป และยังไม่ใช้ตั้งแต่ Long Rest ครั้งก่อน)')
+      creature[result.field] = result.value
+      creature.cunningUsed = true
+      addLog(room, { kind: 'combat', text: creature.name + ' ใช้ Magical Cunning ได้ช่อง Pact คืน ' + result.regained + ' ช่อง' })
+      return {}
+    }
     case 'lootSettings': {
       requireDM(member)
       const creature = actor()
@@ -1051,11 +1101,13 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
         const cover = Math.max(manualCover, structureCover(target.objects ?? [], center(tokenOf(creature.id), creature), center(tokenOf(victim.id), victim)))
         if (cover === 99) throw new Invalid('เป้าหมายอยู่หลังที่กำบังเต็ม')
         // Spend the slot only once the attack is valid (target in scene, not behind full cover).
-        if (rollType === 'spellAttack') spendSlot(creature, command.slotLevel)
+        if (rollType === 'spellAttack') spendSlot(creature, command.slotLevel, command.pact === true)
         const adjacent = isNear(tokenOf(creature.id), creature, { ...tokenOf(victim.id), width: sizes[victim.size], height: sizes[victim.size] })
         const odds = decide(attackOdds(creature, victim, adjacent))
-        const hitRoll = d20((rollType === 'attack' ? weapon?.bonus ?? creature.attack : creature.spellAttack) + d20Penalty(creature), odds.advantage, odds.disadvantage)
-        const critical = hitRoll.natural === 20
+        // Archery: +2 with weapons that fire ammunition.
+        const archery = rollType === 'attack' && creature.feats?.includes('Archery') && /Ammunition/.test(weapon?.notes ?? '') ? 2 : 0
+        const hitRoll = d20((rollType === 'attack' ? weapon?.bonus ?? creature.attack : creature.spellAttack) + archery + d20Penalty(creature), odds.advantage, odds.disadvantage)
+        const critical = hitRoll.natural >= (rollType === 'attack' ? criticalFrom(creature) : 20)
         const hit = critical || (hitRoll.natural !== 1 && hitRoll.total >= victim.ac + cover)
         const context = { sceneId: target.id, sourceId: creature.id, targetId: victim.id }
         saveRoll((weapon?.name ?? rollType) + ' · ' + creature.name + odds.note, hitRoll, { ...context, outcome: critical ? 'คริติคัล' : hit ? 'โดน' : 'พลาด' })
@@ -1101,7 +1153,7 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
       const damage = command.formula ? text(command.formula) : undefined
       if (damage) parseDice(damage)
       const label = text(command.label)
-      spendSlot(caster, command.slotLevel)
+      spendSlot(caster, command.slotLevel, command.pact === true)
       return saveRoll('Spell · ' + label + (command.slotLevel ? ' (ช่องระดับ ' + command.slotLevel + ')' : ''), { total: caster.spellDC, faces: [], formula: ability + ' Save DC', modifier: 0 }, {
         sceneId: target.id, sourceId: caster.id, targetId: victim.id, cast: { ability, dc: caster.spellDC, targetId: victim.id, damage, half: command.half === true }
       })
@@ -1333,6 +1385,13 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
       if (command.type === 'end') {
         delete target.combat
         addLog(room, { kind: 'combat', sceneId: target.id, text: 'จบการต่อสู้' })
+        // Rooms that level by XP: the defeated monsters' XP waits for the DM to share out among the characters who fought.
+        if (room.settings?.advancement === 'xp') {
+          const fought = combat.order.map(entry => room.actors.find(item => item.id === entry.actorId)).filter((item): item is Actor => Boolean(item))
+          const total = fought.filter(item => item.kind === 'monster' && item.life === 'dead').reduce((sum, item) => sum + monsterXp(item), 0)
+          const actorIds = fought.filter(item => item.kind === 'pc').map(item => item.id)
+          if (total > 0 && actorIds.length) target.xpAward = { total, actorIds, at: Date.now() }
+        }
       } else if (command.type === 'tie') {
         const index = combat.order.findIndex(entry => entry.actorId === command.actorId)
         if (index < 1 || combat.order[index].initiative !== combat.order[index - 1].initiative) throw new Invalid('สลับได้เฉพาะ Initiative ที่เสมอกัน')
@@ -1429,7 +1488,9 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
     case 'slots': {
       const creature = actor()
       owns(member, creature)
-      creature.slots = command.slots === '' ? '' : text(command.slots, 2000)
+      const value = command.slots === '' ? '' : text(command.slots, 2000)
+      if (command.pact === true) creature.pactSlots = value
+      else creature.slots = value
       return {}
     }
     default:

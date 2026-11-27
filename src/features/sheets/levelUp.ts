@@ -1,8 +1,11 @@
 import type { Sheet } from '../../../shared/model.ts'
 import { abilityModifier, calculatedSheet, hitDiceByClass, proficiencyForLevel } from '../../../shared/characterStats.ts'
 import type { HitDie } from '../../../shared/characterStats.ts'
-import { formatSlots, parseSlots } from '../../../shared/conditions.ts'
-import { classInfo, spellSlotsFor } from './wizard.ts'
+import { parseSlots } from '../../../shared/conditions.ts'
+import { keepSpent, pactField, slotsForClasses } from '../../../shared/progression.ts'
+import { classResources } from '../../../shared/rest.ts'
+import type { Ability } from '../../../shared/model.ts'
+import { classInfo } from './wizard.ts'
 import type { ClassName } from './wizard.ts'
 
 const classNames = Object.keys(hitDiceByClass) as ClassName[]
@@ -43,7 +46,20 @@ function checklist(className: ClassName, classLevel: number, total: number, mult
  * Dwarven Toughness), spell slots for single-class casters keeping what was
  * spent, and a checklist of choices left to the player.
  */
-export function levelUp(sheet: Sheet, className: ClassName, hp: HpChoice) {
+export type LevelChoices = {
+  /** The SRD subclass, picked at class level 3. */
+  subclass?: string
+  /** A feat at an ASI level; Ability Score Improvement uses `increase`. */
+  feat?: string
+  /** Ability Score Improvement: +2 to one, or +1 to two (each capped at 20). */
+  increase?: Partial<Record<Ability, number>>
+}
+
+/** Whether this class level offers an Ability Score Improvement or feat. */
+export const asiLevel = (className: ClassName, classLevel: number) =>
+  [4, 8, 12, 16, 19].includes(classLevel) || (className === 'Fighter' && [6, 14].includes(classLevel)) || (className === 'Rogue' && classLevel === 10)
+
+export function levelUp(sheet: Sheet, className: ClassName, hp: HpChoice, choices: LevelChoices = {}) {
   const config = sheet.calculations
   if (!config?.hp) throw new Error('เปิดตัวคำนวณ HP ในหน้าแก้ชีตก่อน แล้วจึงเลเวลอัปจากที่นี่')
   const classes = classesOf(sheet.classLevel)
@@ -60,18 +76,32 @@ export function levelUp(sheet: Sheet, className: ClassName, hp: HpChoice) {
   const dwarf = /^dwarf\b/i.test(sheet.characterDetails?.species ?? '')
   const rollShift = hp.mode === 'rolled' ? Math.max(1, Math.min(die, hp.roll)) - (die / 2 + 1) : 0
   const bonus = config.hp.bonus + rollShift + (dwarf ? 1 : 0)
+  // Slots: one class keeps its own table; several use the Multiclass Spellcaster table, with Pact Magic apart.
+  const fresh = slotsForClasses(nextClasses)
+  const legacyPact = pactField(sheet) === 'slots'
   let slots = sheet.slots
-  const oldSlots = parseSlots(sheet.slots)
-  if (nextClasses.length === 1 && oldSlots) {
-    const fresh = parseSlots(spellSlotsFor(className, classLevel)) ?? []
-    slots = formatSlots(fresh.map(slot => {
-      const before = oldSlots.find(entry => entry.level === slot.level)
-      const spent = before ? before.max - before.left : 0
-      return { ...slot, left: Math.max(0, slot.max - spent) }
-    }))
+  let pactSlots = sheet.pactSlots
+  if (nextClasses.length === 1 && className === 'Warlock' && legacyPact) slots = keepSpent(fresh.pact, sheet.slots)
+  else {
+    if (fresh.slots || parseSlots(sheet.slots)) slots = keepSpent(fresh.slots, legacyPact ? '' : sheet.slots)
+    if (fresh.pact) pactSlots = keepSpent(fresh.pact, legacyPact ? sheet.slots : sheet.pactSlots ?? '')
   }
+  const abilities = { ...sheet.abilities }
+  if (choices.feat === 'Ability Score Improvement') for (const [key, value] of Object.entries(choices.increase ?? {}) as [Ability, number][]) {
+    abilities[key] = Math.min(20, abilities[key] + Math.max(0, Math.min(2, value)))
+  }
+  const feats = choices.feat ? [...(sheet.feats ?? []).filter(feat => feat !== choices.feat || feat === 'Ability Score Improvement'), choices.feat].slice(-20) : sheet.feats
+  const classLine = nextClasses.map(entry => entry.name + ' ' + entry.level).join(' / ')
+  const subclass = choices.subclass ?? sheet.subclass
+  // Class and subclass resources at the new levels, keeping what was already used.
+  const resources = classResources({ classLevel: classLine, abilities, subclass }).map(resource => {
+    const before = sheet.resources?.find(entry => entry.name === resource.name)
+    return before ? { ...resource, used: Math.min(resource.max, before.used) } : resource
+  })
+  const extraResources = (sheet.resources ?? []).filter(entry => !resources.some(resource => resource.name === entry.name))
   const updated = calculatedSheet({
-    ...sheet, slots, classLevel: nextClasses.map(entry => entry.name + ' ' + entry.level).join(' / '),
+    ...sheet, slots, ...(pactSlots !== undefined ? { pactSlots } : {}), abilities, classLevel: classLine,
+    ...(subclass ? { subclass } : {}), ...(feats ? { feats } : {}), resources: [...resources, ...extraResources].slice(0, 12),
     calculations: { ...config, hp: { classes: hpClasses, bonus } }
   })
   const gained = updated.maxHp - sheet.maxHp

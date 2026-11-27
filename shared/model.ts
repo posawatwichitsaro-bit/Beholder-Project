@@ -51,6 +51,15 @@ export type Sheet = {
   hitDiceSpent?: Partial<Record<HitDie, number>>
   /** Conditions with a source, an end and saves (see shared/effects.ts); plain ones stay in `conditions`. */
   effects?: Effect[]
+  /** Warlock Pact Magic kept apart from `slots` ("L3 2/2"): back on every Short Rest. Older single-class Warlocks keep it in `slots`. */
+  pactSlots?: string
+  /** Magical Cunning used since the last Long Rest. */
+  cunningUsed?: boolean
+  /** Experience points (rooms that level by XP). */
+  xp?: number
+  /** SRD subclass and feats picked when levelling; a few have effects worked out for you (shared/progression.ts). */
+  subclass?: string
+  feats?: string[]
 }
 /**
  * One condition from one source. Poisoned from two sources is two effects shown as one mark;
@@ -144,7 +153,11 @@ export function nextLivingTurn(combat: Combat, isDead: (actorId: string) => bool
     if (!isDead(combat.order[turn].actorId)) return { turn, round: combat.round + Math.floor(step / combat.order.length) }
   }
 }
+/** XP waiting for the DM after a fight: the total from defeated monsters and who fought. */
+export type XpAward = { total: number; actorIds: string[]; at: number }
 export type Scene = {
+  /** XP from the last fight, until the DM shares it out or skips it. */
+  xpAward?: XpAward
   id: string; name: string; cell: number; originX: number; originY: number
   map?: MapAsset; tokens: Token[]; combat?: Combat; objects?: SceneObject[]
   /** Who fought in this scene's last encounter, pre-selected for the next one. */

@@ -53,6 +53,7 @@ import { refreshRoom, useRoomConnection } from '../../state/connection.ts'
 import { sendCommand } from '../../state/useCommand.ts'
 import { attackOdds, withinReach } from '../../../shared/advantage.ts'
 import type { RollMode } from '../../../shared/advantage.ts'
+import { XpAward } from '../combat/XpAward.tsx'
 import type { Command } from '../../state/useCommand.ts'
 
 type Point = { x: number; y: number }
@@ -677,6 +678,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       send={commandHere} close={() => setDmCombat(false)}
       advanced={(acting, target) => <ActorActions key={acting.id} actor={acting} room={room} scene={scene} send={commandHere} combatTarget={target} />} />}
     <RollMenuHost />
+    <XpAward room={room} scene={scene} send={commandHere} />
     {sending && <div className="send-status" aria-live="polite">กำลังส่ง…{sending > 1 ? ` (${sending})` : ''}</div>}
     {(error || notice) && <div className="toast" role={error ? 'alert' : 'status'}>{error || notice}<button aria-label="ปิดข้อความ" onClick={clearMessages}>×</button></div>}
     {manageOpen && dm && <ManageScreen room={room} send={send} close={() => setManageOpen(false)}

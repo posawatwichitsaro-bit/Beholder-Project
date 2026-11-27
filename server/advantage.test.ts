@@ -71,3 +71,34 @@ test('an Invisible creature leaves the map for other players but not for its own
   assert.equal(snapshot(room as never, dm).scenes[0].tokens.length, 1)
   assert.equal(room.scenes[0].tokens.length, 1, 'the stored room is untouched')
 })
+
+test('0.07: XP waits after a fight in an XP room; Pact slots, Magical Cunning, Champion crits', async () => {
+  const { applyCommand } = await import('./commands.ts')
+  const { blankSheet } = await import('../shared/model.ts')
+  const { restedSheet } = await import('../shared/rest.ts')
+  const dm = { id: 'dm', name: 'DM', role: 'dm' as const }
+  const hero = { ...blankSheet(), id: 'hero', ownerId: 'dm', name: 'Hero', classLevel: 'Sorcerer 2 / Warlock 3', slots: 'L1 1/3', pactSlots: 'L2 0/2' }
+  const ally = { ...blankSheet(), id: 'ally', ownerId: 'dm', name: 'Ally' }
+  const ogre = { ...blankSheet('monster'), id: 'ogre', ownerId: 'dm', name: 'Ogre', classLevel: 'Giant · CR 2', hp: 0, life: 'dead' as const }
+  const room = { id: 'r', name: 'R', invite: 'i', revision: 0, activeSceneId: 's', members: [dm], templates: [], rolls: [], actors: [hero, ally, ogre],
+    settings: { advancement: 'xp' as const },
+    scenes: [{ id: 's', name: 'S', cell: 48, originX: 0, originY: 0, tokens: [{ id: 'a', actorId: 'hero', x: 0, y: 0 }, { id: 'b', actorId: 'ally', x: 1, y: 0 }, { id: 'c', actorId: 'ogre', x: 2, y: 0 }],
+      combat: { round: 2, turn: 0, order: [{ actorId: 'hero', initiative: 15 }, { actorId: 'ally', initiative: 12 }, { actorId: 'ogre', initiative: 8 }] } }] }
+  const run = (body: Record<string, unknown>) => applyCommand(room as never, dm, { sceneId: 's', ...body })
+  run({ type: 'end' })
+  const award = (room.scenes[0] as { xpAward?: { total: number; actorIds: string[] } }).xpAward!
+  assert.deepEqual(award, { ...award, total: 450, actorIds: ['hero', 'ally'] })
+  run({ type: 'awardXp', fromFight: true, actorIds: award.actorIds, amount: 225 })
+  assert.equal((hero as { xp?: number }).xp, 225)
+  assert.equal((room.scenes[0] as { xpAward?: unknown }).xpAward, undefined)
+
+  // Pact Magic is its own pool: cast from it, regain half with Magical Cunning once, all on a Short Rest.
+  assert.throws(() => run({ type: 'magicalCunning', actorId: 'nobody' }))
+  run({ type: 'magicalCunning', actorId: 'hero' })
+  assert.equal(hero.pactSlots, 'L2 1/2')
+  assert.throws(() => run({ type: 'magicalCunning', actorId: 'hero' }), /Magical Cunning/)
+  const rested = restedSheet(hero, 'short')
+  assert.equal(rested.pactSlots, 'L2 2/2')
+  assert.equal(rested.slots, 'L1 1/3', 'ordinary slots wait for a Long Rest')
+  assert.equal(restedSheet(hero, 'long').cunningUsed, undefined)
+})

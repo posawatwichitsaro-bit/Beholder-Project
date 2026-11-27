@@ -1,5 +1,6 @@
 import type { Ability, ClassResource, HitDie, ShortRestRecovery, Sheet } from './model.ts'
 import { abilityModifier, hitDiceByClass } from './characterStats.ts'
+import { srdSubclasses, subclassResources } from './progression.ts'
 import { formatSlots, parseSlots } from './conditions.ts'
 
 /**
@@ -68,9 +69,12 @@ export function resourcesFor(name: ClassName, level: number, abilities: Record<A
   }
 }
 
-/** All class resources for a (multi)class line. */
-export function classResources(sheet: Pick<Sheet, 'classLevel' | 'abilities'>) {
-  return readClasses(sheet.classLevel).flatMap(entry => resourcesFor(entry.name, entry.level, sheet.abilities)).slice(0, 12)
+/** All class resources for a (multi)class line, plus the counted ones its SRD subclass adds. */
+export function classResources(sheet: Pick<Sheet, 'classLevel' | 'abilities'> & { subclass?: string }) {
+  const classes = readClasses(sheet.classLevel)
+  const owner = classes.find(entry => srdSubclasses[entry.name]?.name === sheet.subclass)
+  return [...classes.flatMap(entry => resourcesFor(entry.name, entry.level, sheet.abilities)),
+    ...(owner ? subclassResources(sheet.subclass, owner.level, sheet.abilities) : [])].slice(0, 12)
 }
 
 /** One Hit Die: heals max(1, roll + CON modifier). */
@@ -103,11 +107,15 @@ export function restedSheet<T extends Sheet>(sheet: T, kind: 'short' | 'long'): 
   // Warlock Pact Magic slots come back on a Short Rest too.
   const pactMagic = readClasses(sheet.classLevel).some(entry => entry.name === 'Warlock')
   const restoreSlots = slots && (kind === 'long' || pactMagic)
-  if (kind === 'short') return { ...sheet, resources, ...(restoreSlots ? { slots: formatSlots(slots.map(slot => ({ ...slot, left: slot.max }))) } : {}) }
+  const pact = parseSlots(sheet.pactSlots ?? '')
+  const pactBack = pact?.length ? { pactSlots: formatSlots(pact.map(slot => ({ ...slot, left: slot.max }))) } : {}
+  // With Pact Magic apart, plain slots wait for a Long Rest even for a Warlock multiclass.
+  const shortSlots = restoreSlots && sheet.pactSlots === undefined
+  if (kind === 'short') return { ...sheet, resources, ...pactBack, ...(shortSlots ? { slots: formatSlots(slots.map(slot => ({ ...slot, left: slot.max }))) } : {}) }
   return {
     ...sheet, resources, hp: sheet.maxHp, tempHp: 0, hitDiceSpent: {}, conditions: lowerExhaustion(sheet.conditions),
     ...(sheet.effects ? { effects: lowerExhaustionEffects(sheet.effects) } : {}),
-    life: 'active', successes: 0, failures: 0,
+    life: 'active', successes: 0, failures: 0, cunningUsed: undefined, ...pactBack,
     ...(restoreSlots ? { slots: formatSlots(slots.map(slot => ({ ...slot, left: slot.max }))) } : {})
   }
 }
