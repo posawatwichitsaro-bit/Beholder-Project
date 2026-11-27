@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { abilities, blankSheet, damageKinds, nextLivingTurn, objectOwner, sizes } from '../shared/model.ts'
-import type { Actor, Combat, DamageKind, InventoryItem, LogEntry, LootSkill, Member, ObjectDefinition, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token, TokenRole, UndoEntry } from '../shared/model.ts'
+import type { Actor, Combat, DamageKind, InventoryItem, LogEntry, LootSkill, Member, ObjectDefinition, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token, TokenRole } from '../shared/model.ts'
 import { areaContains, areaLabels, areaOutline, validArea } from '../shared/area.ts'
 import type { Area } from '../shared/area.ts'
 import { d20, deathSave, die, harm, heal, Invalid, parseDice, rollDice, rollPool } from './rules.ts'
@@ -18,6 +18,7 @@ import { criticalFrom, magicalCunning, monsterXp, srdFeats, srdSubclasses } from
 import { key, playerView, tokenSeen, wallsForPlayer } from '../shared/vision.ts'
 import type { ActorVision, Ambient, Door, LightSource, SceneVision, Wall } from '../shared/vision.ts'
 import { gridFeet } from '../shared/movement.ts'
+import { afterCommand, beforeCommand, isUndoable, undoLast } from './undo.ts'
 import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
 export class Forbidden extends Error {}
@@ -539,38 +540,13 @@ function pasteBoardSelection(target: Scene, room: Room, member: Member, command:
 }
 
 export function applyCommand(room: Room, member: Member, command: Command, clipboard: BoardPiece[] = []) {
-  const undoable = undoLabels[String(command.type)]
-  const before = undoable ? undoState(room) : undefined
+  const type = String(command.type)
+  const before = isUndoable(type) ? beforeCommand(room) : undefined
+  delete (room as { undo?: unknown }).undo // 0.11's DM-only list; 0.12 keeps steps per member
   const output = runCommand(room, member, command, clipboard)
-  if (before) recordUndo(room, before, undoable)
+  if (before) afterCommand(room, member, type, before)
   rememberSeen(room)
   return output
-}
-
-/** Commands the DM can take back with Ctrl+Z, and how the log names them. */
-const undoLabels: Record<string, string> = {
-  move: 'การเดิน', moveTokens: 'การเดิน', stepCharacter: 'การเดิน',
-  damage: 'การหัก HP', areaDamage: 'ความเสียหายแบบพื้นที่', heal: 'การรักษา', adjustHp: 'การปรับ HP', sheetRoll: 'การหัก HP'
-}
-type UndoState = { tokens: Map<string, UndoEntry['tokens'][number]>; actors: Map<string, UndoEntry['actors'][number]>; moved: Map<string, Combat['moved']> }
-function undoState(room: Room): UndoState {
-  const tokens = new Map<string, UndoEntry['tokens'][number]>()
-  const moved = new Map<string, Combat['moved']>()
-  for (const scene of room.scenes) {
-    for (const token of scene.tokens) tokens.set(scene.id + '/' + token.id, { sceneId: scene.id, tokenId: token.id, x: token.x, y: token.y })
-    if (scene.combat) moved.set(scene.id, scene.combat.moved && { ...scene.combat.moved })
-  }
-  const actors = new Map(room.actors.map(({ id, hp, tempHp, life, successes, failures }) => [id, { id, hp, tempHp, life, successes, failures }]))
-  return { tokens, actors, moved }
-}
-/** Keep what changed (as it was before), newest last, at most 20 steps. */
-function recordUndo(room: Room, before: UndoState, label: string) {
-  const after = undoState(room)
-  const tokens = [...before.tokens].filter(([key, was]) => { const now = after.tokens.get(key); return now && (now.x !== was.x || now.y !== was.y) }).map(([, was]) => was)
-  const actors = [...before.actors].filter(([id, was]) => { const now = after.actors.get(id); return now && (now.hp !== was.hp || now.tempHp !== was.tempHp || now.life !== was.life) }).map(([, was]) => was)
-  if (!tokens.length && !actors.length) return
-  const moved = [...before.moved].filter(([sceneId, was]) => JSON.stringify(after.moved.get(sceneId)) !== JSON.stringify(was)).map(([sceneId, value]) => ({ sceneId, value }))
-  room.undo = [...(room.undo ?? []), { at: Date.now(), label, tokens, actors, ...(moved.length ? { moved } : {}) }].slice(-20)
 }
 
 export { gridFeet }
@@ -1481,24 +1457,11 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       return {}
     }
     case 'undo': {
-      // DM: take back the last move or HP change (Ctrl+Z), newest first.
-      requireDM(member)
-      const entry = room.undo?.pop()
-      if (!entry) throw new Invalid('ไม่มีอะไรให้ย้อนแล้ว')
-      for (const was of entry.tokens) {
-        const token = room.scenes.find(scene => scene.id === was.sceneId)?.tokens.find(item => item.id === was.tokenId)
-        if (token) Object.assign(token, { x: was.x, y: was.y })
-      }
-      for (const was of entry.actors) {
-        const creature = room.actors.find(item => item.id === was.id)
-        if (creature) Object.assign(creature, { hp: was.hp, tempHp: was.tempHp, life: was.life, successes: was.successes, failures: was.failures })
-      }
-      for (const was of entry.moved ?? []) {
-        const combat = room.scenes.find(scene => scene.id === was.sceneId)?.combat
-        if (combat) combat.moved = was.value
-      }
-      addLog(room, { kind: 'combat', name: member.name, text: 'DM ย้อน' + entry.label + 'ล่าสุด' })
-      return {}
+      // Anyone takes back their own newest step (Ctrl+Z); a step someone else built on is dropped, not overwritten.
+      const outcome = undoLast(room, member)
+      if (outcome.result === 'empty') throw new Invalid('ไม่มีอะไรให้ย้อนแล้ว')
+      if (outcome.result === 'blocked') return { notice: 'ย้อน' + outcome.label + 'ไม่ได้ เพราะมีคนแก้ต่อแล้ว · กด Ctrl+Z อีกครั้งเพื่อย้อนขั้นก่อนหน้า' }
+      return { notice: 'ย้อน' + outcome.label + 'แล้ว' }
     }
     case 'settings': {
       requireDM(member)

@@ -55,13 +55,14 @@ export function AdventureLog({ room, send }: { room: Snapshot; send: SendCommand
         if (item.type === 'roll') {
           const roll = item.roll
           const outcome = diceOutcome(roll)
-          return <li key={item.id} className="log-roll" data-outcome={outcome}>
+          return <li key={item.id} className={'log-roll' + (roll.undone ? ' log-undone' : '')} data-outcome={outcome}>
             <span className="log-icon" aria-hidden="true"><Dices size={14} /></span>
             <span className="log-body">
               <span className="log-who">{roll.name}</span> {roll.label}{roll.privateTo ? ' · ลับ' : ''}
               <span className="log-formula"> · {roll.formula}{roll.faces.length > 1 ? ' [' + roll.faces.join(', ') + ']' : ''}</span>
               {roll.outcome && <span className="log-outcome"> · {roll.outcome}</span>}
-              {roll.applied === false && <span className="log-outcome roll-waiting"> · รอ DM ยืนยัน</span>}
+              {roll.applied === false && !roll.undone && <span className="log-outcome roll-waiting"> · รอ DM ยืนยัน</span>}
+              {roll.undone && <span className="log-outcome log-undone-tag"> · ย้อนแล้ว</span>}
               {outcome !== 'normal' && <span className="log-badge">{outcome === 'critical' ? 'Natural 20' : 'Natural 1'}</span>}
             </span>
             <b className="log-total">{roll.total}</b>
