@@ -21,6 +21,7 @@ import { gridFeet, moveCost, speedNow } from '../shared/movement.ts'
 import { afterCommand, beforeCommand, isUndoable, undoLast } from './undo.ts'
 import { freshUse, gapBetween, reachOf } from '../shared/economy.ts'
 import type { TurnUse } from '../shared/economy.ts'
+import { itemLights } from '../shared/vision.ts'
 import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
 export class Forbidden extends Error {}
@@ -121,6 +122,7 @@ function parseItem(value: unknown, monster: boolean): InventoryItem {
     id: id(), name: text(item.name), description: description(item.description), image: image(item.image),
     quantity: number(item.quantity ?? 1, 1, 999), tool: item.tool === 'thievesTools' ? 'thievesTools' : undefined,
     lootTier: monster ? item.lootTier === 'bonus' ? 'bonus' : 'basic' : undefined,
+    lit: item.lit === true ? true : undefined,
     ...catalogFields(item)
   }
 }
@@ -380,7 +382,8 @@ export function addLog(room: Room, entry: Omit<LogEntry, 'id' | 'at'>) {
 
 /** Log entries this seat may see: everything without a scene, plus the scene players can see (all scenes for the DM). */
 export function visibleLog(room: Room, me: Member) {
-  return (room.log ?? []).filter(entry => me.role === 'dm' || !entry.sceneId || entry.sceneId === room.activeSceneId)
+  return (room.log ?? []).filter(entry => (me.role === 'dm' || !entry.sceneId || entry.sceneId === room.activeSceneId) &&
+    (!entry.to || me.role === 'dm' || entry.to === me.id || entry.fromId === me.id))
 }
 
 export function visibleRolls(room: Room, me: Member) {
@@ -1220,6 +1223,25 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       creature.vision.light.on = command.lightOn === true
       return {}
     }
+    case 'containerRemove': {
+      // DM (from the storeroom): take an item out of a box on any scene.
+      requireDM(member)
+      const box = object(scene().objects ?? [])
+      if (box.kind !== 'container') throw new Invalid('เป้าหมายต้องเป็นกล่อง')
+      const item = get(box.items, command.itemId)
+      box.items = box.items.filter(entry => entry.id !== item.id)
+      return {}
+    }
+    case 'lightItem': {
+      // Light or put out a Torch / Lamp / Lantern / Candle in your own bag (players may, no DM needed).
+      const creature = actor()
+      owns(member, creature)
+      const item = get(creature.inventory ?? [], command.itemId)
+      if (!item.ref || !itemLights[item.ref]) throw new Invalid('ไอเทมนี้จุดเป็นแสงไม่ได้')
+      if (command.lit === true) item.lit = true
+      else delete item.lit
+      return {}
+    }
     case 'moveObject': {
       const target = object(board().objects ?? [])
       if (!target.temp) requireDM(member)
@@ -1837,7 +1859,10 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
     }
     case 'chat': {
       const message = text(command.text, 500)
-      addLog(room, { kind: 'chat', text: message, name: member.name })
+      // A whisper goes to one member; the DM sees every whisper (marked as one).
+      const to = command.to === undefined || command.to === '' ? undefined : get(room.members, command.to)
+      if (to && to.id === member.id) throw new Invalid('กระซิบถึงตัวเองไม่ได้')
+      addLog(room, { kind: 'chat', text: message, name: member.name, ...(to ? { to: to.id, fromId: member.id } : {}) })
       return {}
     }
     case 'slots': {

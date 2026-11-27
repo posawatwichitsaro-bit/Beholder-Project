@@ -109,6 +109,8 @@ export type InventoryItem = {
   ref?: string; category?: string; rarity?: string; attunement?: boolean; weight?: number
   /** A +1/+2/+3 weapon, armor, shield or ammunition: the magic bonus, and the plain catalog item it is made from. */
   bonus?: number; base?: string
+  /** A light source in a bag (Torch, Lamp, Lantern, Candle) that is burning: the carrier sheds its light. */
+  lit?: boolean
 }
 export type ObjectKind = 'container' | 'prop' | 'structure' | 'item'
 export const objectLabels: Record<ObjectKind, string> = {
@@ -202,6 +204,8 @@ export type Roll = {
 export type LogEntry = {
   id: string; at: number; kind: 'chat' | 'scene' | 'combat' | 'hp' | 'join'
   text: string; name?: string; sceneId?: string
+  /** A whisper (0.12): only the sender, this member and the DM see it. */
+  to?: string; fromId?: string
 }
 export type Room = {
   id: string; name: string; invite: string; dmInvite?: string; revision: number; members: (Member & { profileId?: string })[]

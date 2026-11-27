@@ -3,11 +3,12 @@ import { Boxes, Map as MapIcon, Package, Search, Users, X } from 'lucide-react'
 import type { Actor, Scene, Snapshot } from '../../../shared/model.ts'
 import { parseConditions } from '../../../shared/conditions.ts'
 import type { Command } from '../../state/useCommand.ts'
+import { ItemCatalogPicker } from '../items/ItemCatalogPicker.tsx'
 import { Button, HpBar } from '../../ui/index.ts'
 
 type Section = 'tokens' | 'items' | 'scenes'
 type TokenRow = { key: string; scene: Scene; tokenId: string; actor: Actor }
-type ItemRow = { key: string; name: string; quantity: number; holder: string; kind: string; description: string; actorId?: string; itemId: string }
+type ItemRow = { key: string; name: string; quantity: number; holder: string; kind: string; description: string; actorId?: string; itemId: string; sceneId?: string; objectId?: string }
 
 /**
  * "ห้องเก็บของ DM": everything at the table in sortable lists — tokens across
@@ -25,6 +26,8 @@ export function ManageScreen({ room, send, close, openSheet, goTo, viewScene, co
   const [query, setQuery] = useState('')
   const [current, setCurrent] = useState<string>()
   const [checked, setChecked] = useState<string[]>([])
+  // A box the DM is adding SRD items to from here.
+  const [addingTo, setAddingTo] = useState<{ sceneId: string; objectId: string }>()
   useEffect(() => {
     function key(event: KeyboardEvent) {
       // A dialog opened from here (copy / delete scene) sits on top and takes Escape first.
@@ -48,7 +51,7 @@ export function ManageScreen({ room, send, close, openSheet, goTo, viewScene, co
     }))),
     ...room.scenes.flatMap(scene => (scene.objects ?? []).flatMap(object => object.kind === 'container' ? object.items.map(item => ({
       key: object.id + ':' + item.id, name: item.name, quantity: item.quantity ?? 1, holder: object.name + ' · ' + scene.name,
-      kind: 'ในกล่อง', description: item.description, itemId: item.id
+      kind: 'ในกล่อง', description: item.description, itemId: item.id, sceneId: scene.id, objectId: object.id
     })) : []))
   ], [room.actors, room.scenes])
 
@@ -140,7 +143,12 @@ export function ManageScreen({ room, send, close, openSheet, goTo, viewScene, co
         {itemRow.description && <p>{itemRow.description}</p>}
         {itemRow.actorId && <div className="manage-actions"><Button variant="danger"
           onClick={() => void send({ type: 'inventoryRemove', actorId: itemRow.actorId, itemId: itemRow.itemId })}>นำไอเทมออก</Button></div>}
-        {!itemRow.actorId && <p className="manage-sub">จัดการของในกล่องได้จากการ “โต้ตอบกับ Object” บนกระดาน</p>}
+        {!itemRow.actorId && itemRow.objectId && <div className="manage-actions">
+          <Button variant="danger" onClick={() => void send({ type: 'containerRemove', sceneId: itemRow.sceneId, objectId: itemRow.objectId, itemId: itemRow.itemId })}>นำออกจากกล่อง</Button>
+          <Button onClick={() => setAddingTo({ sceneId: itemRow.sceneId!, objectId: itemRow.objectId! })}>เพิ่มของในกล่องนี้</Button>
+        </div>}
+        {addingTo && <ItemCatalogPicker actionLabel="ใส่ในกล่อง" close={() => setAddingTo(undefined)}
+          choose={item => send({ type: 'containerAdd', ...addingTo, item })} />}
       </>}
       {section === 'scenes' && sceneRow && <>
         <h3>{sceneRow.name}</h3>

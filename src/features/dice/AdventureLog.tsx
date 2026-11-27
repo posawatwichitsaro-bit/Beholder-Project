@@ -5,6 +5,7 @@ import type { LogEntry, Snapshot } from '../../../shared/model.ts'
 import type { Send as SendCommand } from '../../state/useCommand.ts'
 import { usePrefs } from '../../state/prefs.ts'
 import { diceOutcome } from './diceOutcome.ts'
+import { useRoomStore } from '../../state/roomStore.ts'
 import { timeline } from './timeline.ts'
 
 const icons: Record<LogEntry['kind'], ReactNode> = {
@@ -20,6 +21,11 @@ const clock = (at: number) => at ? new Date(at).toLocaleTimeString('th-TH', { ho
  */
 export function AdventureLog({ room, send }: { room: Snapshot; send: SendCommand }) {
   const [message, setMessage] = useState('')
+  // Whisper target: '' = the whole table.
+  const [to, setTo] = useState('')
+  const others = room.members.filter(member => member.id !== room.me.id)
+  const setNotice = useRoomStore(state => state.setNotice)
+  const memberName = (id?: string) => room.members.find(member => member.id === id)?.name ?? '?'
   const sound = usePrefs(state => state.sound)
   const setSound = usePrefs(state => state.setSound)
   const list = useRef<HTMLOListElement>(null)
@@ -34,7 +40,15 @@ export function AdventureLog({ room, send }: { room: Snapshot; send: SendCommand
     const text = message.trim()
     if (!text) return
     const rollCommand = /^\/r(?:oll)?\s+(.+)$/i.exec(text)
-    const ok = await send(rollCommand ? { type: 'roll', formula: rollCommand[1].replace(/\s+/g, '') } : { type: 'chat', text })
+    // "/w Name message" whispers to that member (longest name first, so "Mira B" beats "Mira").
+    const whisper = /^\/w\s+(.+)$/i.exec(text)
+    let command: Record<string, unknown> = rollCommand ? { type: 'roll', formula: rollCommand[1].replace(/\s+/g, '') } : { type: 'chat', text, ...(to ? { to } : {}) }
+    if (whisper) {
+      const target = [...others].sort((a, b) => b.name.length - a.name.length).find(member => whisper[1].toLowerCase().startsWith(member.name.toLowerCase() + ' '))
+      if (!target) { setNotice('ไม่พบผู้รับ · พิมพ์ /w ชื่อ ข้อความ'); return }
+      command = { type: 'chat', to: target.id, text: whisper[1].slice(target.name.length + 1).trim() }
+    }
+    const ok = await send(command)
     if (ok) setMessage('')
   }
 
@@ -70,15 +84,20 @@ export function AdventureLog({ room, send }: { room: Snapshot; send: SendCommand
           </li>
         }
         const entry = item.entry
-        return <li key={item.id} className={'log-' + entry.kind}>
+        return <li key={item.id} className={'log-' + entry.kind + (entry.to ? ' log-whisper' : '')}>
           <span className="log-icon" aria-hidden="true">{entry.kind === 'combat' && entry.text === 'จบการต่อสู้' ? <Flag size={14} /> : icons[entry.kind]}</span>
-          <span className="log-body">{entry.name && <span className="log-who">{entry.name}</span>} {entry.text}</span>
+          <span className="log-body">{entry.name && <span className="log-who">{entry.name}</span>}
+            {entry.to && <span className="log-whisper-tag"> กระซิบถึง {entry.to === room.me.id ? 'คุณ' : memberName(entry.to)}</span>} {entry.text}</span>
           <time className="log-time">{clock(entry.at)}</time>
         </li>
       })}
     </ol>
     <form className="adventure-log-form" onSubmit={event => { event.preventDefault(); void submit() }}>
-      <input aria-label="ข้อความถึงโต๊ะ" value={message} maxLength={500} placeholder="พิมพ์ข้อความ หรือ /r 2d6+3 เพื่อทอย"
+      <select aria-label="ส่งถึง" value={to} onChange={event => setTo(event.target.value)} title="กระซิบถึงคนเดียว (DM เห็นทุกการกระซิบ)">
+        <option value="">ทุกคน</option>
+        {others.map(member => <option key={member.id} value={member.id}>กระซิบ {member.name}</option>)}
+      </select>
+      <input aria-label="ข้อความถึงโต๊ะ" value={message} maxLength={500} placeholder="พิมพ์ข้อความ · /r 2d6+3 ทอย · /w ชื่อ กระซิบ"
         onChange={event => setMessage(event.target.value)} />
       <button className="primary" aria-label="ส่ง" disabled={!message.trim()}><Send size={15} aria-hidden="true" /></button>
     </form>
