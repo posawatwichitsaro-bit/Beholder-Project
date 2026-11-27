@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { blankSheet, objectDefinition, objectLabels, tokenRoleLabels } from '../../../shared/model.ts'
+import { blankSheet, objectDefinition, objectLabels, objectOwner, tokenRoleLabels } from '../../../shared/model.ts'
 import type { Actor, ObjectDefinition, Roll, Scene, Sheet, Snapshot, Template, TokenRole } from '../../../shared/model.ts'
 import type { Area, AreaKind } from '../../../shared/area.ts'
 import { AccountPanel } from '../account/AccountPanel.tsx'
@@ -42,7 +42,7 @@ import type { PaletteCommand } from '../shell/commands.ts'
 import { dockReducer, emptyDock } from '../shell/dock.ts'
 import { groupLabels, panelById, panelForShortcut, panelsFor } from '../shell/panelRegistry.ts'
 import type { PanelId, Role } from '../shell/panelRegistry.ts'
-import { api } from '../../lib/api.ts'
+import { api, json } from '../../lib/api.ts'
 import { EmptyState, MoveHandle, useMovable } from '../../ui/index.ts'
 import { readHpChange } from '../combat/hpChange.ts'
 import { currentRoom, roomPath, useRoomStore } from '../../state/roomStore.ts'
@@ -124,6 +124,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [manageOpen, setManageOpen] = useState(false)
   const [touring, setTouring] = useState(false)
   const trayMovable = useMovable('dice-tray')
+  const copyingBoard = useRef<Promise<boolean>>(undefined)
   const dm = room.me.role === 'dm'
   const role: Role = dm ? 'dm' : 'player'
   const published = room.scenes.find(item => item.id === room.activeSceneId)
@@ -260,6 +261,24 @@ export function Table({ account, changeAccount }: AccountProps) {
   const dmInviteLink = room.dmInvite && location.origin + '/?invite=' + room.dmInvite + '&room=' + room.id + '&role=dm'
   const actorName = (id: string) => room.publicActors.find(item => item.id === id)?.name ?? 'ตัวละคร'
   const commandHere = (command: Command) => send({ ...command, sceneId: scene?.id })
+  function copyBoard(tokenIds: string[], objectIds: string[]) {
+    clearMessages()
+    copyingBoard.current = api<{ copied: number; skipped: number }>(base + '/clipboard', json({ sceneId: scene?.id, tokenIds, objectIds }))
+      .then(({ copied, skipped }) => {
+        setNotice('คัดลอก ' + copied + ' ชิ้น' + (skipped ? ' · ข้าม ' + skipped + ' ชิ้น' : ''))
+        return true
+      })
+      .catch(problem => {
+        setError(problem instanceof Error ? problem.message : 'คัดลอกไม่สำเร็จ')
+        return false
+      })
+  }
+  async function pasteBoard(position?: Point) {
+    if (!position) { setNotice('ชี้เมาส์บนกระดานก่อนวาง'); return }
+    if (copyingBoard.current && !await copyingBoard.current) return
+    const ok = await commandHere({ type: 'pasteBoard', ...position })
+    if (ok) setNotice('วางสำเนา Temp แล้ว')
+  }
   function showActor(id: string) {
     setSelected(id)
     setBoardSelected(id)
@@ -506,14 +525,21 @@ export function Table({ account, changeAccount }: AccountProps) {
           if (value && !dm && !room.actors.some(item => item.id === value)) setAttackTarget(value)
         }}
         move={(tokenIds, delta) => void commandHere({ type: 'moveTokens', tokenIds, dx: delta.x, dy: delta.y })}
+        copy={copyBoard} paste={position => void pasteBoard(position)}
         drop={dropToken}
-        moveObject={dm ? (objectId, position) => void commandHere({ type: 'moveObject', objectId, ...position }) : undefined}
+        moveObject={(objectId, position) => void commandHere({ type: 'moveObject', objectId, ...position })}
         place={placingObject ? point => void commandHere({ type: 'importObject', definition: placingObject, ...point })
           .then(ok => { if (ok) setObjectPlacement(undefined) })
           : placing && (point => void placeToken(placing, point).then(ok => { if (ok) setPlacing(undefined) }))}
         placementLabel={placingObject && 'คลิกช่องเพื่อวาง ' + placingObject.name}
         actions={(token, point, object) => {
-          if (object) return [{ label: 'โต้ตอบกับ Object', run: () => setObjectTarget(object.id) }]
+          if (object) return [
+            { label: 'โต้ตอบกับ Object', run: () => setObjectTarget(object.id) },
+            ...(objectOwner(object, room.members) === room.me.id ? [{
+              label: object.copyShared ? 'ปิดสิทธิ์คัดลอก' : 'อนุญาตให้คนในห้องคัดลอก',
+              run: () => void commandHere({ type: 'boardCopySharing', objectId: object.id, shared: !object.copyShared })
+            }] : [])
+          ]
           if (!token) return [
             { label: 'วาง Token ที่นี่', run: () => { setPlacementPoint(point); openPanel('sheets') } },
             ...(canPlace ? [
@@ -538,7 +564,11 @@ export function Table({ account, changeAccount }: AccountProps) {
             ...(lootable ? [{ label: lootable.lootResult ? 'ดูผลค้นศพ' : 'ค้นศพ / Loot', run: () => setLootTarget(token.actorId) }] : []),
             ...(accessible ? [{ label: 'เปิดชีต', run: () => showActor(accessible.id) }] : []),
             { label: 'Condition', run: () => setConditionTarget(token.actorId) },
-            ...(accessible?.kind === 'pc' && token.role ? [{
+            ...(accessible?.ownerId === room.me.id && token.role !== 'character' ? [{
+              label: token.copyShared ? 'ปิดสิทธิ์คัดลอก' : 'อนุญาตให้คนในห้องคัดลอก',
+              run: () => void commandHere({ type: 'boardCopySharing', tokenId: token.id, shared: !token.copyShared })
+            }] : []),
+            ...(accessible?.kind === 'pc' && !accessible.temp && token.role ? [{
               label: token.role === 'character' ? 'ตั้งเป็น Companion Token' : 'ตั้งเป็น Character Token',
               run: () => void commandHere({ type: 'tokenRole', tokenId: token.id, role: token.role === 'character' ? 'companion' : 'character' })
             }] : []),

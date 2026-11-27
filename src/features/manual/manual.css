@@ -22,3 +22,9 @@
 .manual-section .stat-block { margin: 0; font-size: var(--bh-text-sm); }
 .manual-links { display: flex; flex-wrap: wrap; gap: var(--bh-space-3); margin: 0; }
 @media (max-width: 760px) { .manual .manual-filters { grid-template-columns: 1fr 1fr; } .manual .manual-filters label:first-child { grid-column: 1 / -1; } }
+.manual-monster-art {
+  display: block;
+  width: min(100%, 10rem);
+  height: 8rem;
+  object-fit: contain;
+}

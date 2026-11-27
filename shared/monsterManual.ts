@@ -2,6 +2,7 @@ import { abilities, blankSheet, damageKinds, sizes } from './model.ts'
 import type { Ability, DamageKind, Sheet, Size } from './model.ts'
 import { abilityModifier, commonSkills } from './characterStats.ts'
 import type { CheckBonus, Skill } from './characterStats.ts'
+import { monsterPortrait } from './catalogArt.ts'
 
 export const detailLabels = {
   senses: 'Senses', languages: 'Languages', skills: 'Skills', immunities: 'Immunities',
@@ -70,7 +71,7 @@ export function monsterSheet(monster: ManualMonster): Sheet {
     .flatMap(key => monster.details?.[key] ? [detailLabels[key] + ' ' + monster.details[key]] : []).join(' · ')
   const skillChecks = skillText ? readSkills(skillText, monster.abilities, proficiency) : {}
   return {
-    ...blankSheet('monster'), name: monster.name, size: monster.size, speed: monster.speed,
+    ...blankSheet('monster'), name: monster.name, size: monster.size, speed: monster.speed, portrait: monsterPortrait(monster.id),
     ac: monster.ac, hp: monster.hp, maxHp: monster.hp, initiative: monster.initiative,
     abilities: { ...monster.abilities }, proficiency,
     classLevel: [monster.type, 'CR ' + monster.cr, monster.alignment].filter(Boolean).join(' · '),

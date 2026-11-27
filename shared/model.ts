@@ -77,13 +77,13 @@ export type HitDie = 'd6' | 'd8' | 'd10' | 'd12'
 /** What a Short Rest gives back: all uses, one use, or nothing (Long Rest only). */
 export type ShortRestRecovery = 'all' | 'one' | 'none'
 export type ClassResource = { name: string; max: number; used: number; short: ShortRestRecovery }
-export type Actor = Sheet & { id: string; ownerId: string; templateId?: string; lootResult?: LootResult }
+export type Actor = Sheet & { id: string; ownerId: string; temp?: true; templateId?: string; lootResult?: LootResult }
 export type Template = { id: string; sheet: Sheet }
 export type Library = { name: string; sheets: Template[]; objects: SavedObject[] }
 export type MapAsset = { id: string; mime: string }
 export const tokenRoleLabels = { character: 'Character Token', companion: 'Companion Token' } as const
 export type TokenRole = keyof typeof tokenRoleLabels
-export type Token = { id: string; actorId: string; x: number; y: number; role?: TokenRole }
+export type Token = { id: string; actorId: string; x: number; y: number; role?: TokenRole; copyShared?: boolean }
 export type ItemProficiency = { thievesTools: boolean; sleight: boolean; investigation: boolean; perception: boolean }
 export type LootSkill = 'investigation' | 'perception'
 export type LootResult = { passed: boolean; total: number; searcher: string; found: { name: string; quantity: number }[] }
@@ -99,6 +99,7 @@ export const objectLabels: Record<ObjectKind, string> = {
 }
 export type SceneObject = {
   id: string; name: string; description: string; image?: string
+  ownerId?: string; temp?: true; copyShared?: boolean
   x: number; y: number; width: number; height: number
 } & (
   { kind: 'container'; open: boolean; items: InventoryItem[]; lock?: { dc: number; locked: boolean; tried: string[]; last?: { total: number; passed: boolean } } }
@@ -111,6 +112,10 @@ export type ObjectDefinition = Pick<SceneObject, 'name' | 'description' | 'image
   | { kind: 'item' | 'prop' }
 )
 export type SavedObject = { id: string; definition: ObjectDefinition }
+
+export function objectOwner(object: SceneObject, members: Member[]) {
+  return object.temp ? undefined : object.ownerId ?? members.find(member => member.role === 'dm')?.id
+}
 
 export function objectDefinition(object: SceneObject): ObjectDefinition {
   const { kind, name, description, image, width, height } = object

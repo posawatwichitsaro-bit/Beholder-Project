@@ -26,6 +26,66 @@ async function seat(browser: Browser, options?: Parameters<Browser['newPage']>[0
   return page
 }
 
+test('Ctrl+C copies a mixed selection and Ctrl+V places it in another room tab', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
+    ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const context = await browser.newContext({ viewport: { width: 1100, height: 750 } })
+  await context.addInitScript(() => localStorage.setItem('beholder.prefs', JSON.stringify({ tourSeen: { dm: true, player: true } })))
+  const source = await context.newPage()
+  const destination = await context.newPage()
+  async function setup(name: string) {
+    const created = await source.request.post(base + '/api/rooms', { data: { name, member: 'DM' } })
+    assert.equal(created.status(), 201)
+    const initial: Snapshot = await created.json()
+    const path = base + '/api/rooms/' + initial.id
+    const read = async (): Promise<Snapshot> => (await source.request.get(path)).json()
+    const command = async (data: object) => {
+      const response = await source.request.post(path + '/commands', {
+        data: { ...data, revision: (await read()).revision, commandId: randomUUID() }
+      })
+      assert.equal(response.status(), 200, await response.text())
+    }
+    await command({ type: 'scene', name, cell: 48, originX: 0, originY: 0 })
+    return { id: initial.id, sceneId: (await read()).scenes[0].id, command, read }
+  }
+  const from = await setup('Clipboard source')
+  const to = await setup('Clipboard destination')
+  await from.command({ type: 'place', sceneId: from.sceneId, x: 1, y: 1, sheet: { ...blankSheet(), name: 'Skip me' } })
+  await from.command({ type: 'place', sceneId: from.sceneId, x: 2, y: 1, kind: 'monster', sheet: { ...blankSheet('monster'), name: 'Goblin' } })
+  await from.command({ type: 'importObject', sceneId: from.sceneId, x: 3, y: 2, kind: 'container', name: 'Chest', items: ['Gem'] })
+  await source.goto(base + '/room/' + from.id)
+  await source.locator('canvas').waitFor()
+  const board = (await source.locator('canvas').boundingBox())!
+  await source.mouse.move(board.x + 74, board.y + 74)
+  await source.keyboard.down('Shift')
+  await source.mouse.down()
+  await source.mouse.move(board.x + 217, board.y + 162, { steps: 5 })
+  await source.mouse.up()
+  await source.keyboard.up('Shift')
+  await source.getByText('เลือก 3 ชิ้น', { exact: true }).waitFor()
+  const copied = source.waitForResponse(response => response.url().endsWith('/clipboard'))
+  await source.keyboard.press('Control+c')
+  assert.deepEqual(await (await copied).json(), { copied: 2, skipped: 1 })
+  await destination.goto(base + '/room/' + to.id)
+  const next = destination.locator('canvas')
+  await next.waitFor()
+  await next.hover({ position: { x: 245, y: 195 } })
+  const pasted = destination.waitForResponse(response => response.url().endsWith('/commands') && response.request().postDataJSON()?.type === 'pasteBoard')
+  await destination.keyboard.press('Control+v')
+  const result = await pasted
+  assert.equal(result.status(), 200, await result.text())
+  await destination.getByRole('status').filter({ hasText: 'วางสำเนา Temp แล้ว' }).waitFor()
+  const state = await to.read()
+  const [monster] = state.scenes[0].tokens
+  const [chest] = state.scenes[0].objects!
+  assert.equal(state.scenes[0].tokens.length, 1)
+  assert.deepEqual([monster.x, monster.y, chest.x - monster.x, chest.y - monster.y], [4, 3, 1, 1])
+  assert.equal(state.actors[0].temp, true)
+  assert.equal(chest.temp, true)
+  assert.equal((await from.read()).scenes[0].tokens.length, 2)
+})
+
 test('sign up with a character name, rename in the room and return with a fresh session', { timeout: 60000 }, async t => {
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER
     ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
@@ -1055,7 +1115,9 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   assert.match(state.actors.find((actor: { name: string }) => actor.name === 'Scout').portrait, /^data:image\//)
   await canvas.click({ position: { x: 163, y: 203 }, button: 'right' })
   await dm.getByRole('button', exact('นำเข้า Object ที่นี่')).click()
-  await dm.getByRole('dialog', { name: 'นำเข้า Object' }).getByRole('combobox').selectOption('item')
+  await dm.getByRole('dialog', { name: 'นำเข้า Object' }).getByRole('combobox', { name: /^ประเภท/ }).selectOption('item')
+  await dm.getByRole('combobox', { name: /^ภาพสำหรับวางบนแผนที่/ }).selectOption('/art/srd/objects/longsword.webp')
+  await dm.getByRole('img', { name: 'รูป Object' }).waitFor()
   await dm.getByLabel('ชื่อ Object').fill('Silver key')
   await dm.getByRole('button', exact('วาง Object')).click()
   await dm.getByRole('dialog', { name: 'นำเข้า Object' }).waitFor({ state: 'hidden' })
@@ -1076,7 +1138,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await one.getByText('Inventory (2)', { exact: true }).waitFor()
   await canvas.click({ position: { x: 163, y: 203 }, button: 'right' })
   await dm.getByRole('button', exact('นำเข้า Object ที่นี่')).click()
-  await dm.getByRole('dialog', { name: 'นำเข้า Object' }).getByRole('combobox').selectOption('container')
+  await dm.getByRole('dialog', { name: 'นำเข้า Object' }).getByRole('combobox', { name: /^ประเภท/ }).selectOption('container')
   await dm.getByLabel('ชื่อ Object').fill('Locked cache')
   await dm.getByLabel(/ของเริ่มต้นในกล่อง/).fill('Letter')
   await dm.getByLabel('ล็อกกล่อง', { exact: true }).check()

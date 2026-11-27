@@ -6,8 +6,8 @@ import { mkdir, writeFile, unlink } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { Member, Room, TableSummary } from '../shared/model.ts'
-import { addLog, applyCommand, Conflict, Forbidden, snapshot, text, visibleRolls } from './commands.ts'
-import type { Command } from './commands.ts'
+import { addLog, applyCommand, Conflict, copyBoardSelection, Forbidden, snapshot, text, visibleRolls } from './commands.ts'
+import type { BoardPiece, Command } from './commands.ts'
 import { Invalid } from './rules.ts'
 import type { Database, Query } from './store.ts'
 import { libraryRoutes } from './library.ts'
@@ -18,6 +18,7 @@ import { accountCookie, activeProfile, profileSecret } from './profiles.ts'
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const hash = (secret: string) => createHash('sha256').update(secret).digest('hex')
 const cookieName = 'beholder_seat'
+const clipboardCookie = 'beholder_board_clipboard'
 const secretFrom = (cookie = '') => cookie.split(';').map(value => value.trim()).find(value => value.startsWith(cookieName + '='))?.slice(cookieName.length + 1)
 
 export async function createApp(database: Database, assetDirectory: string) {
@@ -207,6 +208,25 @@ export async function createApp(database: Database, assetDirectory: string) {
     const end = req.query.before ? rolls.findIndex(roll => roll.id === req.query.before) : rolls.length
     res.json(end < 0 ? [] : rolls.slice(Math.max(0, end - 40), end))
   })
+  app.post('/api/rooms/:id/clipboard', async (req, res) => {
+    const roomId = req.params.id
+    const memberKey = await memberId(database.query, roomId, req.headers.cookie)
+    const room = await roomBy(database.query, roomId)
+    const member = memberOf(room, memberKey)
+    const { pieces, skipped } = copyBoardSelection(room, member, req.body ?? {})
+    const payload = JSON.stringify(pieces)
+    if (Buffer.byteLength(payload) > 8 * 1024 * 1024) throw new Invalid('ข้อมูลชุดนี้ใหญ่เกินไป กรุณาคัดลอกทีละน้อย')
+    const previous = profileSecret(clipboardCookie, req.headers.cookie)
+    const secret = previous ?? randomBytes(32).toString('hex')
+    await database.query(
+      'INSERT INTO board_clipboards VALUES ($1,$2,$3) ON CONFLICT (browser_key,account_key) DO UPDATE SET pieces=EXCLUDED.pieces',
+      [hash(secret), member.profileId ?? '', payload]
+    )
+    if (!previous) res.cookie(clipboardCookie, secret, {
+      httpOnly: true, sameSite: 'strict', secure: req.secure || process.env.SECURE_COOKIES === '1' || Boolean(publicOrigin), path: '/api/rooms'
+    })
+    res.json({ copied: pieces.length, skipped })
+  })
   app.post('/api/rooms/:id/commands', async (req, res) => {
     const command = req.body as Command
     if (!command || typeof command.commandId !== 'string' || !uuid.test(command.commandId)) throw new Invalid('รหัสคำสั่งไม่ถูกต้อง')
@@ -225,7 +245,12 @@ export async function createApp(database: Database, assetDirectory: string) {
       }
       // An arrow step is relative and checks the current scene, owner and role under the room lock.
       if (command.type !== 'stepCharacter' && command.revision !== room.revision) throw new Conflict('ข้อมูลเปลี่ยนแล้ว กรุณาลองอีกครั้ง')
-      const output = applyCommand(room, member, command)
+      const clipboardSecret = command.type === 'pasteBoard' && profileSecret(clipboardCookie, req.headers.cookie)
+      const clipboard = clipboardSecret ? (await query<{ pieces: BoardPiece[] }>(
+        'SELECT pieces FROM board_clipboards WHERE browser_key=$1 AND account_key=$2',
+        [hash(clipboardSecret), member.profileId ?? '']
+      )).rows[0]?.pieces : undefined
+      const output = applyCommand(room, member, command, clipboard)
       await save(query, room)
       const receipt = { revision: room.revision, ...output }
       await query('INSERT INTO command_receipts VALUES ($1,$2,$3,$4,$5)', [...key, JSON.stringify(receipt)])

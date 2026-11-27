@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { blankSheet } from '../shared/model.ts'
 import type { Actor, Member, Room, Scene, SceneObject } from '../shared/model.ts'
-import { applyCommand, snapshot } from './commands.ts'
+import { applyCommand, copyBoardSelection, snapshot } from './commands.ts'
 import { structureCover } from './cover.ts'
 import { areaContains, areaOutline } from '../shared/area.ts'
 
@@ -23,6 +23,56 @@ function table() {
   }
   return { dm, player, actor, scene, room }
 }
+
+test('board clipboard respects ownership and visibility, and pastes independent ownerless pieces', () => {
+  const { dm, player, scene, room } = table()
+  const companion = room.actors[1]
+  companion.hp = 4
+  companion.inventory = [{ id: 'coin', name: 'Coin', description: '' }]
+  companion.effects = [{ id: 'public', condition: 'Poisoned' }, { id: 'private', condition: 'Blinded', hidden: true }]
+  applyCommand(room, dm, { type: 'importObject', sceneId: scene.id, x: 3, y: 4,
+    kind: 'container', name: 'Chest', items: ['Gem'], locked: true, lockDc: 12 })
+  const chest = scene.objects![0]
+  const select = { sceneId: scene.id, tokenIds: ['t1', 't2', 't3'], objectIds: [chest.id] }
+  assert.equal(copyBoardSelection(room, dm, select).skipped, 2)
+  assert.equal(copyBoardSelection(room, player, select).skipped, 3)
+  assert.throws(() => applyCommand(room, dm, { type: 'boardCopySharing', sceneId: scene.id, tokenId: 't2', shared: true }), /ตั้งสิทธิ์/)
+  applyCommand(room, player, { type: 'boardCopySharing', sceneId: scene.id, tokenId: 't2', shared: true })
+  applyCommand(room, dm, { type: 'boardCopySharing', sceneId: scene.id, objectId: chest.id, shared: true })
+  const playerCopy = copyBoardSelection(room, player, select)
+  assert.equal(playerCopy.skipped, 2)
+  const playerChest = playerCopy.pieces[1]
+  assert('object' in playerChest && playerChest.object.kind === 'container')
+  assert.deepEqual(playerChest.object.items, [])
+  assert.equal(playerChest.object.lock?.locked, true)
+  const fullCopy = copyBoardSelection(room, dm, select)
+  assert.equal(fullCopy.skipped, 1)
+  const other = table()
+  const paste = { type: 'pasteBoard', sceneId: other.scene.id, x: 10, y: 12 }
+  assert.throws(() => applyCommand(other.room, other.player, paste, fullCopy.pieces), /ให้ DM/)
+  assert.equal(other.scene.tokens.length, 3)
+  applyCommand(other.room, other.dm, paste, fullCopy.pieces)
+  const [tempCompanion, tempEnemy] = other.scene.tokens.slice(-2)
+  assert.deepEqual([tempCompanion.x, tempCompanion.y, tempEnemy.x, tempEnemy.y], [10, 13, 12, 12])
+  assert.equal(tempCompanion.role, 'companion')
+  const cloned = other.room.actors.find(actor => actor.id === tempCompanion.actorId)!
+  assert.equal(cloned.ownerId, '')
+  assert.equal(cloned.temp, true)
+  assert.equal(cloned.hp, 4)
+  assert.notEqual(cloned.inventory![0].id, 'coin')
+  const tempChest = other.scene.objects![0]
+  assert(tempChest.kind === 'container' && chest.kind === 'container')
+  assert.equal(tempChest.temp, true)
+  assert.equal(tempChest.ownerId, undefined)
+  assert.notEqual(tempChest.items[0].id, chest.items[0].id)
+  assert.equal(copyBoardSelection(other.room, other.player, {
+    sceneId: other.scene.id, tokenIds: [tempCompanion.id], objectIds: [tempChest.id]
+  }).pieces.length, 2)
+  assert.equal(snapshot(other.room, other.player).actors.find(actor => actor.id === cloned.id)?.effects?.length, 1)
+  applyCommand(other.room, other.player, { type: 'move', sceneId: other.scene.id, tokenId: tempCompanion.id, x: 9, y: 9 })
+  assert.equal(tempCompanion.x, 9)
+  assert.throws(() => applyCommand(other.room, other.player, { type: 'removeToken', sceneId: other.scene.id, tokenId: tempCompanion.id }), /DM/)
+})
 
 test('scene copies preserve the layout with independent monsters and objects and deleting the live scene advances the table', () => {
   const { dm, player, scene, room } = table()

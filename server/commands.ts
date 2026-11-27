@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { abilities, blankSheet, damageKinds, nextLivingTurn, sizes } from '../shared/model.ts'
+import { abilities, blankSheet, damageKinds, nextLivingTurn, objectOwner, sizes } from '../shared/model.ts'
 import type { Actor, DamageKind, InventoryItem, LogEntry, LootSkill, Member, ObjectDefinition, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token, TokenRole } from '../shared/model.ts'
 import { areaContains, areaLabels, areaOutline, validArea } from '../shared/area.ts'
 import type { Area } from '../shared/area.ts'
@@ -12,6 +12,7 @@ import { advanceEffects, concentrationDc, d20Penalty, effectName, incapacitating
 import { hitDiceLeft, hitDieHealing, restedSheet } from '../shared/rest.ts'
 import type { ClassResource, Effect, HitDie as RestDie } from '../shared/model.ts'
 import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared/characterStats.ts'
+import { isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
 export class Forbidden extends Error {}
 export class Conflict extends Error {}
@@ -40,9 +41,6 @@ function get<T extends { id: string }>(items: T[], key: unknown): T {
 function requireDM(member: Member) {
   if (member.role !== 'dm') throw new Forbidden('สงวนให้ DM')
 }
-function owns(member: Member, actor: Actor) {
-  if (member.role !== 'dm' && actor.ownerId !== member.id) throw new Forbidden('คุณไม่ได้ควบคุมตัวนี้')
-}
 function readTokenRole(value: unknown): TokenRole {
   if (value !== 'character' && value !== 'companion') throw new Invalid('เลือก Character Token หรือ Companion Token')
   return value
@@ -60,6 +58,7 @@ function withTokenRoles(scene: Scene, actors: Actor[]) {
 }
 function image(value: unknown) {
   if (value === undefined || value === '') return undefined
+  if (typeof value === 'string' && isCatalogArt(value)) return value
   if (typeof value !== 'string' || value.length > 32000 || !/^data:image\/(webp|png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) {
     throw new Invalid('รูปต้องเป็น PNG, JPEG หรือ WebP ที่ระบบย่อแล้ว')
   }
@@ -134,7 +133,7 @@ function copyScene(room: Room, source: Scene, name: string) {
     tokens: source.tokens.map(token => {
       const actor = get(room.actors, token.actorId)
       let actorId = actor.id
-      if (actor.kind === 'monster') {
+      if (actor.kind === 'monster' || actor.temp) {
         const duplicate = structuredClone(actor)
         duplicate.id = actorId = id()
         duplicate.inventory?.forEach(item => { item.id = id() })
@@ -369,9 +368,10 @@ export function snapshot(room: Room, me: Member): Snapshot {
   return {
     id: room.id, name: room.name, revision: room.revision, me: publicMember(me), members: room.members.map(publicMember),
     activeSceneId: room.activeSceneId, scenes, invite: dm ? room.invite : undefined, dmInvite: dm ? room.dmInvite : undefined,
-    actors: room.actors.filter(actor => dm || actor.ownerId === me.id).map(actor => dm ? actor : { ...actor, effects: visibleEffects(actor.effects, dm) }),
-    publicActors: room.actors.filter(actor => dm || visible.has(actor.id)).map(({ id, name, kind, size, portrait, hp, maxHp, tempHp, life, lootResult, conditions, effects }) =>
-      ({ id, name, kind, size, portrait, hp, maxHp, tempHp, lootResult, conditions, effects: visibleEffects(effects, dm), lootable: kind === 'monster' && life === 'dead' })),
+    actors: room.actors.filter(actor => dm || actor.ownerId === me.id || (actor.temp && visible.has(actor.id)))
+      .map(actor => ({ ...actor, portrait: actor.portrait ?? monsterPortrait(actor.monsterReference?.id), effects: visibleEffects(actor.effects, dm) })),
+    publicActors: room.actors.filter(actor => dm || visible.has(actor.id)).map(({ id, name, kind, size, portrait, monsterReference, hp, maxHp, tempHp, life, lootResult, conditions, effects }) =>
+      ({ id, name, kind, size, portrait: portrait ?? monsterPortrait(monsterReference?.id), hp, maxHp, tempHp, lootResult, conditions, effects: visibleEffects(effects, dm), lootable: kind === 'monster' && life === 'dead' })),
     templates: dm ? room.templates : [],
     rolls: rolls.slice(-40),
     log: visibleLog(room, me).slice(-80),
@@ -382,7 +382,83 @@ export function snapshot(room: Room, me: Member): Snapshot {
   }
 }
 
-export function applyCommand(room: Room, member: Member, command: Command) {
+export type BoardPiece = { token: Token; actor: Actor } | { object: SceneObject }
+
+export function copyBoardSelection(room: Room, member: Member, command: Command) {
+  const { tokenIds, objectIds } = command
+  if (!Array.isArray(tokenIds) || !Array.isArray(objectIds) || tokenIds.length + objectIds.length > 100 ||
+    [...tokenIds, ...objectIds].some(key => typeof key !== 'string')) throw new Invalid('เลือกได้สูงสุด 100 ชิ้น')
+  const view = snapshot(room, member)
+  const scene = get(view.scenes, command.sceneId)
+  const pieces: BoardPiece[] = []
+  for (const key of new Set(tokenIds)) {
+    const token = scene.tokens.find(token => token.id === key)
+    const actor = token && room.actors.find(actor => actor.id === token.actorId)
+    if (!token || !actor || (actor.kind === 'pc' && token.role !== 'companion')) continue
+    if (!actor.temp && actor.ownerId !== member.id && !token.copyShared) continue
+    const visible = view.actors.find(entry => entry.id === actor.id)
+    const summary = view.publicActors.find(entry => entry.id === actor.id)
+    if (visible) pieces.push({ token, actor: visible })
+    else if (summary) pieces.push({ token, actor: { ...blankSheet(summary.kind), ...summary, life: summary.lootable ? 'dead' : summary.hp ? 'active' : 'dying', ownerId: '' } })
+  }
+  for (const key of new Set(objectIds)) {
+    const object = scene.objects?.find(object => object.id === key)
+    if (object && (object.temp || object.copyShared || objectOwner(object, room.members) === member.id)) pieces.push({ object })
+  }
+  return { pieces, skipped: new Set(tokenIds).size + new Set(objectIds).size - pieces.length }
+}
+
+function pasteBoardSelection(target: Scene, room: Room, member: Member, command: Command, pieces: BoardPiece[]) {
+  if (!pieces.length) throw new Invalid('ยังไม่มี Token หรือ Object ที่คัดลอกไว้')
+  if (member.role !== 'dm' && pieces.some(piece => 'object' in piece || piece.actor.kind === 'monster')) {
+    throw new Forbidden('ให้ DM วาง Object หรือ Monster Token ในห้องนี้')
+  }
+  const anchorX = number(command.x, -1000, 1000, .5)
+  const anchorY = number(command.y, -1000, 1000, .5)
+  const positions = pieces.map(piece => 'object' in piece ? piece.object : piece.token)
+  const left = Math.min(...positions.map(point => point.x))
+  const top = Math.min(...positions.map(point => point.y))
+  const actorIds = new Map(pieces.flatMap(piece => 'actor' in piece ? [[piece.actor.id, id()] as const] : []))
+  const remap = (key?: string) => key ? actorIds.get(key) : undefined
+  const placements = pieces.map((piece, index) => {
+    const x = number(anchorX + positions[index].x - left, -1000, 1000, .5)
+    const y = number(anchorY + positions[index].y - top, -1000, 1000, .5)
+    if ('object' in piece) {
+      const object = structuredClone(piece.object)
+      Object.assign(object, { id: id(), x, y, temp: true, ownerId: undefined, copyShared: undefined })
+      if (object.kind === 'container') {
+        for (const item of object.items) item.id = id()
+        if (object.lock) object.lock.tried = object.lock.tried.flatMap(key => remap(key) ?? [])
+      }
+      return { object }
+    }
+    const actor = structuredClone(piece.actor)
+    actor.id = actorIds.get(actor.id)!
+    actor.ownerId = ''
+    actor.temp = true
+    delete actor.templateId
+    for (const item of actor.inventory ?? []) item.id = id()
+    for (const effect of actor.effects ?? []) {
+      effect.id = id()
+      effect.sourceId = remap(effect.sourceId)
+      if (!effect.sourceId) effect.concentration = undefined
+      const endsAt = remap(effect.ends?.actorId)
+      if (effect.ends) effect.ends = endsAt ? { ...effect.ends, actorId: endsAt } : undefined
+    }
+    const token: Token = { id: id(), actorId: actor.id, x, y, role: actor.kind === 'pc' ? 'companion' : undefined }
+    return { actor, token }
+  })
+  for (const placement of placements) {
+    if (placement.object) (target.objects ??= []).push(placement.object)
+    else {
+      room.actors.push(placement.actor)
+      target.tokens.push(placement.token)
+    }
+  }
+  return { pasted: placements.length }
+}
+
+export function applyCommand(room: Room, member: Member, command: Command, clipboard: BoardPiece[] = []) {
   const scene = () => get(room.scenes, command.sceneId)
   const active = () => {
     if (command.sceneId !== room.activeSceneId) throw new Conflict('ฉากเปลี่ยนแล้ว')
@@ -390,6 +466,11 @@ export function applyCommand(room: Room, member: Member, command: Command) {
   }
   const actor = () => get(room.actors, command.actorId)
   const board = () => member.role === 'dm' ? scene() : active()
+  function owns(member: Member, actor: Actor) {
+    if (member.role === 'dm' || actor.ownerId === member.id ||
+      (actor.temp && room.scenes.some(scene => scene.id === room.activeSceneId && scene.tokens.some(token => token.actorId === actor.id)))) return
+    throw new Forbidden('คุณไม่ได้ควบคุมตัวนี้')
+  }
   const object = (objects: SceneObject[]) => get(objects, command.objectId)
   const editableObject = () => {
     requireDM(member)
@@ -438,6 +519,26 @@ export function applyCommand(room: Room, member: Member, command: Command) {
     }
   }
   switch (command.type) {
+    case 'pasteBoard':
+      return pasteBoardSelection(board(), room, member, command, clipboard)
+    case 'boardCopySharing': {
+      const target = board()
+      if (typeof command.shared !== 'boolean' || (command.tokenId === undefined) === (command.objectId === undefined)) {
+        throw new Invalid('เลือกสิ่งที่จะตั้งสิทธิ์คัดลอก')
+      }
+      if (command.tokenId !== undefined) {
+        const token = get(target.tokens, command.tokenId)
+        const creature = get(room.actors, token.actorId)
+        const normalized = get(withTokenRoles(target, room.actors), token.id)
+        if (creature.temp || creature.ownerId !== member.id || normalized.role === 'character') throw new Forbidden('คุณตั้งสิทธิ์คัดลอก Token นี้ไม่ได้')
+        token.copyShared = command.shared
+      } else {
+        const item = object(target.objects ?? [])
+        if (objectOwner(item, room.members) !== member.id) throw new Forbidden('เจ้าของ Object เท่านั้นที่ตั้งสิทธิ์คัดลอกได้')
+        item.copyShared = command.shared
+      }
+      return {}
+    }
     case 'dmInvite':
       requireDM(member)
       room.dmInvite = id()
@@ -486,6 +587,9 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const removed = scene()
       const index = room.scenes.indexOf(removed)
       room.scenes.splice(index, 1)
+      const removedActors = new Set(removed.tokens.map(token => token.actorId))
+      room.actors = room.actors.filter(actor => !actor.temp || !removedActors.has(actor.id) ||
+        room.scenes.some(scene => scene.tokens.some(token => token.actorId === actor.id)))
       if (room.activeSceneId === removed.id) room.activeSceneId = (room.scenes[index] ?? room.scenes[index - 1])?.id
       return {}
     }
@@ -615,6 +719,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         inventory: template.sheet.inventory?.map(item => ({ ...item, id: id() })) }
         : sheet ? { ...sheet, id: id(), ownerId: member.id } : actor()
       owns(member, creature)
+      if (creature.temp) throw new Invalid('Temp Token ผูกกับฉากที่วางไว้')
       if (creature.kind === 'monster') requireDM(member)
       if (target.tokens.some(token => token.actorId === creature.id)) throw new Invalid('มี Token ของตัวนี้ในฉากแล้ว')
       const tokens = withTokenRoles(target, room.actors)
@@ -648,7 +753,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const token = get(tokens, command.tokenId)
       const creature = get(room.actors, token.actorId)
       owns(member, creature)
-      if (creature.kind !== 'pc') throw new Invalid('เลือก Token ตัวละคร')
+      if (creature.kind !== 'pc' || creature.temp) throw new Invalid('เลือก Token ตัวละครที่มีเจ้าของ')
       const role = readTokenRole(command.role)
       const owned = new Set(room.actors.filter(actor => actor.ownerId === creature.ownerId).map(actor => actor.id))
       target.tokens = tokens.map(entry => {
@@ -697,11 +802,13 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const target = scene()
       const definition = parseObjectDefinition(command.definition ?? { ...command, lockDc: command.locked === true ? command.lockDc ?? 15 : undefined })
       const imported = placeObject(definition, command)
+      imported.ownerId = member.id
       ;(target.objects ??= []).push(imported)
       return {}
     }
     case 'moveObject': {
-      const target = editableObject()
+      const target = object(board().objects ?? [])
+      if (!target.temp) requireDM(member)
       target.x = number(command.x, -1000, 1000, .5)
       target.y = number(command.y, -1000, 1000, .5)
       return {}
@@ -774,7 +881,9 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         if (inventory.length >= 100) throw new Invalid('Inventory เต็ม')
         let item: InventoryItem
         if (current.kind === 'item') {
-          item = { id: current.id, name: current.name, description: current.description, image: current.image }
+          const art = current.image ? sceneArtByImage(current.image) : undefined
+          const ref = art?.name === current.name ? art.ref ?? undefined : undefined
+          item = { id: current.id, name: current.name, description: current.description, image: itemIcon(ref) ?? current.image, ref }
           target.objects = target.objects!.filter(entry => entry.id !== current.id)
         } else if (current.kind === 'container' && current.open) {
           item = get(current.items, command.itemId)
@@ -810,6 +919,9 @@ export function applyCommand(room: Room, member: Member, command: Command) {
         throw new Conflict('ให้นำ Token ออกหลังจบการต่อสู้')
       }
       target.tokens = withTokenRoles(target, room.actors).filter(item => item.id !== token.id)
+      if (!room.scenes.some(scene => scene.tokens.some(entry => entry.actorId === token.actorId))) {
+        room.actors = room.actors.filter(actor => actor.id !== token.actorId || !actor.temp)
+      }
       return {}
     }
     case 'roll': {
@@ -954,7 +1066,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const combat = target.combat
       if (!combat) throw new Invalid('ยังไม่ได้เริ่มการต่อสู้')
       const currentActor = get(room.actors, combat.order[combat.turn].actorId)
-      if (member.role !== 'dm' && (currentActor.ownerId !== member.id || command.actorId !== currentActor.id)) throw new Forbidden('ยังไม่ถึงเทิร์นของคุณ')
+      if (member.role !== 'dm' && ((!currentActor.temp && currentActor.ownerId !== member.id) || command.actorId !== currentActor.id)) throw new Forbidden('ยังไม่ถึงเทิร์นของคุณ')
       advanceTurn(target, combat)
       return {}
     }
@@ -1072,7 +1184,8 @@ export function applyCommand(room: Room, member: Member, command: Command) {
       const creature = actor()
       const effect = get(creature.effects ?? [], command.effectId)
       const source = effect.sourceId ? room.actors.find(item => item.id === effect.sourceId) : undefined
-      if (member.role !== 'dm' && creature.ownerId !== member.id && source?.ownerId !== member.id) throw new Forbidden('คุณไม่ได้ควบคุมตัวนี้')
+      if (member.role !== 'dm' && effect.hidden) throw new Forbidden('Condition ลับใช้ได้เฉพาะ DM')
+      if (source?.ownerId !== member.id) owns(member, creature)
       if (effect.condition === 'Concentration') { breakConcentration(room, creature, 'เลิกตั้งสมาธิ'); return {} }
       creature.effects = (creature.effects ?? []).filter(entry => entry.id !== effect.id)
       if (!effect.hidden) addLog(room, { kind: 'combat', text: creature.name + ' พ้นจาก ' + effectName(effect) })
@@ -1081,6 +1194,7 @@ export function applyCommand(room: Room, member: Member, command: Command) {
     case 'effectSave': {
       const creature = actor()
       const effect = get(creature.effects ?? [], command.effectId)
+      if (member.role !== 'dm' && effect.hidden) throw new Forbidden('Condition ลับใช้ได้เฉพาะ DM')
       if (!effect.pending) throw new Conflict('ไม่มีการทอยเซฟที่รออยู่')
       if (command.skip === true) {
         requireDM(member)

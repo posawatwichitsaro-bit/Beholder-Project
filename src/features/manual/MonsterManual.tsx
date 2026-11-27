@@ -51,7 +51,9 @@ export function MonsterManual({ addTemplate, placeMonster, dragMonster }: {
   return <section className="manual">
     {selected && sheet ? <>
       <button onClick={() => setSelected(undefined)}>← กลับไปยังรายการ</button>
-      <header><small>{selected.size} · {selected.type}{selected.alignment ? ' · ' + selected.alignment : ''}</small><h2>{selected.name}</h2></header>
+      <header><small>{selected.size} · {selected.type}{selected.alignment ? ' · ' + selected.alignment : ''}</small><h2>{selected.name}</h2>
+        {sheet.portrait && <img className="manual-monster-art" src={sheet.portrait} alt={selected.name} />}
+      </header>
       <div className="manual-stats">{[['CR', selected.cr], ['AC', selected.ac], ['HP', selected.hp],
         ['Initiative', signed(selected.initiative)]].map(([key, value]) => <div key={key}><small>{key}</small><b>{value}</b></div>)}</div>
       <div className="inline">{placeMonster && <button className="primary" {...dragMonster?.(sheet)} onClick={() => placeMonster(sheet)}>วางมอนสเตอร์ในฉาก</button>}

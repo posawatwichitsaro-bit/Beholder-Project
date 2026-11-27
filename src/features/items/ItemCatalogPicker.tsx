@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { InventoryItem } from '../../../shared/model.ts'
 import { catalogItems, categoryLabels, inventoryFromCatalog, itemSummary, rarityOrder, variantName } from '../../../shared/itemCatalog.ts'
 import type { CatalogItem } from '../../../shared/itemCatalog.ts'
+import { itemIcon } from '../../../shared/catalogArt.ts'
 
 let loading: Promise<CatalogItem[]> | undefined
 /** The SRD item catalog (~570 KB), fetched once when someone first opens it. */
@@ -65,7 +66,7 @@ export function ItemCatalogPicker({ choose, close, actionLabel = 'เพิ่�
     <header className="item-catalog-head"><b>คลังไอเทม SRD 5.2.1</b><button type="button" onClick={close}>ปิดคลัง</button></header>
     {selected ? <div className="item-catalog-detail">
       <button type="button" onClick={() => setSelected(undefined)}>← กลับไปยังรายการ</button>
-      <h4>{selected.name}</h4>
+      <h4>{itemIcon(selected.id) && <img className="catalog-item-icon" src={itemIcon(selected.id)} alt="" />} {selected.name}</h4>
       <p className="item-badges">
         <span>{categoryLabels[selected.category] ?? selected.category}</span>
         {selected.rarity && <span data-rarity={selected.rarity}>{selected.rarity}</span>}
@@ -99,11 +100,12 @@ export function ItemCatalogPicker({ choose, close, actionLabel = 'เพิ่�
         : <small className="muted">{matches.length > shown ? 'แสดง ' + shown + ' จาก ' + matches.length + ' รายการ · พิมพ์เพื่อค้นให้แคบลง' : matches.length + ' รายการ'}</small>}
       <ul className="item-catalog-list">{matches.slice(0, shown).map(item => <li key={item.id}>
         <button type="button" onClick={() => open(item)}>
-          <b>{item.name}</b>
+          <b>{itemIcon(item.id) && <img className="catalog-item-icon" src={itemIcon(item.id)} alt="" loading="lazy" />} {item.name}</b>
           <small>{[categoryLabels[item.category] ?? item.category, item.rarity, item.attunement.required && 'Attunement'].filter(Boolean).join(' · ')}</small>
         </button>
       </li>)}</ul>
     </>}
-    <footer><a href="/data/SRD-LICENSE.txt" target="_blank" rel="noreferrer">SRD 5.2.1 · CC BY 4.0</a></footer>
+    <footer><a href="/data/SRD-LICENSE.txt" target="_blank" rel="noreferrer">SRD 5.2.1 · CC BY 4.0</a>
+      {' · '}<a href="/art/srd/inventory/CREDITS.md" target="_blank" rel="noreferrer">เครดิตภาพไอเทม</a></footer>
   </section>
 }

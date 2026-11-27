@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { Actor, InventoryItem, LootSkill, Snapshot } from '../../../shared/model.ts'
 import { commandId } from '../../lib/api.ts'
 import { armorFromCatalog, weaponAttack } from '../../../shared/itemCatalog.ts'
+import { itemIcon } from '../../../shared/catalogArt.ts'
 import { ItemCatalogPicker, loadItemCatalog } from '../items/ItemCatalogPicker.tsx'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
@@ -30,8 +31,9 @@ export const blankItem = (bonus = false): InventoryItem => ({
 const firstLine = (text: string) => text.split(/\r?\n/)[0]
 
 export function ItemName({ item, loot = false }: { item: InventoryItem; loot?: boolean }) {
+  const image = item.image ?? itemIcon(item.ref)
   return <div className="item-name">
-    <span className={loot && item.lootTier === 'bonus' ? 'bonus-loot' : undefined}>{item.name}{(item.quantity ?? 1) > 1 && ' ×' + item.quantity}</span>
+    <span className={loot && item.lootTier === 'bonus' ? 'bonus-loot' : undefined}>{image && <img className="catalog-item-icon" src={image} alt="" />} {item.name}{(item.quantity ?? 1) > 1 && ' ×' + item.quantity}</span>
     {(item.rarity || item.attunement) && <span className="item-badges">
       {item.rarity && <span data-rarity={item.rarity}>{item.rarity}</span>}{item.attunement && <span>Attunement</span>}
     </span>}
@@ -71,7 +73,7 @@ export function InventoryPanel({ actor, send, expanded = false }: { actor: Actor
   }
   return <Wrapper className={'inventory' + (expanded ? ' inventory-expanded' : '')}><Title>Inventory ({items.length})</Title>
     {items.length ? <ul>{items.map(item => <li key={item.id}>
-      {item.image && <img src={item.image} alt="" />}<ItemName item={item} loot={monster} />
+      <ItemName item={item} loot={monster} />
       {!monster && item.ref?.includes(':equipment:') && item.category === 'weapon' && <button type="button"
         disabled={actor.attacks?.some(attack => attack.name === item.name)} title="เพิ่มเป็นการโจมตีบนชีต (คิด Proficiency ให้แล้ว)"
         onClick={() => void equip(item, 'attack')}>{actor.attacks?.some(attack => attack.name === item.name) ? 'อยู่ในการโจมตีแล้ว' : 'ใช้เป็นการโจมตี'}</button>}

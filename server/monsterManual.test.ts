@@ -53,6 +53,8 @@ test('the server keeps trained saves and the catalog reference on a monster temp
   assert.deepEqual(saved.savingThrows?.WIS, { ability: 'WIS', training: 1, adjustment: 0 })
   assert.equal(saved.skillChecks?.Perception?.training, 2)
   assert.equal(saved.monsterReference?.id, 'srd-5.2.1:adult-red-dragon')
+  assert.equal(saved.portrait, '/art/srd/monsters/adult-red-dragon.webp')
+  assert(readFileSync(new URL('../public' + saved.portrait, import.meta.url)).includes(Buffer.from('WEBP')))
   assert.match(saved.monsterReference?.url ?? '', /^https:\/\/www\.dndbeyond\.com\//)
   const forged = sheetOf('Goblin Warrior')
   forged.monsterReference = { ...forged.monsterReference!, url: 'https://example.com/phish' }

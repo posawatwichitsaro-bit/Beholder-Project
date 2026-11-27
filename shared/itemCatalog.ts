@@ -2,6 +2,7 @@ import type { Ability, DamageKind, InventoryItem, Sheet } from './model.ts'
 import { damageKinds } from './model.ts'
 import { abilityModifier } from './characterStats.ts'
 import type { ArmorSettings } from './characterStats.ts'
+import { itemIcon } from './catalogArt.ts'
 
 /** One template from the SRD 5.2.1 item catalog (research/item, schema v1). */
 export type CatalogItem = {
@@ -69,7 +70,7 @@ export function inventoryFromCatalog(item: CatalogItem, options: { variant?: str
   if (description.length > 2000) description = description.slice(0, 2000 - link.length - 1).trimEnd() + '…' + link
   return {
     name: (variant ? variantName(item, variant.label) : item.name).slice(0, 120),
-    description, quantity: Math.max(1, Math.min(999, options.quantity ?? 1)),
+    description, image: itemIcon(item.id), quantity: Math.max(1, Math.min(999, options.quantity ?? 1)),
     ...(item.id === 'srd-5.2.1:equipment:thieves-tools' ? { tool: 'thievesTools' as const } : {}),
     ref: item.id, category: item.category,
     ...(variant?.rarity ?? item.rarity ? { rarity: variant?.rarity ?? item.rarity! } : {}),

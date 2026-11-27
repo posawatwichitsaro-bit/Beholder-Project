@@ -3,6 +3,7 @@ import { objectLabels } from '../../../shared/model.ts'
 import type { Actor, ObjectDefinition, ObjectKind, SceneObject } from '../../../shared/model.ts'
 import { PictureInput } from '../sheets/PictureInput.tsx'
 import { ItemName } from './Inventory.tsx'
+import { sceneArt, sceneArtByImage } from '../../../shared/catalogArt.ts'
 
 type Point = { x: number; y: number }
 type Send = (command: Record<string, unknown>) => Promise<boolean>
@@ -11,6 +12,7 @@ export function ObjectEditor({ initial, point, save, close, error }: {
   initial?: ObjectDefinition; point?: Point; save: (value: ObjectDefinition, position?: Point) => Promise<boolean>; close: () => void; error?: string
 }) {
   const [kind, setKind] = useState<ObjectKind>(initial?.kind ?? 'prop')
+  const [name, setName] = useState(initial?.name ?? '')
   const [image, setImage] = useState(initial?.image)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -46,8 +48,20 @@ export function ObjectEditor({ initial, point, save, close, error }: {
     <label>ประเภท<select value={kind} onChange={event => setKind(event.target.value as ObjectKind)}>
       {Object.entries(objectLabels).map(([type, label]) => <option key={type} value={type}>{label}</option>)}
     </select></label>
-    <label>ชื่อ Object<input name="name" required maxLength={120} defaultValue={initial?.name} /></label>
+    <label>ชื่อ Object<input name="name" required maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
     <label>รายละเอียด<textarea name="description" maxLength={2000} rows={2} defaultValue={initial?.description} /></label>
+    <label>ภาพสำหรับวางบนแผนที่<select value={image && sceneArtByImage(image) ? image : ''} onChange={event => {
+      const art = sceneArtByImage(event.target.value)
+      if (!art) { setImage(undefined); return }
+      setImage(art.image)
+      if (!name.trim()) {
+        setName(art.name)
+        setKind(['Barrel', 'Chest', 'Crate'].includes(art.name) ? 'container' : art.name === 'Tent' ? 'prop' : 'item')
+      }
+    }}>
+      <option value="">เลือกภาพจากคลัง</option>
+      {sceneArt.map(art => <option value={art.image} key={art.image}>{art.name}</option>)}
+    </select></label>
     <PictureInput label="รูป Object" value={image} change={setImage} pending={setLoading} />
     <div className="form-grid">
       {point && <><label>ช่อง X<input required name="x" type="number" step=".5" min={-1000} max={1000} defaultValue={point.x} /></label>
