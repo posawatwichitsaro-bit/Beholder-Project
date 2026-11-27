@@ -96,3 +96,15 @@
 .table .dice-quick button { font-size: var(--bh-text-xs); padding: 6px 4px; }
 .dice-recent { display: flex; flex-wrap: wrap; gap: 4px; }
 .dice-typed summary { cursor: pointer; color: var(--bh-text-muted); font-size: var(--bh-text-sm); }
+
+/* ---------- 0.10: 3D dice in the reveal ---------- */
+.dice-reveal-3d { position: relative; width: 120px; height: 84px; flex: none; }
+.dice-reveal-3d[data-dice="3"], .dice-reveal-3d[data-dice="4"] { width: 180px; }
+.dice-reveal-3d[data-dice="5"], .dice-reveal-3d[data-dice="6"] { width: 240px; }
+.dice-reveal-3d canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* The reveal stays up while 3D dice land, and the total waits for them (no spoiler mid-tumble). */
+.dice-reveal[data-3d] { animation: dice-in .25s var(--bh-ease) both, dice-out .35s ease-in 2.25s forwards; }
+.dice-reveal[data-3d][data-outcome=critical], .dice-reveal[data-3d][data-outcome=fumble] { animation: dice-in .25s var(--bh-ease) both, dice-out .35s ease-in 3.15s forwards; }
+.dice-reveal[data-3d] .dice-reveal-total, .dice-reveal[data-3d] .dice-reveal-banner { opacity: 0; animation: dice-total-in .25s ease-out 1.15s forwards; }
+@keyframes dice-total-in { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .dice-reveal[data-3d] .dice-reveal-total, .dice-reveal[data-3d] .dice-reveal-banner { opacity: 1; animation: none; } }

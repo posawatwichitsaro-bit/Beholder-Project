@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto'
 import { chromium } from 'playwright-core'
 import type { Browser, Page } from 'playwright-core'
 import { blankSheet } from '../shared/model.ts'
+/** The board's canvas (the 3D dice add their own canvas while a roll shows). */
+const boardCanvas = 'canvas.board-canvas'
 import type { Snapshot } from '../shared/model.ts'
 
 const base = process.env.BEHOLDER_TEST_URL ?? 'http://127.0.0.1:3000'
@@ -69,8 +71,8 @@ test('Ctrl+C copies a mixed selection and Ctrl+V places it in another room tab',
   await from.command({ type: 'place', sceneId: from.sceneId, x: 2, y: 1, kind: 'monster', sheet: { ...blankSheet('monster'), name: 'Goblin' } })
   await from.command({ type: 'importObject', sceneId: from.sceneId, x: 3, y: 2, kind: 'container', name: 'Chest', items: ['Gem'] })
   await source.goto(base + '/room/' + from.id)
-  await source.locator('canvas').waitFor()
-  const board = (await source.locator('canvas').boundingBox())!
+  await source.locator(boardCanvas).waitFor()
+  const board = (await source.locator(boardCanvas).boundingBox())!
   await source.mouse.move(board.x + 74, board.y + 74)
   await source.keyboard.down('Shift')
   await source.mouse.down()
@@ -82,7 +84,7 @@ test('Ctrl+C copies a mixed selection and Ctrl+V places it in another room tab',
   await source.keyboard.press('Control+c')
   assert.deepEqual(await (await copied).json(), { copied: 2, skipped: 1 })
   await destination.goto(base + '/room/' + to.id)
-  const next = destination.locator('canvas')
+  const next = destination.locator(boardCanvas)
   await next.waitFor()
   await next.hover({ position: { x: 245, y: 195 } })
   const pasted = destination.waitForResponse(response => response.url().endsWith('/commands') && response.request().postDataJSON()?.type === 'pasteBoard')
@@ -334,7 +336,7 @@ test('manage scenes and reuse an account Object in another room', { timeout: 600
   async function placeTent() {
     await page.getByRole('button', exact('วางในฉาก')).click()
     await page.getByText('คลิกช่องเพื่อวาง Camp Tent', { exact: true }).waitFor()
-    await page.locator('canvas').click({ position: { x: 180, y: 135 } })
+    await page.locator(boardCanvas).click({ position: { x: 180, y: 135 } })
     await page.getByText('คลิกช่องเพื่อวาง Camp Tent', { exact: true }).waitFor({ state: 'hidden' })
   }
 
@@ -425,7 +427,7 @@ test('DM reorders scene cards, lines the grid up on the map and tidies up in the
   await page.getByRole('button', exact('ปรับ Grid บนภาพ')).click()
   const calibrator = page.getByRole('region', exact('ปรับ Grid บนภาพ'))
   await calibrator.waitFor()
-  const box = (await page.locator('canvas').boundingBox())!
+  const box = (await page.locator(boardCanvas).boundingBox())!
   await page.mouse.move(box.x + 500, box.y + 300)
   await page.mouse.down()
   await page.mouse.move(box.x + 580, box.y + 340, { steps: 4 })
@@ -506,7 +508,7 @@ test('first visit shows the role tour once; display settings stay on this device
   await openPanel(page, 'ตั้งค่าการแสดงผล')
   await page.getByRole('button', exact('110%')).click()
   assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize), '17.6px')
-  await page.getByLabel('ลดแอนิเมชัน').check()
+  await page.getByRole('checkbox', { name: /^ลดแอนิเมชัน/ }).check()
   assert.equal(await page.evaluate(() => document.documentElement.dataset.motion), 'reduce')
   await page.getByLabel('แสดงเส้น Grid บนกระดาน').uncheck()
   assert.equal(await page.getByRole('button', exact('แสดง Grid')).getAttribute('aria-pressed'), 'false')
@@ -679,10 +681,10 @@ test('the DM opens token conditions from the board, sets Poisoned and steps Exha
   await page.goto(base + '/room/' + room.id)
   await openPanel(page, 'ชีตในห้อง')
   await page.getByRole('button', exact('วาง Mira')).click()
-  await page.locator('canvas').click({ position: { x: 210, y: 160 } })
+  await page.locator(boardCanvas).click({ position: { x: 210, y: 160 } })
   await waitInPage(page, async url => (await (await fetch(url)).json()).scenes[0].tokens.length === 1, path)
 
-  await page.locator('canvas').click({ position: { x: 210, y: 160 }, button: 'right' })
+  await page.locator(boardCanvas).click({ position: { x: 210, y: 160 }, button: 'right' })
   await page.locator('.context-popover').getByRole('button', exact('Condition')).click()
   const panel = page.getByRole('dialog', exact('Condition · Mira'))
   await panel.getByText('ไม่มี Condition', { exact: true }).waitFor()
@@ -723,7 +725,7 @@ test('Hold Person from the board: a repeat save comes due at the end of the targ
   for (const [name, x] of [['Kael', 210], ['Lyra', 330]] as const) {
     await openPanel(page, 'ชีตในห้อง')
     await page.getByRole('button', exact('วาง ' + name)).click()
-    await page.locator('canvas').click({ position: { x, y: 160 } })
+    await page.locator(boardCanvas).click({ position: { x, y: 160 } })
     await waitInPage(page, async ([url, count]) => (await (await fetch(url)).json()).scenes[0].tokens.length === count, [path, name === 'Kael' ? 1 : 2] as const)
   }
   const actorId = async (name: string) => (await state()).actors.find(actor => actor.name === name)!.id
@@ -731,7 +733,7 @@ test('Hold Person from the board: a repeat save comes due at the end of the targ
   const lyra = await actorId('Lyra')
   await command({ type: 'combat', sceneId: (await state()).activeSceneId, participants: [kael, lyra] })
 
-  await page.locator('canvas').click({ position: { x: 210, y: 160 }, button: 'right' })
+  await page.locator(boardCanvas).click({ position: { x: 210, y: 160 }, button: 'right' })
   await page.locator('.context-popover').getByRole('button', exact('Condition')).click()
   const panel = page.getByRole('dialog', exact('Condition · Kael'))
   await panel.getByText('เพิ่ม Condition แบบมีที่มา', { exact: true }).click()
@@ -789,7 +791,7 @@ test('a player clicks a monster to target it and attacks from the token bar; the
     attacks: [{ name: 'Shortbow', bonus: 4, damage: '1d6+2', damageKind: 'piercing' }] } })
   await openPanel(player, 'ชีตในห้อง')
   await player.getByRole('button', exact('วาง Vex')).click()
-  await player.locator('canvas').click({ position: { x: 210, y: 160 } })
+  await player.locator(boardCanvas).click({ position: { x: 210, y: 160 } })
   await waitInPage(player, async url => (await (await fetch(url)).json()).scenes[0].tokens.length === 1, path)
   const vexToken = (await state(dm)).scenes[0].tokens[0]
   await command(dm, { type: 'place', sceneId: (await state(dm)).scenes[0].id, kind: 'monster',
@@ -809,7 +811,7 @@ test('a player clicks a monster to target it and attacks from the token bar; the
 
   // Clicking the monster on the board targets it; the player's own sheet stays open.
   const cell = (await state(player)).scenes[0].cell
-  await player.locator('canvas').click({ position: { x: 210 + 2 * cell, y: 160 } })
+  await player.locator(boardCanvas).click({ position: { x: 210 + 2 * cell, y: 160 } })
   const bar = player.getByRole('toolbar', exact('คำสั่งของ Bandit'))
   await bar.waitFor()
   await sheet.waitFor()
@@ -852,7 +854,7 @@ test('0.06: dice pool, signed quick HP, box selection, encounter end, and a mova
   await page.keyboard.press('Escape')
 
   // Press and hold on empty map, then drag around both monsters: a selection box.
-  const canvas = page.locator('canvas')
+  const canvas = page.locator(boardCanvas)
   const frame = (await canvas.boundingBox())!
   const cellAt = (x: number, y: number) => ({ x: frame.x + 36 + x * 48, y: frame.y + 36 + y * 48 })
   const from = cellAt(1.2, 1.2)
@@ -931,7 +933,7 @@ test('0.07: a player sets an SRD item on the map, drops a bag item to the floor,
   await mira.locator('.item-catalog-list').getByRole('button', { name: /^Rope/ }).first().click()
   await mira.getByRole('button', exact('วางบนฉาก')).click()
   await mira.getByText('คลิกช่องเพื่อวาง Rope').waitFor()
-  const frame = (await mira.locator('canvas').boundingBox())!
+  const frame = (await mira.locator(boardCanvas).boundingBox())!
   const cellAt = (x: number, y: number) => ({ x: frame.x + 36 + x * 48, y: frame.y + 36 + y * 48 })
   const spot = cellAt(3.5, 2.5)
   await mira.mouse.click(spot.x, spot.y)
@@ -1082,7 +1084,7 @@ test('0.08: the board draws with Pixi, tokens glide to a new square, and an atta
     await command({ type: 'place', sceneId, kind: 'monster', sheet: { ...blankSheet('monster'), name, hp: 9, maxHp: 9, ac: 1 }, x, y: 1 })
   }
   await page.goto(base + '/room/' + room.id)
-  await page.locator('canvas[data-renderer=pixi]').waitFor()
+  await page.locator(boardCanvas + '[data-renderer=pixi]').waitFor()
   const board = await page.evaluate(() => {
     const b = (window as unknown as { beholderBoard: { app: { renderer: { name: string }; ticker: { started: boolean }; stage: { children: unknown[] } } } }).beholderBoard
     return { backend: b.app.renderer.name, running: b.app.ticker.started, layers: b.app.stage.children.length }
@@ -1143,7 +1145,7 @@ test('0.09: two players see different parts of a walled map; the DM draws a wall
   }
   for (const page of [dm, mira, bram]) {
     await page.goto(base + '/room/' + room.id)
-    await page.locator('canvas[data-renderer=pixi]').waitFor()
+    await page.locator(boardCanvas + '[data-renderer=pixi]').waitFor()
   }
   const sees = async (page: Page) => ((await (await page.request.get(path)).json()) as Snapshot).scenes[0].tokens.length
   assert.equal(await sees(mira), 1, 'Mira sees only herself: the door is shut')
@@ -1156,7 +1158,7 @@ test('0.09: two players see different parts of a walled map; the DM draws a wall
   const miraToken = state.scenes[0].tokens[0]
   await command(mira, { type: 'move', sceneId, tokenId: miraToken.id, x: 5, y: 3 })
   await mira.waitForTimeout(500)
-  const frame = (await mira.locator('canvas').boundingBox())!
+  const frame = (await mira.locator(boardCanvas).boundingBox())!
   await mira.mouse.click(frame.x + 36 + 6 * 48, frame.y + 36 + 3.5 * 48)
   await waitInPage(mira, async url => (await (await fetch(url)).json()).scenes[0].tokens.length === 3, path)
   await mira.waitForTimeout(400)
@@ -1166,7 +1168,7 @@ test('0.09: two players see different parts of a walled map; the DM draws a wall
   await dm.getByRole('button', exact('การมองเห็น')).click()
   const tools = dm.getByRole('toolbar', { name: 'เครื่องมือการมองเห็น' })
   await tools.getByRole('button', exact('ผนัง')).click()
-  const board = (await dm.locator('canvas').boundingBox())!
+  const board = (await dm.locator(boardCanvas).boundingBox())!
   await dm.mouse.click(board.x + 36 + 2 * 48, board.y + 36 + 6 * 48)
   await dm.mouse.click(board.x + 36 + 4 * 48, board.y + 36 + 6 * 48)
   await dm.mouse.click(board.x + 36 + 4 * 48, board.y + 36 + 6 * 48, { button: 'right' })
@@ -1180,6 +1182,57 @@ test('0.09: two players see different parts of a walled map; the DM draws a wall
   // Night: the ghoul's room goes dark for Mira unless light reaches it.
   await tools.getByLabel('แสงของฉาก').selectOption({ label: 'กลางคืน' })
   await waitInPage(mira, async url => (await (await fetch(url)).json()).scenes[0].tokens.length === 1, path)
+})
+
+test('0.10: dice tumble in 3D and land on the rolled faces; reduced motion keeps the flat die', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+  const room: Snapshot = await (await page.request.post(base + '/api/rooms', { data: { name: 'Release 0.10 dice', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const command = async (body: Record<string, unknown>) => {
+    const state = await (await page.request.get(path)).json() as Snapshot
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: state.revision } })
+    assert.equal(response.status(), 200, await response.text())
+  }
+  await command({ type: 'scene', name: 'Tavern', cell: 48, originX: 0, originY: 0 })
+  await page.goto(base + '/room/' + room.id)
+  await page.locator(boardCanvas + '[data-renderer=pixi]').waitFor()
+
+  // A 2d6+1d4 roll: three dice in the reveal, drawn by three.js (lazy-loaded), with no errors.
+  await command({ type: 'roll', formula: '2d6+1d4' })
+  const tray = page.locator('.dice-reveal-3d[data-dice="3"]')
+  await tray.waitFor()
+  await page.locator('.dice-reveal-3d[data-ready=true] canvas').waitFor()
+  await page.waitForFunction(() => {
+    const dice = (window as unknown as { beholderDice?: { renderer: { info: { render: { calls: number } } } } }).beholderDice
+    return (dice?.renderer.info.render.calls ?? 0) > 0
+  })
+  // The board canvas is still the only one the board tests click.
+  assert.equal(await page.locator(boardCanvas).count(), 1)
+
+  // The renderer survives a lost WebGL context.
+  await page.evaluate(async () => {
+    const dice = (window as unknown as { beholderDice: { renderer: { forceContextLoss: () => void; forceContextRestore: () => void } } }).beholderDice
+    dice.renderer.forceContextLoss()
+    await new Promise(resolve => setTimeout(resolve, 200))
+    dice.renderer.forceContextRestore()
+  })
+  await page.locator('.dice-reveal').waitFor({ state: 'detached', timeout: 5000 })
+  await command({ type: 'roll', formula: '1d20' })
+  await page.locator('.dice-reveal-3d[data-dice="1"]').waitFor()
+  await page.locator('.dice-reveal').waitFor({ state: 'detached', timeout: 5000 })
+
+  // Reduced motion: the flat die, no 3D tray.
+  await openPanel(page, 'ตั้งค่าการแสดงผล')
+  await page.getByRole('checkbox', { name: /^ลดแอนิเมชัน/ }).check()
+  await command({ type: 'roll', formula: '1d8' })
+  await page.locator('.dice-reveal-die').waitFor()
+  assert.equal(await page.locator('.dice-reveal-3d').count(), 0)
+  assert.deepEqual(errors.filter(message => !/WebGL context|CONTEXT_LOST/i.test(message)), [])
 })
 
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
@@ -1233,7 +1286,7 @@ test('a player places an owned main and a library companion, then drives the mai
   await openPanel(player, 'ชีตในห้อง')
   // The first character a player places is their main token; the next one is a companion, no dialog needed.
   await player.getByRole('button', exact('วาง Warden')).click()
-  const board = player.locator('canvas')
+  const board = player.locator(boardCanvas)
   await board.click({ position: { x: 155, y: 120 } })
   await player.getByRole('button', { name: /↑ ↓ ← → Warden/ }).waitFor()
   await openPanel(player, 'คลังส่วนตัว')
@@ -1345,7 +1398,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await one.getByRole('region', exact('ลูกเต๋า')).waitFor()
   await one.keyboard.press('Escape')
   await one.locator('#table-drawer').waitFor({ state: 'hidden' })
-  const playerBoard = await one.locator('canvas').boundingBox()
+  const playerBoard = await one.locator(boardCanvas).boundingBox()
   assert.equal(playerBoard?.width, one.viewportSize()?.width)
   assert.equal(playerBoard?.height, one.viewportSize()!.height - 58)
   await openPanel(two, 'ฉากและแผนที่')
@@ -1362,7 +1415,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await createSheet(one, 'Scout', false, true)
   await createSheet(two, 'Mage')
   await createSheet(dm, 'Rat', true)
-  const canvas = dm.locator('canvas')
+  const canvas = dm.locator(boardCanvas)
   await openPanel(dm, 'ชีตในห้อง')
   await dm.getByRole('button', exact('วาง Scout')).click()
   await canvas.click({ position: { x: 165, y: 115 } })
@@ -1386,7 +1439,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await dm.getByRole('button', exact('เปิดชีต')).click()
   await dm.getByText('7/10', { exact: true }).waitFor()
   await one.keyboard.press('Escape')
-  await one.locator('canvas').click({ position: { x: 165, y: 115 }, button: 'right' })
+  await one.locator(boardCanvas).click({ position: { x: 165, y: 115 }, button: 'right' })
   assert.equal(await one.getByRole('button', exact('ปรับ HP')).count(), 0)
   await one.getByRole('button', exact('เปิดชีต')).click()
   await one.getByRole('button', exact('STR check')).click()
@@ -1424,7 +1477,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await dm.getByRole('button', exact('วาง Object')).click()
   await dm.getByRole('dialog', { name: 'นำเข้า Object' }).waitFor({ state: 'hidden' })
   await one.keyboard.press('Escape')
-  await one.locator('canvas').click({ position: { x: 163, y: 203 }, button: 'right' })
+  await one.locator(boardCanvas).click({ position: { x: 163, y: 203 }, button: 'right' })
   await one.getByRole('button', exact('โต้ตอบกับ Object')).click()
   await one.getByRole('button', exact('เก็บเข้า Inventory')).click()
   await one.getByRole('dialog', { name: 'Silver key' }).waitFor({ state: 'hidden' })
@@ -1448,7 +1501,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await dm.getByRole('button', exact('วาง Object')).click()
   await dm.getByRole('dialog', { name: 'นำเข้า Object' }).waitFor({ state: 'hidden' })
   await one.keyboard.press('Escape')
-  await one.locator('canvas').click({ position: { x: 163, y: 203 }, button: 'right' })
+  await one.locator(boardCanvas).click({ position: { x: 163, y: 203 }, button: 'right' })
   await one.getByRole('button', exact('โต้ตอบกับ Object')).click()
   await one.getByRole('button', exact('ทอยสะเดาะล็อก')).click()
   await one.getByText(/สะเดาะสำเร็จ · ผลทอย/).waitFor()
@@ -1466,7 +1519,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await playerRail.getByRole('button', exact('ไปที่ Token Scout')).click()
   // Focus centres the board on Scout: the token's centre sits at the middle of the canvas (the view is on data attributes).
   await waitInPage(one, async url => {
-    const canvas = document.querySelector('canvas')!
+    const canvas = document.querySelector<HTMLCanvasElement>('canvas.board-canvas')!
     const [x, y] = canvas.dataset.camera!.split(',').map(Number)
     const zoom = Number(canvas.dataset.zoom)
     const room = await (await fetch(url)).json()
@@ -1530,7 +1583,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   assert.equal((await settings).status(), 200)
   await dm.getByRole('dialog', { name: 'ค้นศพ Rat 1' }).getByRole('button', exact('ปิด')).click()
   await two.keyboard.press('Escape')
-  await two.locator('canvas').click({ position: { x: 260, y: 115 }, button: 'right' })
+  await two.locator(boardCanvas).click({ position: { x: 260, y: 115 }, button: 'right' })
   await two.getByRole('button', exact('ค้นศพ / Loot')).click()
   await two.getByRole('button', exact('ทอยค้นหาและรับ Loot')).click()
   await two.getByText(/ค้นพบของครบ · ผลทอย/).waitFor()
@@ -1570,7 +1623,7 @@ test('three browser seats can place tokens, roll, take a turn and switch scenes'
   await createScene(two, 'Mobile')
   await two.keyboard.press('Escape')
   await two.locator('#table-drawer').waitFor({ state: 'hidden' })
-  const mobileBoard = (await two.locator('canvas').boundingBox())!
+  const mobileBoard = (await two.locator(boardCanvas).boundingBox())!
   assert.equal(mobileBoard.width, 390)
   assert.equal(mobileBoard.height, 722)
   await two.getByRole('button', exact('คำสั่งกระดาน')).click()
@@ -1599,7 +1652,7 @@ test('DM searches the SRD, saves a monster template and places the creature with
   await page.getByRole('button', exact('เพิ่มต้นแบบแล้ว')).waitFor()
   await page.getByRole('button', exact('วางมอนสเตอร์ในฉาก')).click()
   const placed = page.waitForResponse(r => r.url() === path + '/commands' && r.request().postDataJSON()?.type === 'place')
-  await page.locator('canvas').click({ position: { x: 210, y: 160 } })
+  await page.locator(boardCanvas).click({ position: { x: 210, y: 160 } })
   assert.equal((await placed).status(), 200)
   const result: Snapshot = await (await page.request.get(path)).json()
   const monster = result.actors[0]
@@ -1618,7 +1671,7 @@ test('DM searches the SRD, saves a monster template and places the creature with
   assert.equal(result.scenes[0].tokens[0].actorId, monster.id)
 
   // The DM drags an object to a new cell; selecting it shows its commands.
-  const canvas = page.locator('canvas')
+  const canvas = page.locator(boardCanvas)
   await canvas.click({ position: { x: 400, y: 300 }, button: 'right' })
   await page.getByRole('button', exact('นำเข้า Object ที่นี่')).click()
   await page.getByLabel('ชื่อ Object').fill('Barrel')

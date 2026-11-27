@@ -36,6 +36,8 @@ export function SettingsPanel({ role, replayTour }: { role: Role; replayTour: ()
         <span><b>ลดแอนิเมชัน</b><small>ปิดการเคลื่อนไหวและเอฟเฟกต์ (ถ้าเครื่องตั้งไว้แล้วจะลดให้อยู่แล้ว)</small></span></label>
       <label className="settings-toggle"><input type="checkbox" checked={prefs.showGrid} onChange={event => prefs.update({ showGrid: event.target.checked })} />
         <span><b>แสดงเส้น Grid บนกระดาน</b><small>Token ยังเดินตามช่องเหมือนเดิมแม้ซ่อนเส้น</small></span></label>
+      <label className="settings-toggle"><input type="checkbox" checked={prefs.dice3d} disabled={prefs.reduceMotion} onChange={event => prefs.update({ dice3d: event.target.checked })} />
+        <span><b>ลูกเต๋า 3D</b><small>ลูกเต๋ากลิ้งแล้วหยุดที่หน้าที่ทอยได้ (ปิดเองเมื่อเปิดลดแอนิเมชัน)</small></span></label>
     </fieldset>
     {role === 'dm' && <fieldset className="settings-group">
       <legend>กติกาของห้อง</legend>

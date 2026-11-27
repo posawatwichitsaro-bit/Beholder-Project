@@ -667,7 +667,7 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
   })
 
   return <section className="board">
-    <canvas ref={canvas} className={(areaKind || calibrate ? 'drawing-aoe' : '') + (panning ? ' panning' : '') + (tool === 'measure' ? ' measuring' : '')}
+    <canvas ref={canvas} className={'board-canvas' + (areaKind || calibrate ? ' drawing-aoe' : '') + (panning ? ' panning' : '') + (tool === 'measure' ? ' measuring' : '')}
       tabIndex={0} aria-label="กระดานแผนที่" data-camera={Math.round(camera.x) + ',' + Math.round(camera.y)} data-zoom={zoom}
       data-renderer={ready ? 'pixi' : 'loading'} onPointerDown={down} onPointerMove={drag} onPointerUp={up}
       onContextMenu={event => {

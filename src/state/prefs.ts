@@ -15,6 +15,8 @@ export type PrefValues = {
   reduceMotion: boolean
   /** Grid lines on the board (calibration always shows them). */
   showGrid: boolean
+  /** 3D dice in the roll reveal (off by itself when motion is reduced). */
+  dice3d: boolean
   /** First-run tour finished or skipped, per role. */
   tourSeen: Record<Role, boolean>
   /** Where each movable HUD piece was dragged to, as an offset from its usual place (px). */
@@ -27,7 +29,7 @@ type Prefs = PrefValues & {
 
 const key = 'beholder.prefs'
 export const uiScales = [0.9, 1, 1.1, 1.25] as const
-export const defaultPrefs: PrefValues = { sound: true, uiScale: 1, reduceMotion: false, showGrid: true, tourSeen: { dm: false, player: false }, layout: {} }
+export const defaultPrefs: PrefValues = { sound: true, uiScale: 1, reduceMotion: false, showGrid: true, dice3d: true, tourSeen: { dm: false, player: false }, layout: {} }
 
 /** Stored values, checked one by one so a bad or old entry falls back to its default. */
 export function readPrefs(raw: string | null): PrefValues {
@@ -41,6 +43,7 @@ export function readPrefs(raw: string | null): PrefValues {
     uiScale: Number.isFinite(scale) ? Math.min(1.25, Math.max(0.9, scale)) : defaultPrefs.uiScale,
     reduceMotion: flag('reduceMotion', defaultPrefs.reduceMotion),
     showGrid: flag('showGrid', defaultPrefs.showGrid),
+    dice3d: flag('dice3d', defaultPrefs.dice3d),
     tourSeen: { dm: tour.dm === true, player: tour.player === true },
     layout: readLayout(stored.layout)
   }
@@ -65,7 +68,7 @@ function persist(prefs: PrefValues) {
   try { localStorage.setItem(key, JSON.stringify(prefs)) }
   catch { /* storage unavailable: keep the setting for this visit only */ }
 }
-const values = ({ sound, uiScale, reduceMotion, showGrid, tourSeen, layout }: PrefValues): PrefValues => ({ sound, uiScale, reduceMotion, showGrid, tourSeen, layout })
+const values = ({ sound, uiScale, reduceMotion, showGrid, dice3d, tourSeen, layout }: PrefValues): PrefValues => ({ sound, uiScale, reduceMotion, showGrid, dice3d, tourSeen, layout })
 
 export const usePrefs = create<Prefs>()((set, get) => ({
   ...load(),
