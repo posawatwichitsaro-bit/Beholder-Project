@@ -1,5 +1,6 @@
 import type { Area } from './area.ts'
 import type { ActorVision, SceneVision } from './vision.ts'
+import type { TurnUse } from './economy.ts'
 import type { CharacterCalculations, CheckBonus, Skill } from './characterStats.ts'
 
 export const abilities = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'] as const
@@ -61,6 +62,8 @@ export type Sheet = {
   /** SRD subclass and feats picked when levelling; a few have effects worked out for you (shared/progression.ts). */
   subclass?: string
   feats?: string[]
+  /** Weapon attacks per Attack action, when the DM sets it (else Multiattack or Extra Attack decide). */
+  attacksPerAction?: number
   /** Vision range, Darkvision and a carried light (the DM sets these; players can light or put out their own light). */
   vision?: ActorVision
 }
@@ -150,6 +153,8 @@ export type Combat = {
   deathSaveAt?: string
   /** Feet the creature whose turn it is has moved this turn (diagonals count 5 ft, 2024 rules). */
   moved?: { actorId: string; turnKey: string; feet: number }
+  /** Action, Bonus Action and Reaction use per creature (shared/economy.ts); a creature's entry resets when its turn starts. */
+  uses?: Record<string, TurnUse>
 }
 export function nextLivingTurn(combat: Combat, isDead: (actorId: string) => boolean) {
   for (let offset = 1; offset <= combat.order.length; offset++) {

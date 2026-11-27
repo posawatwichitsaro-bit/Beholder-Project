@@ -10,6 +10,7 @@ import { usePrefs } from '../../state/prefs.ts'
 import { playTurnSound } from '../dice/sound.ts'
 import { MoveHandle, useMovable } from '../../ui/index.ts'
 import { hasCondition } from '../../../shared/effects.ts'
+import { TurnChips } from './TurnChips.tsx'
 import type { Send } from '../../state/useCommand.ts'
 
 /**
@@ -103,6 +104,7 @@ export function TurnBanner({ scene, room, send }: { scene: Scene; room: Snapshot
   return <div className="turn-banner" role="status" {...bannerMovable}>
     <MoveHandle id="turn-banner" label="ป้ายถึงเทิร์น" />
     <span className="turn-banner-text">ถึงเทิร์นของคุณ, {mine.name}</span>
+    <TurnChips actor={mine} scene={scene} command={command => send({ ...command, sceneId: scene.id })} compact />
     <button type="button" onClick={() => void send({ type: 'endTurn', sceneId: scene.id, actorId: mine.id })}>จบเทิร์น</button>
   </div>
 }

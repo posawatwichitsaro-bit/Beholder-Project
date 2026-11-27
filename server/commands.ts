@@ -19,6 +19,8 @@ import { key, playerView, tokenSeen, wallsForPlayer } from '../shared/vision.ts'
 import type { ActorVision, Ambient, Door, LightSource, SceneVision, Wall } from '../shared/vision.ts'
 import { gridFeet } from '../shared/movement.ts'
 import { afterCommand, beforeCommand, isUndoable, undoLast } from './undo.ts'
+import { freshUse } from '../shared/economy.ts'
+import type { TurnUse } from '../shared/economy.ts'
 import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
 export class Forbidden extends Error {}
@@ -348,6 +350,7 @@ export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory
     sheet.subclass = input.subclass as string
   }
   if (input.vision !== undefined) sheet.vision = parseActorVision(input.vision)
+  if (input.attacksPerAction !== undefined && input.attacksPerAction !== null && input.attacksPerAction !== '') sheet.attacksPerAction = number(input.attacksPerAction, 1, 10)
   if (input.feats !== undefined) {
     if (!Array.isArray(input.feats) || input.feats.length > 20) throw new Invalid('Feat ได้สูงสุด 20 รายการ')
     const known = new Set(srdFeats.map(feat => feat.name))
@@ -596,6 +599,19 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
     requireDM(member)
     return object(scene().objects ?? [])
   }
+  /**
+   * Note an Action (weapon attack or a spell) for a creature in this scene's fight. Off its turn the attack
+   * is a Reaction (an Opportunity Attack, say). Only counts; never stops the roll.
+   */
+  function noteUse(target: Scene, creatureId: string, kind: 'weapon' | 'spell') {
+    const combat = target.combat
+    if (!combat?.order.some(entry => entry.actorId === creatureId)) return
+    const use: TurnUse = { ...freshUse(), ...combat.uses?.[creatureId] }
+    if (combat.order[combat.turn]?.actorId !== creatureId) use.reaction = true
+    else if (kind === 'weapon') use.weaponAttacks++
+    else use.spellActions++
+    combat.uses = { ...combat.uses, [creatureId]: use }
+  }
   /** A player's token must stand within one square of the door's middle. */
   function doorReach(target: Scene, creature: Actor, wall: Wall) {
     if (creature.life !== 'active') throw new Invalid('ตัวละครนี้ยังโต้ตอบไม่ได้')
@@ -638,6 +654,8 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
   }
   /** The turn passes from `ended` to `started`: timed effects count down, repeat saves come due. */
   function passTurn(target: Scene, ended?: string, started?: string) {
+    // A creature's Action, Bonus Action and Reaction come back as its own turn starts.
+    if (started && target.combat) target.combat.uses = { ...target.combat.uses, [started]: freshUse() }
     for (const creature of room.actors) {
       if (!creature.effects?.length) continue
       const result = advanceEffects(creature.id, creature.effects, ended, started)
@@ -1332,6 +1350,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
         if (cover === 99) throw new Invalid('เป้าหมายอยู่หลังที่กำบังเต็ม')
         // Spend the slot only once the attack is valid (target in scene, not behind full cover).
         if (rollType === 'spellAttack') spendSlot(creature, command.slotLevel, command.pact === true)
+        noteUse(target, creature.id, rollType === 'attack' ? 'weapon' : 'spell')
         const adjacent = isNear(tokenOf(creature.id), creature, { ...tokenOf(victim.id), width: sizes[victim.size], height: sizes[victim.size] })
         const odds = decide(attackOdds(creature, victim, adjacent))
         // Archery: +2 with weapons that fire ammunition.
@@ -1378,6 +1397,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       owns(member, caster)
       const victim = get(room.actors, command.targetId)
       if (![caster.id, victim.id].every(key => target.tokens.some(token => token.actorId === key))) throw new Invalid('ผู้ร่ายและเป้าหมายต้องอยู่ในฉาก')
+      noteUse(target, caster.id, 'spell')
       const ability = command.ability as typeof abilities[number]
       if (!abilities.includes(ability)) throw new Invalid('เลือกค่าความสามารถสำหรับ Save')
       const damage = command.formula ? text(command.formula) : undefined
@@ -1462,6 +1482,28 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       if (outcome.result === 'empty') throw new Invalid('ไม่มีอะไรให้ย้อนแล้ว')
       if (outcome.result === 'blocked') return { notice: 'ย้อน' + outcome.label + 'ไม่ได้ เพราะมีคนแก้ต่อแล้ว · กด Ctrl+Z อีกครั้งเพื่อย้อนขั้นก่อนหน้า' }
       return { notice: 'ย้อน' + outcome.label + 'แล้ว' }
+    }
+    case 'turnAction': {
+      // Owner or DM marks Action / Bonus Action / Reaction / Disengage by hand, or uses Action Surge. Counting only.
+      const target = board()
+      const creature = actor()
+      owns(member, creature)
+      const combat = target.combat
+      if (!combat?.order.some(entry => entry.actorId === creature.id)) throw new Invalid('ตัวนี้ไม่ได้อยู่ในการต่อสู้')
+      const use: TurnUse = { ...freshUse(), ...combat.uses?.[creature.id] }
+      const count = (value: unknown) => number(value, 0, 9)
+      if (command.kind === 'action') use.manualActions = count(command.value)
+      else if (command.kind === 'bonus') use.bonus = count(command.value)
+      else if (command.kind === 'reaction') use.reaction = command.value === true
+      else if (command.kind === 'disengage') use.disengaged = command.value === true
+      else if (command.kind === 'surge') {
+        const surge = creature.resources?.find(resource => resource.name === 'Action Surge')
+        if (!surge || surge.used >= surge.max) throw new Invalid('ไม่มี Action Surge เหลือ')
+        surge.used++
+        use.extraActions++
+      } else throw new Invalid('เลือกสิ่งที่จะใช้')
+      combat.uses = { ...combat.uses, [creature.id]: use }
+      return {}
     }
     case 'settings': {
       requireDM(member)

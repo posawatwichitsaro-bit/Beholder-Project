@@ -6,6 +6,7 @@ import { PictureInput } from './PictureInput.tsx'
 import { ItemFields, LootSettingsFields, blankItem } from '../objects/Inventory.tsx'
 import { ItemCatalogPicker } from '../items/ItemCatalogPicker.tsx'
 import { CharacterCalculationFields } from './CharacterCalculations.tsx'
+import { attacksPerAction } from '../../../shared/economy.ts'
 import { abilityModifier, calculatedSheet } from '../../../shared/characterStats.ts'
 
 export function SheetEditor({ initial, save, cancel, copy, editInventory = true, report }: {
@@ -75,6 +76,9 @@ export function SheetEditor({ initial, save, cancel, copy, editInventory = true,
       {numeric('speed', 'ความเร็ว (ฟุต)')}{numeric('hp', 'HP ปัจจุบัน')}{numeric('maxHp', 'HP สูงสุด', 1)}
       {numeric('tempHp', 'Temporary HP')}{numeric('ac', 'AC')}{numeric('proficiency', 'Proficiency')}
       {numeric('initiative', 'Initiative', -999)}{numeric('attack', 'Attack bonus', -999)}{field('damage', 'สูตร Damage')}
+      <label key="attacksPerAction" title="Extra Attack หรือ Multiattack · เว้นว่างให้ระบบคิดจากคลาสหรือ stat block">โจมตีต่อ Action
+        <input type="number" min={1} max={10} placeholder={String(attacksPerAction({ ...sheet, attacksPerAction: undefined }))} value={sheet.attacksPerAction ?? ''}
+          onChange={e => set({ ...sheet, attacksPerAction: Number.isFinite(e.target.valueAsNumber) ? e.target.valueAsNumber : undefined })} /></label>
       {abilities.map(ability => {
         const score = sheet.abilities[ability]
         const modifier = abilityModifier(score)

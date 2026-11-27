@@ -29,6 +29,7 @@ import type { Wall } from '../../../shared/vision.ts'
 import { Eye as EyeIcon } from 'lucide-react'
 import { feetMoved, gridFeet, speedNow } from '../../../shared/movement.ts'
 import { parseConditions, srdConditions } from '../../../shared/conditions.ts'
+import { TurnChips } from '../combat/TurnChips.tsx'
 import type { ObjectLook, PixiBoard, TokenLook } from './pixiBoard.ts'
 
 /** A token-bar / context command. `roll` makes it a d20 roll with a right-click menu for Advantage or Disadvantage. */
@@ -777,6 +778,7 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         {barActor && (barActor.conditions || barActor.effects?.length) ? <span className="selection-bar-conditions"><ConditionBadges creature={barActor} max={4} /></span> : null}
         {barBudget && <span className={'selection-bar-move' + (barBudget.used > barBudget.speed ? ' over' : '')}>เดินแล้ว {barBudget.used}/{barBudget.speed} ฟุต</span>}
       </span>
+      {barSheet && (dm || barSheet.ownerId === room.me.id) && <TurnChips actor={barSheet} scene={scene} command={command} />}
       {canCondition && <button type="button" aria-pressed={conditionsOpen} onClick={() => setConditionsOpen(open => !open)}>สภาพ</button>}
       {canCondition && conditionsOpen && barSheet && <span className="selection-bar-chips" role="group" aria-label={'สภาพของ ' + barSheet.name}>
         {srdConditions.filter(name => name !== 'Exhaustion').map(name => {
