@@ -1235,6 +1235,84 @@ test('0.10: dice tumble in 3D and land on the rolled faces; reduced motion keeps
   assert.deepEqual(errors.filter(message => !/WebGL context|CONTEXT_LOST/i.test(message)), [])
 })
 
+test('0.11: movement counts against Speed, drop on a foe to attack, one-click conditions, play keys and the DM undo', { timeout: 90000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const mira = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const room: Snapshot = await (await dm.request.post(base + '/api/rooms', { data: { name: 'Release 0.11 play', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const state = async () => (await (await dm.request.get(path)).json()) as Snapshot
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: (await state()).revision } })
+    assert.equal(response.status(), 200, await response.text())
+  }
+  await command(dm, { type: 'scene', name: 'Bridge', cell: 48, originX: 0, originY: 0 })
+  const sceneId = (await state()).scenes[0].id
+  await command(dm, { type: 'place', sceneId, kind: 'monster', sheet: { ...blankSheet('monster'), name: 'Bandit', hp: 11, maxHp: 11, ac: 1 }, x: 7, y: 2 })
+  await command(dm, { type: 'place', sceneId, kind: 'monster', sheet: { ...blankSheet('monster'), name: 'Wolf', hp: 11, maxHp: 11, ac: 1 }, x: 9, y: 4 })
+  assert.equal((await mira.request.post(base + '/api/join', { data: { invite: room.invite, name: 'Mira', role: 'player' } })).status(), 200)
+  const sheetResponse = await mira.request.post(path + '/commands', { data: { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Lyra', speed: 30 }, commandId: randomUUID(), revision: (await state()).revision } })
+  assert.equal(sheetResponse.status(), 200)
+  const lyra = (await state()).actors.find(actor => actor.name === 'Lyra')!
+  await command(mira, { type: 'place', sceneId, actorId: lyra.id, role: 'character', x: 2, y: 2 })
+  const bandit = (await state()).actors.find(actor => actor.name === 'Bandit')!
+  const wolf = (await state()).actors.find(actor => actor.name === 'Wolf')!
+  // Lyra acts first.
+  await command(dm, { type: 'combat', sceneId, participants: [lyra.id, bandit.id, wolf.id] })
+  const fight = (await state()).scenes[0].combat!
+  const order = [lyra.id, ...fight.order.map(entry => entry.actorId).filter(id => id !== lyra.id)]
+  await (async () => { for (const _ of order) { if ((await state()).scenes[0].combat!.order[(await state()).scenes[0].combat!.turn].actorId === lyra.id) break; await command(dm, { type: 'next', sceneId }) } })()
+  await mira.goto(base + '/room/' + room.id)
+  await dm.goto(base + '/room/' + room.id)
+  await mira.locator(boardCanvas + '[data-renderer=pixi]').waitFor()
+  const frame = (await mira.locator(boardCanvas).boundingBox())!
+  const cellAt = (x: number, y: number) => ({ x: frame.x + 36 + (x + .5) * 48, y: frame.y + 36 + (y + .5) * 48 })
+
+  // Drag Lyra three squares: the pill counts 15/30 ft while dragging, the token bar keeps the total.
+  const from = cellAt(2, 2)
+  await mira.mouse.move(from.x, from.y)
+  await mira.mouse.down()
+  const to = cellAt(5, 2)
+  await mira.mouse.move(to.x, to.y, { steps: 6 })
+  await mira.getByRole('status').filter({ hasText: 'เดิน 15/30 ฟุต' }).waitFor()
+  await mira.mouse.up()
+  await waitInPage(mira, async url => (await (await fetch(url)).json()).scenes[0].combat.moved?.feet === 15, path)
+  await mira.mouse.click(to.x, to.y)
+  await mira.getByText('เดินแล้ว 15/30 ฟุต').waitFor()
+
+  // One click on the token bar puts Lyra Prone, another takes it off.
+  await mira.getByRole('button', exact('สภาพ')).click()
+  await mira.getByRole('group', { name: 'สภาพของ Lyra' }).getByRole('button', exact('Prone')).click()
+  await waitInPage(mira, async url => (await (await fetch(url)).json()).actors.find((actor: { name: string }) => actor.name === 'Lyra').conditions === 'Prone', path)
+  await mira.getByRole('group', { name: 'สภาพของ Lyra' }).getByRole('button', exact('Prone')).click()
+  await waitInPage(mira, async url => (await (await fetch(url)).json()).actors.find((actor: { name: string }) => actor.name === 'Lyra').conditions === '', path)
+
+  // Drop Lyra on the Bandit: an attack roll, and she stays where she was.
+  const bandit2 = cellAt(7, 2)
+  await mira.mouse.move(to.x, to.y)
+  await mira.mouse.down()
+  await mira.mouse.move(bandit2.x, bandit2.y, { steps: 6 })
+  await mira.mouse.up()
+  await waitInPage(mira, async ([url, id]) => (await (await fetch(url as string)).json()).rolls.some((roll: { targetId?: string }) => roll.targetId === id), [path, bandit.id] as const)
+  assert.equal((await state()).scenes[0].tokens.find(token => token.actorId === lyra.id)!.x, 5)
+
+  // Tab picks the next foe, 1 attacks it with the main attack, Enter ends the turn.
+  await mira.locator(boardCanvas).focus()
+  await mira.keyboard.press('Tab')
+  await mira.getByText(/เป้าหมาย: (Bandit|Wolf)/).first().waitFor()
+  const rolls = (await state()).rolls.length
+  await mira.keyboard.press('1')
+  await waitInPage(mira, async ([url, count]) => (await (await fetch(url as string)).json()).rolls.length > (count as number), [path, rolls] as const)
+  await mira.keyboard.press('Enter')
+  await waitInPage(mira, async ([url, id]) => { const s = await (await fetch(url as string)).json(); return s.scenes[0].combat.order[s.scenes[0].combat.turn].actorId !== id }, [path, lyra.id] as const)
+
+  // The DM takes back Lyra's move with Ctrl+Z.
+  await dm.locator(boardCanvas).click({ position: { x: 600, y: 600 } })
+  await dm.keyboard.press('Control+z')
+  await waitInPage(dm, async ([url, id]) => (await (await fetch(url as string)).json()).scenes[0].tokens.find((token: { actorId: string }) => token.actorId === id).x === 2, [path, lyra.id] as const)
+})
+
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')

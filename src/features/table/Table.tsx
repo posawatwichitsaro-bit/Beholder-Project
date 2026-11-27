@@ -210,6 +210,57 @@ export function Table({ account, changeAccount }: AccountProps) {
     if (!attacker || !target) return undefined
     return attackOdds(attacker, target, Boolean(mine && theirs && withinReach(mine, sizes[attacker.size], theirs, sizes[target.size])))
   }
+  // Play keys while the board (or nothing) has focus: Enter ends your turn, Tab picks the next target,
+  // 1–3 attack the target with your main attack and the next two, Ctrl+Z (DM) undoes the last move or HP change.
+  const playKeys = useRef<{ endTurn?: () => void; nextTarget: (back: boolean) => void; attack: (n: number) => boolean; undo?: () => void }>(undefined)
+  {
+    const current = combat?.order[combat.turn]?.actorId
+    const mineNow = !dm && current ? ownedHere.find(item => item.id === current) : undefined
+    const actingId = dm ? current : attacker?.id
+    const acting = actingId ? room.actors.find(item => item.id === actingId) : undefined
+    const target = dm ? combatTarget : attackTarget
+    const foes = (scene?.tokens ?? []).map(token => room.publicActors.find(item => item.id === token.actorId)).filter((item): item is NonNullable<typeof item> =>
+      Boolean(item && item.id !== actingId && item.hp > 0 && (dm || item.kind === 'monster')))
+    playKeys.current = {
+      endTurn: dm ? (combat ? () => void commandHere({ type: 'next' }) : undefined) : mineNow ? () => void commandHere({ type: 'endTurn', actorId: mineNow.id }) : undefined,
+      nextTarget: back => {
+        if (!foes.length) return
+        const index = foes.findIndex(item => item.id === target)
+        const next = foes[(index + (back ? -1 : 1) + foes.length) % foes.length]
+        if (dm) setCombatTarget(next.id)
+        else setAttackTarget(next.id)
+        setNotice('เป้าหมาย: ' + next.name)
+      },
+      attack: n => {
+        if (!acting || !target) return false
+        const weaponIndex = n === 1 ? undefined : n - 2
+        if (weaponIndex !== undefined && !acting.attacks?.[weaponIndex]) return false
+        void commandHere({ type: 'sheetRoll', rollType: 'attack', actorId: acting.id, targetId: target, weaponIndex })
+        return true
+      },
+      undo: dm ? () => void send({ type: 'undo' }) : undefined
+    }
+  }
+  useEffect(() => {
+    function key(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.isComposing || event.altKey || document.querySelector('.scrim, .context-popover, .roll-menu')) return
+      const target = event.target
+      // Only from the board or the page itself, so Tab still moves between fields and buttons in panels.
+      const onBoard = target === document.body || (target instanceof HTMLElement && Boolean(target.closest('canvas.board-canvas')))
+      const keys = playKeys.current
+      if (!keys) return
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z' && !typingTarget(target)) {
+        if (keys.undo) { event.preventDefault(); keys.undo() }
+        return
+      }
+      if (!onBoard || event.ctrlKey || event.metaKey) return
+      if (event.key === 'Enter' && keys.endTurn) { event.preventDefault(); keys.endTurn() }
+      else if (event.key === 'Tab') { event.preventDefault(); keys.nextTarget(event.shiftKey) }
+      else if (/^[1-3]$/.test(event.key) && keys.attack(Number(event.key))) event.preventDefault()
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [])
   const keyboardSceneId = !dm ? scene?.id : undefined
   useEffect(() => {
     if (!mainTokenId || !keyboardSceneId) return
@@ -538,6 +589,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     ...[4, 6, 8, 10, 12, 100].map(die => ({ id: 'roll-d' + die, label: 'ทอย d' + die, group: 'ลูกเต๋า', keywords: 'roll dice', run: () => void send({ type: 'roll', formula: '1d' + die }) })),
     ...(mainToken ? [{ id: 'focus-main', label: 'ไปที่ ' + actorName(mainToken.actorId), group: 'กระดาน', keywords: 'camera center main character ตัวหลัก', run: focusMain }] : []),
     ...(inviteLink ? [{ id: 'invite', label: 'คัดลอกลิงก์เชิญผู้เล่น', group: 'โต๊ะ', keywords: 'invite link share เชิญ', run: () => void copyInvite() }] : []),
+    ...(dm ? [{ id: 'undo', label: 'ย้อนการเดินหรือการหัก HP ล่าสุด (Ctrl+Z)', group: 'โต๊ะ', keywords: 'undo ย้อน ctrl z', run: () => void send({ type: 'undo' }) }] : []),
     { id: 'reset-ui', label: 'รีเซ็ตตำแหน่ง UI', group: 'โต๊ะ', keywords: 'reset layout ui move position รีเซ็ต ย้าย', run: () => usePrefs.getState().update({ layout: {} }) },
     { id: 'close-panels', label: 'ปิดแผงทั้งหมด', group: 'โต๊ะ', keywords: 'close hide escape', shortcut: 'Esc', run: () => { dispatchDock({ type: 'closeAll' }); setDmCombat(false) } },
     { id: 'tour', label: 'เริ่มทัวร์แนะนำ', group: 'ช่วยเหลือ', keywords: 'tour help guide ทัวร์ ช่วยเหลือ วิธีใช้', run: () => { closePanels(); setManageOpen(false); setTouring(true) } },
@@ -553,7 +605,10 @@ export function Table({ account, changeAccount }: AccountProps) {
     <Dock items={dock.open.map(id => ({ id, title: panelById(id).label, body: bodies[id]() }))}
       pinned={dock.pinned} pin={id => dispatchDock({ type: 'pin', id })} close={id => dispatchDock({ type: 'close', id })} />
     <section className="workspace" aria-label="ฉากปัจจุบัน">
-      {scene ? <Board key={scene.id} command={commandHere} scene={scene} room={room} selected={boardSelected} targetId={combatOpen ? combatTarget : attackTarget || undefined}
+      {scene ? <Board key={scene.id} command={commandHere} attackDrop={(attackerId, targetId) => {
+        if (dm) { setCombatTarget(targetId); void commandHere({ type: 'sheetRoll', rollType: 'attack', actorId: attackerId, targetId }) }
+        else { setAttackTarget(targetId); void commandHere({ type: 'sheetRoll', rollType: 'attack', actorId: attackerId, targetId }) }
+      }} scene={scene} room={room} selected={boardSelected} targetId={combatOpen ? combatTarget : attackTarget || undefined}
         mainTokenId={mainTokenId}
         quickHp={dm ? async (actorId, text) => {
           const change = readHpChange(text)

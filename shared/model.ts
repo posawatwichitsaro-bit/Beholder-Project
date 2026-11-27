@@ -148,6 +148,15 @@ export function objectDefinition(object: SceneObject): ObjectDefinition {
 export type Combat = {
   order: { actorId: string; initiative: number }[]; turn: number; round: number
   deathSaveAt?: string
+  /** Feet the creature whose turn it is has moved this turn (diagonals count 5 ft, 2024 rules). */
+  moved?: { actorId: string; turnKey: string; feet: number }
+}
+/** One step the DM can take back (Ctrl+Z): token positions and HP as they were before a move or an HP change. */
+export type UndoEntry = {
+  at: number; label: string
+  tokens: { sceneId: string; tokenId: string; x: number; y: number }[]
+  actors: { id: string; hp: number; tempHp: number; life: Sheet['life']; successes: number; failures: number }[]
+  moved?: { sceneId: string; value?: Combat['moved'] }[]
 }
 export function nextLivingTurn(combat: Combat, isDead: (actorId: string) => boolean) {
   for (let offset = 1; offset <= combat.order.length; offset++) {
@@ -192,6 +201,8 @@ export type Room = {
   id: string; name: string; invite: string; dmInvite?: string; revision: number; members: (Member & { profileId?: string })[]
   activeSceneId?: string; scenes: Scene[]; actors: Actor[]; templates: Template[]; rolls: Roll[]
   log?: LogEntry[]
+  /** The last moves and HP changes, newest last, for the DM's undo (never sent to players). */
+  undo?: UndoEntry[]
   /** Table rules the DM can switch. autoDamage: a hit applies its damage without waiting for the DM. */
   /**
    * Table rules the DM can switch. autoDamage: a hit applies its damage without waiting for the DM.

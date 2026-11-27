@@ -85,3 +85,11 @@
 .vision-viewas { display: inline-flex; gap: 4px; align-items: center; }
 .vision-hint { flex-basis: 100%; color: var(--bh-text-muted); }
 .vision-warn { color: #f0b060; }
+
+/* ---------- 0.11: movement budget, conditions in the token bar ---------- */
+.selection-bar-move { font-size: .78rem; color: var(--bh-text-muted); }
+.selection-bar-move.over, .move-budget.over { color: #ff8a6a; }
+.selection-bar-chips { display: flex; flex-wrap: wrap; gap: 3px; flex-basis: 100%; }
+.selection-bar-chips .bh-chip { font-size: .72rem; padding: 1px 7px; }
+.table .move-budget { position: absolute; left: 50%; top: 64px; transform: translateX(-50%); z-index: 5; padding: 4px 12px; border-radius: 999px;
+  background: #1b1411ee; border: 1px solid #685445; color: var(--bh-brass-bright, #e2c27a); font-weight: 600; pointer-events: none; }
