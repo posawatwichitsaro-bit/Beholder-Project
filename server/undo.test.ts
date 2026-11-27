@@ -76,3 +76,15 @@ test('undo covers inventory, removed tokens and walls; a new round or another sc
   run(dm, { type: 'activate', sceneId: yard.id })
   assert.equal(room.undoSteps, undefined, 'the table moved to another scene')
 })
+
+test('a step survives the room being saved and loaded (jsonb reorders keys)', () => {
+  const { mira, room, run } = table()
+  run(mira, { type: 'move', tokenId: 't1', x: 0, y: 3 })
+  // Simulate a save + load with keys in a different order, as PostgreSQL jsonb does.
+  const shuffle = (value: unknown): unknown => Array.isArray(value) ? value.map(shuffle)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).reverse().map(([key, item]) => [key, shuffle(item)])) : value
+  const reloaded = shuffle(JSON.parse(JSON.stringify(room))) as Room
+  Object.assign(room, reloaded)
+  assert.deepEqual(applyCommand(room, mira, { sceneId: 's', type: 'undo' }), { notice: 'ย้อนการเดินแล้ว' })
+  assert.equal(room.scenes[0].tokens.find(token => token.id === 't1')!.y, 0)
+})

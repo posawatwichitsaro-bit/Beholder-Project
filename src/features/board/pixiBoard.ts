@@ -60,6 +60,15 @@ const serif = '"Cormorant Garamond", Sarabun, serif'
 const sans = 'Sarabun, system-ui, sans-serif'
 const ink = '#f6e7cc'
 
+/**
+ * "?renderer=canvas" (or webgl / webgpu) in the page address forces Pixi's backend: a way out on a
+ * machine whose GPU driver misbehaves, and how the tests check the canvas fallback.
+ */
+function forcedRenderer() {
+  const value = new URLSearchParams(location.search).get('renderer')
+  return value === 'canvas' || value === 'webgl' || value === 'webgpu' ? value : undefined
+}
+
 export class PixiBoard {
   readonly app: Application
   // A render group: panning and zooming change only its transform; the drawing commands inside stay cached.
@@ -128,7 +137,7 @@ export class PixiBoard {
     await app.init({
       canvas, width: Math.max(1, size.x), height: Math.max(1, size.y),
       resolution: Math.min(window.devicePixelRatio || 1, 1.5), autoDensity: false,
-      antialias: true, background: '#1d1714', preference: 'webgl'
+      antialias: true, background: '#1d1714', preference: forcedRenderer() ?? 'webgl'
     })
     return new PixiBoard(app)
   }

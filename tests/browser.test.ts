@@ -1235,7 +1235,7 @@ test('0.10: dice tumble in 3D and land on the rolled faces; reduced motion keeps
   assert.deepEqual(errors.filter(message => !/WebGL context|CONTEXT_LOST/i.test(message)), [])
 })
 
-test('0.11: movement counts against Speed, drop on a foe to attack, one-click conditions, play keys and the DM undo', { timeout: 90000 }, async t => {
+test('0.11: movement counts against Speed, drop on a foe to attack, one-click conditions, play keys and undo', { timeout: 90000 }, async t => {
   const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
   t.after(() => browser.close())
   const dm = await seat(browser, { viewport: { width: 1280, height: 800 } })
@@ -1307,10 +1307,128 @@ test('0.11: movement counts against Speed, drop on a foe to attack, one-click co
   await mira.keyboard.press('Enter')
   await waitInPage(mira, async ([url, id]) => { const s = await (await fetch(url as string)).json(); return s.scenes[0].combat.order[s.scenes[0].combat.turn].actorId !== id }, [path, lyra.id] as const)
 
-  // The DM takes back Lyra's move with Ctrl+Z.
+  // Since 0.12 each person undoes their own steps: the DM moves the Wolf, then takes it back with Ctrl+Z.
+  await command(dm, { type: 'move', sceneId, tokenId: (await state()).scenes[0].tokens.find(token => token.actorId === wolf.id)!.id, x: 9, y: 7 })
   await dm.locator(boardCanvas).click({ position: { x: 600, y: 600 } })
   await dm.keyboard.press('Control+z')
-  await waitInPage(dm, async ([url, id]) => (await (await fetch(url as string)).json()).scenes[0].tokens.find((token: { actorId: string }) => token.actorId === id).x === 2, [path, lyra.id] as const)
+  await waitInPage(dm, async ([url, id]) => (await (await fetch(url as string)).json()).scenes[0].tokens.find((token: { actorId: string }) => token.actorId === id).y === 4, [path, wolf.id] as const)
+})
+
+test('0.12: the board still draws, selects and moves on Pixi\'s canvas fallback (no WebGL)', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const page = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  const room: Snapshot = await (await page.request.post(base + '/api/rooms', { data: { name: 'Release 0.12 canvas', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const command = async (body: Record<string, unknown>) => {
+    const state = await (await page.request.get(path)).json() as Snapshot
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: state.revision } })
+    assert.equal(response.status(), 200, await response.text())
+  }
+  await command({ type: 'scene', name: 'Cellar', cell: 48, originX: 0, originY: 0 })
+  const sceneId = ((await (await page.request.get(path)).json()) as Snapshot).scenes[0].id
+  await command({ type: 'place', sceneId, kind: 'monster', sheet: { ...blankSheet('monster'), name: 'Rat', hp: 5, maxHp: 5 }, x: 2, y: 2 })
+  await page.goto(base + '/room/' + room.id + '?renderer=canvas')
+  await page.locator(boardCanvas + '[data-renderer=pixi]').waitFor()
+  assert.equal(await page.evaluate(() => (window as unknown as { beholderBoard: { app: { renderer: { name: string } } } }).beholderBoard.app.renderer.name), 'canvas')
+  const frame = (await page.locator(boardCanvas).boundingBox())!
+  const cellAt = (x: number, y: number) => ({ x: frame.x + 36 + (x + .5) * 48, y: frame.y + 36 + (y + .5) * 48 })
+  const rat = cellAt(2, 2)
+  await page.mouse.click(rat.x, rat.y)
+  await page.getByRole('toolbar', { name: /คำสั่งของ Rat/ }).waitFor()
+  await page.mouse.move(rat.x, rat.y)
+  await page.mouse.down()
+  const to = cellAt(5, 3)
+  await page.mouse.move(to.x, to.y, { steps: 6 })
+  await page.mouse.up()
+  await waitInPage(page, async url => { const s = await (await fetch(url)).json(); return s.scenes[0].tokens[0].x === 5 && s.scenes[0].tokens[0].y === 3 }, path)
+  // Something was actually painted: the canvas is not one flat colour.
+  const varied = await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('canvas.board-canvas')!
+    const copy = document.createElement('canvas')
+    copy.width = 200; copy.height = 200
+    const ctx = copy.getContext('2d')!
+    ctx.drawImage(canvas, 0, 0, 200, 200)
+    const data = ctx.getImageData(0, 0, 200, 200).data
+    const seen = new Set<number>()
+    for (let i = 0; i < data.length; i += 16) seen.add(data[i] << 16 | data[i + 1] << 8 | data[i + 2])
+    return seen.size
+  })
+  assert.ok(varied > 5, 'the canvas shows grid and token, not a blank fill (' + varied + ' colours)')
+  assert.deepEqual(errors, [])
+})
+
+test('0.12: action chips, an Opportunity Attack card, Difficult Terrain, a whisper, a torch and a player undo', { timeout: 90000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const mira = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const room: Snapshot = await (await dm.request.post(base + '/api/rooms', { data: { name: 'Release 0.12 turns', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const state = async () => (await (await dm.request.get(path)).json()) as Snapshot
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: (await state()).revision } })
+    assert.equal(response.status(), 200, await response.text())
+  }
+  await command(dm, { type: 'scene', name: 'Ford', cell: 48, originX: 0, originY: 0 })
+  const sceneId = (await state()).scenes[0].id
+  await command(dm, { type: 'place', sceneId, kind: 'monster', sheet: { ...blankSheet('monster'), name: 'Ogre', hp: 50, maxHp: 50, attack: 0, damage: '1d4',
+    monsterReference: { statBlock: 'Multiattack. The ogre makes two attacks.\nGreatclub. Melee Attack Roll: +6, reach 5 ft.' } }, x: 4, y: 2 })
+  assert.equal((await mira.request.post(base + '/api/join', { data: { invite: room.invite, name: 'Mira', role: 'player' } })).status(), 200)
+  const made = await mira.request.post(path + '/commands', { data: { type: 'sheet', kind: 'pc', commandId: randomUUID(), revision: (await state()).revision,
+    sheet: { ...blankSheet(), name: 'Lyra', speed: 30, hp: 30, maxHp: 30, inventory: [{ name: 'Torch', description: '', ref: 'srd-5.2.1:equipment:torch' }] } } })
+  assert.equal(made.status(), 200)
+  const lyra = (await state()).actors.find(actor => actor.name === 'Lyra')!
+  const ogre = (await state()).actors.find(actor => actor.name === 'Ogre')!
+  await command(mira, { type: 'place', sceneId, actorId: lyra.id, role: 'character', x: 3, y: 2 })
+  await command(dm, { type: 'terrain', sceneId, cells: ['2,2', '1,2'], mode: 'difficult' })
+  await command(dm, { type: 'combat', sceneId, participants: [lyra.id, ogre.id] })
+  for (let i = 0; i < 2 && (await state()).scenes[0].combat!.order[(await state()).scenes[0].combat!.turn].actorId !== lyra.id; i++) await command(dm, { type: 'next', sceneId })
+  await dm.goto(base + '/room/' + room.id)
+  await mira.goto(base + '/room/' + room.id)
+  await mira.locator(boardCanvas + '[data-renderer=pixi]').waitFor()
+  const frame = (await mira.locator(boardCanvas).boundingBox())!
+  const cellAt = (x: number, y: number) => ({ x: frame.x + 36 + (x + .5) * 48, y: frame.y + 36 + (y + .5) * 48 })
+
+  // Lyra's chips are on her turn banner.
+  const chips = mira.getByRole('group', { name: 'การกระทำของ Lyra' }).first()
+  await chips.getByRole('button', { name: /^Action 0\/1/ }).waitFor()
+  await chips.getByRole('button', exact('Bonus 0/1')).click()
+  await waitInPage(mira, async ([url, id]) => (await (await fetch(url as string)).json()).scenes[0].combat.uses?.[id as string]?.bonus === 1, [path, lyra.id] as const)
+
+  // Lyra walks away from the Ogre through Difficult Terrain: 2 rough squares = 20 ft, and the DM gets a card.
+  const start = cellAt(3, 2)
+  await mira.mouse.move(start.x, start.y)
+  await mira.mouse.down()
+  const end = cellAt(1, 2)
+  await mira.mouse.move(end.x, end.y, { steps: 6 })
+  await mira.getByRole('status').filter({ hasText: 'เดิน 20/30 ฟุต' }).waitFor()
+  await mira.mouse.up()
+  const card = dm.getByRole('alertdialog', { name: 'Opportunity Attack ของ Ogre' })
+  await card.waitFor()
+  await card.getByRole('button', exact('ผ่าน')).click()
+  await card.waitFor({ state: 'detached' })
+
+  // Mira takes her move back with Ctrl+Z (the Bonus Action mark was hers too, but the move is newest).
+  await mira.locator(boardCanvas).focus()
+  await mira.keyboard.press('Control+z')
+  await waitInPage(mira, async ([url, id]) => (await (await fetch(url as string)).json()).scenes[0].tokens.find((token: { actorId: string }) => token.actorId === id).x === 3, [path, lyra.id] as const)
+  await mira.getByText(/ย้อนการเดินแล้ว/).first().waitFor()
+
+  // She lights her torch from the bag, and whispers to the DM.
+  await openPanel(mira, 'ชีตในห้อง')
+  await mira.getByRole('button', exact('Lyra')).click()
+  const sheet = mira.getByRole('article', { name: 'ชีต Lyra' })
+  await sheet.getByRole('tab', exact('Inventory')).click()
+  await sheet.getByRole('button', exact('จุด')).click()
+  await waitInPage(mira, async ([url, id]) => (await (await fetch(url as string)).json()).actors.find((actor: { id: string }) => actor.id === id).inventory[0].lit === true, [path, lyra.id] as const)
+  await openPanel(mira, 'บันทึกการผจญภัย')
+  await mira.getByLabel('ข้อความถึงโต๊ะ').fill('/w DM ฉันแอบหยิบกุญแจ')
+  await mira.getByRole('button', exact('ส่ง')).click()
+  await openPanel(dm, 'บันทึกการผจญภัย')
+  await dm.getByText('ฉันแอบหยิบกุญแจ').waitFor()
 })
 
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */

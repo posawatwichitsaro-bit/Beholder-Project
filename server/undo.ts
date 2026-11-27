@@ -38,7 +38,21 @@ export const undoLabels: Record<string, string> = {
 }
 export const isUndoable = (type: string) => !skip.has(type)
 
-const textOf = (value: unknown) => value === undefined ? '∅' : JSON.stringify(value)
+/**
+ * JSON with object keys sorted. The room is stored as PostgreSQL jsonb, which reorders keys on every save,
+ * so plain JSON.stringify would see a change where there is none.
+ */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().flatMap(key => {
+      const item = (value as Record<string, unknown>)[key]
+      return item === undefined ? [] : [[key, canonical(item)]]
+    }))
+  }
+  return value
+}
+const textOf = (value: unknown) => value === undefined ? '∅' : JSON.stringify(canonical(value))
 /** 32-bit FNV-1a of a value's JSON: enough to tell "still as I left it" from "someone changed it". */
 function fingerprint(value: unknown) {
   return hashText(textOf(value))
@@ -63,7 +77,14 @@ function units(room: Room) {
   for (const scene of room.scenes) {
     const { tokens, objects, vision, combat, damageEvents: _damage, areaEffect: _area, view: _view, ...meta } = scene
     map.set('scene:' + scene.id, meta)
-    map.set('scene:' + scene.id + ':combat', combat)
+    // The fight in pieces, so one person's move doesn't collide with someone else's Reaction or card:
+    // turn order, feet moved this turn, and each creature's Action use. Opportunity cards are passing, never undone.
+    if (combat) {
+      const { moved, uses, prompts: _prompts, ...order } = combat
+      map.set('scene:' + scene.id + ':combat', order)
+      map.set('scene:' + scene.id + ':moved', moved)
+      for (const [actorId, use] of Object.entries(uses ?? {})) map.set('scene:' + scene.id + ':use:' + actorId, use)
+    } else map.set('scene:' + scene.id + ':combat', undefined)
     for (const token of tokens) map.set('scene:' + scene.id + ':token:' + token.id, token)
     for (const object of objects ?? []) map.set('scene:' + scene.id + ':object:' + object.id, object)
     if (vision) {
@@ -156,7 +177,20 @@ function restore(room: Room, key: string, value: unknown) {
     if (!scene) return
     const kind = parts[2]
     const id = parts[3]
-    if (kind === 'combat') { if (value === undefined) delete scene.combat; else scene.combat = structuredClone(value) as Scene['combat'] }
+    if (kind === 'combat') {
+      if (value === undefined) delete scene.combat
+      else {
+        const { moved, uses, prompts } = scene.combat ?? {}
+        scene.combat = { ...(structuredClone(value) as NonNullable<Scene['combat']>), moved, uses, prompts }
+      }
+    } else if (kind === 'moved') { if (scene.combat) { if (value === undefined) delete scene.combat.moved; else scene.combat.moved = structuredClone(value) as NonNullable<Scene['combat']>['moved'] } }
+    else if (kind === 'use') {
+      if (!scene.combat) return
+      const uses = { ...scene.combat.uses }
+      if (value === undefined) delete uses[id]
+      else uses[id] = structuredClone(value) as NonNullable<NonNullable<Scene['combat']>['uses']>[string]
+      scene.combat.uses = uses
+    }
     else if (kind === 'token') replace(scene.tokens, id)
     else if (kind === 'object') replace(scene.objects ??= [], id)
     else if (kind === 'vision') {
