@@ -6,6 +6,8 @@ import type { Area, AreaKind } from '../../../shared/area.ts'
 import { AccountPanel } from '../account/AccountPanel.tsx'
 import { MonsterManual } from '../manual/MonsterManual.tsx'
 import { ItemCatalogPicker } from '../items/ItemCatalogPicker.tsx'
+import { loadMonsterCatalog } from '../manual/catalog.ts'
+import { upgradeFromSrd } from '../../../shared/monsterManual.ts'
 import { Board } from '../board/Board.tsx'
 import { CombatPanel } from '../combat/CombatPanel.tsx'
 import { DamageTypeSelect } from '../combat/CombatEffects.tsx'
@@ -342,6 +344,18 @@ export function Table({ account, changeAccount }: AccountProps) {
     setPlacementPoint(undefined)
     void placeToken(placement, point)
   }
+  /** Bring room monster templates up to the current SRD sheets (only ones that match an SRD monster). */
+  async function upgradeTemplates(list: Template[]) {
+    try {
+      const catalog = await loadMonsterCatalog()
+      let done = 0
+      for (const template of list) {
+        const sheet = upgradeFromSrd(template.sheet, catalog)
+        if (sheet && await send({ type: 'template', templateId: template.id, sheet })) done++
+      }
+      setNotice(done ? 'อัปเดตจาก SRD แล้ว ' + done + ' ต้นแบบ' : 'ไม่พบต้นแบบที่ตรงกับมอนสเตอร์ใน SRD')
+    } catch (error) { setError((error as Error).message) }
+  }
   async function copyInvite() {
     if (!inviteLink) return
     try { await navigator.clipboard.writeText(inviteLink); setNotice('คัดลอกลิงก์แล้ว') }
@@ -405,10 +419,14 @@ export function Table({ account, changeAccount }: AccountProps) {
             onClick={() => chooseToken({ actorId: item.id }, item.kind === 'pc' ? item.name : undefined, item.ownerId)}>วาง</button>}
         </div>
       })}
-      {dm && <><div className="section-head"><h2>มอนสเตอร์</h2><button onClick={() => setSheet({ initial: blankSheet('monster'), asTemplate: true })}>+ ต้นแบบ</button></div>
+      {dm && <><div className="section-head"><h2>มอนสเตอร์</h2><div className="inline">
+        {room.templates.length > 0 && <button title="ดึงค่าสเตตัส เซฟ สกิล การโจมตี และภาพล่าสุดจาก SRD · ชื่อและของที่ตั้งไว้ยังอยู่ · Token ที่วางแล้วไม่เปลี่ยน"
+          onClick={() => void upgradeTemplates(room.templates)}>อัปเดตทั้งหมดจาก SRD</button>}
+        <button onClick={() => setSheet({ initial: blankSheet('monster'), asTemplate: true })}>+ ต้นแบบ</button></div></div>
         {!room.templates.length && <EmptyState title="ยังไม่มีต้นแบบมอนสเตอร์" hint="ค้นจาก Monster Manual (N) แล้วบันทึกเป็นต้นแบบ หรือกด “+ ต้นแบบ” เพื่อเขียนเอง" />}
         {room.templates.map(item => <div className="actor-item" key={item.id} {...(scene ? tokenDragProps({ source: { templateId: item.id } }) : {})}>
           <button onClick={() => setSheet({ initial: item.sheet, template: item, asTemplate: true })}>{item.sheet.name}</button>
+          <button aria-label={'อัปเดต ' + item.sheet.name + ' จาก SRD'} title="อัปเดตจาก SRD" onClick={() => void upgradeTemplates([item])}>↻</button>
           {scene && <button onClick={() => chooseToken({ templateId: item.id })}>วาง</button>}
         </div>)}</>}
     </>,

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { InventoryItem } from '../../../shared/model.ts'
-import { catalogItems, categoryLabels, inventoryFromCatalog, itemSummary, rarityOrder, variantName } from '../../../shared/itemCatalog.ts'
+import { bonusBaseChoices, catalogItems, categoryLabels, inventoryFromCatalog, itemSummary, magicBonusBases, magicFromBase, rarityOrder, variantName } from '../../../shared/itemCatalog.ts'
 import type { CatalogItem } from '../../../shared/itemCatalog.ts'
 import { itemIcon } from '../../../shared/catalogArt.ts'
 
@@ -48,8 +48,15 @@ export function ItemCatalogPicker({ choose, close, actionLabel = 'เพิ่�
     && (!rarity || item.rarity === rarity || item.details.variants?.some(entry => entry.rarity === rarity))
     && (!words || item.name.toLowerCase().includes(words) || item.details.variants?.some(entry => entry.label.toLowerCase().includes(words))))
 
+  // "Weapon, +1" etc.: which plain weapon, armor or shield it is.
+  const bonusKind = selected ? magicBonusBases[selected.id] : undefined
+  const baseChoices = useMemo(() => bonusKind ? bonusBaseChoices(catalog ?? [], bonusKind) : [], [catalog, bonusKind])
+  const [baseId, setBaseId] = useState('')
+  const base = baseChoices.find(item => item.id === baseId) ?? baseChoices[0]
+
   function open(item: CatalogItem) {
     setSelected(item)
+    setBaseId('')
     setVariant(item.details.variants?.[0]?.label ?? '')
     setQuantity(1)
   }
@@ -57,7 +64,9 @@ export function ItemCatalogPicker({ choose, close, actionLabel = 'เพิ่�
     if (!selected) return
     setBusy(true)
     try {
-      const ok = await choose(inventoryFromCatalog(selected, { variant: variant || undefined, quantity }))
+      const plain = inventoryFromCatalog(selected, { variant: variant || undefined, quantity })
+      const bonus = Number(/\+(\d)/.exec(variant)?.[1] ?? 1)
+      const ok = await choose(bonusKind && base ? magicFromBase(plain, base, bonus) : plain)
       if (ok !== false) setSelected(undefined)
     } finally { setBusy(false) }
   }
@@ -77,6 +86,10 @@ export function ItemCatalogPicker({ choose, close, actionLabel = 'เพิ่�
       {selected.details.variants && <label>รุ่น<select value={variant} onChange={event => setVariant(event.target.value)}>
         {selected.details.variants.map(entry => <option key={entry.label} value={entry.label}>{variantName(selected, entry.label)}{entry.rarity ? ' · ' + entry.rarity : ''}</option>)}
       </select></label>}
+      {bonusKind && baseChoices.length > 0 && <label>{bonusKind === 'armor' ? 'เกราะพื้นฐาน' : bonusKind === 'shield' ? 'โล่พื้นฐาน' : bonusKind === 'ammunition' ? 'กระสุนพื้นฐาน' : 'อาวุธพื้นฐาน'}
+        <select value={base?.id ?? ''} onChange={event => setBaseId(event.target.value)}>
+          {baseChoices.map(entry => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+        </select></label>}
       <label>จำนวน<input type="number" min={1} max={999} value={quantity} onChange={event => setQuantity(Math.max(1, Math.min(999, event.target.valueAsNumber || 1)))} /></label>
       <div className="inline">
         <button type="button" className="primary" disabled={busy} onClick={() => void add()}>{actionLabel}</button>

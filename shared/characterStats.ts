@@ -14,7 +14,11 @@ export const armorPresets = {
   'Mage Armor': { base: 13, dex: 'full' }
 } as const
 export type HitDie = 6 | 8 | 10 | 12
-export type ArmorSettings = { base: number; dex: 'full' | 'medium' | 'none'; shield: boolean; bonus: number; extra?: Ability }
+export type ArmorSettings = {
+  base: number; dex: 'full' | 'medium' | 'none'; shield: boolean; bonus: number; extra?: Ability
+  /** Magic bonus of the worn armor and of the shield (+1 to +3), kept apart so re-equipping never stacks. */
+  armorMagic?: number; shieldMagic?: number
+}
 export type CharacterCalculations = {
   level?: number
   hp?: { classes: { die: HitDie; levels: number }[]; bonus: number }
@@ -51,7 +55,7 @@ export function calculatedSheet(sheet: Sheet): Sheet {
   const maxHp = config.hp ? fixedMaxHp(config.hp, abilityModifier(sheet.abilities.CON)) : sheet.maxHp
   const armor = config.armor
   const ac = armor ? Math.max(0, armor.base + (armor.dex === 'full' ? dex : armor.dex === 'medium' ? Math.min(2, dex) : 0)
-    + (armor.shield ? 2 : 0) + armor.bonus + (armor.extra ? abilityModifier(sheet.abilities[armor.extra]) : 0)) : sheet.ac
+    + (armor.shield ? 2 + (armor.shieldMagic ?? 0) : 0) + (armor.armorMagic ?? 0) + armor.bonus + (armor.extra ? abilityModifier(sheet.abilities[armor.extra]) : 0)) : sheet.ac
   const spellAttack = config.spellAbility ? proficiency + abilityModifier(sheet.abilities[config.spellAbility]) : sheet.spellAttack
   return { ...sheet, maxHp, hp: Math.min(sheet.hp, maxHp), ac, proficiency,
     initiative: config.initiativeBonus === undefined ? sheet.initiative : dex + config.initiativeBonus,

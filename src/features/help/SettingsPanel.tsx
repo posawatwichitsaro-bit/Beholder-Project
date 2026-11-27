@@ -2,6 +2,8 @@ import { usePrefs, uiScales } from '../../state/prefs.ts'
 import type { Role } from '../shell/panelRegistry.ts'
 import { appVersion } from '../../../shared/version.ts'
 import { panelsFor } from '../shell/panelRegistry.ts'
+import { useRoomStore } from '../../state/roomStore.ts'
+import { sendCommand } from '../../state/useCommand.ts'
 
 /**
  * Personal display settings for this device, the keyboard shortcuts for this
@@ -9,6 +11,7 @@ import { panelsFor } from '../shell/panelRegistry.ts'
  */
 export function SettingsPanel({ role, replayTour }: { role: Role; replayTour: () => void }) {
   const prefs = usePrefs()
+  const rules = useRoomStore(state => state.room?.settings)
   const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
   const shortcuts: [string, string][] = [
     [mac ? '⌘ K' : 'Ctrl K', 'ค้นหาคำสั่ง'],
@@ -34,6 +37,17 @@ export function SettingsPanel({ role, replayTour }: { role: Role; replayTour: ()
       <label className="settings-toggle"><input type="checkbox" checked={prefs.showGrid} onChange={event => prefs.update({ showGrid: event.target.checked })} />
         <span><b>แสดงเส้น Grid บนกระดาน</b><small>Token ยังเดินตามช่องเหมือนเดิมแม้ซ่อนเส้น</small></span></label>
     </fieldset>
+    {role === 'dm' && <fieldset className="settings-group">
+      <legend>กติกาของห้อง</legend>
+      <label className="settings-toggle"><input type="checkbox" checked={rules?.encumbrance !== false}
+        onChange={event => void sendCommand({ type: 'settings', settings: { encumbrance: event.target.checked } })} />
+        <span><b>น้ำหนักบรรทุก</b><small>แบกเกิน STR × 15 lb แล้ว Speed เหลือ 5 ft (เหรียญ 50 เหรียญ = 1 lb)</small></span></label>
+      <label>การเลื่อนระดับ<select value={rules?.advancement ?? 'milestone'}
+        onChange={event => void sendCommand({ type: 'settings', settings: { advancement: event.target.value } })}>
+        <option value="milestone">Milestone · DM สั่งเลื่อนระดับเอง</option>
+        <option value="xp">XP · เก็บแต้มจากมอนสเตอร์ที่ล้ม</option>
+      </select></label>
+    </fieldset>}
     <fieldset className="settings-group">
       <legend>ความช่วยเหลือ</legend>
       <button type="button" onClick={replayTour}>เริ่มทัวร์แนะนำอีกครั้ง</button>

@@ -11,6 +11,7 @@ import { ConditionEditor } from '../combat/ConditionEditor.tsx'
 import { SlotTracker } from './SlotTracker.tsx'
 import { parseSlots } from '../../../shared/conditions.ts'
 import { LevelUpDialog } from './LevelUpDialog.tsx'
+import { carryingLoad } from '../../../shared/encumbrance.ts'
 import { RestPanel } from './RestPanel.tsx'
 
 type Tab = 'overview' | 'actions' | 'spells' | 'rest' | 'inventory' | 'notes'
@@ -30,6 +31,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
   chooseTarget?: (id: string) => void
 }) {
   const dm = room.me.role === 'dm'
+  const overloaded = actor.kind === 'pc' && room.settings?.encumbrance !== false && carryingLoad(actor).over
   const [tab, setTab] = useState<Tab>('overview')
   const [levelling, setLevelling] = useState(false)
   const [mode, setMode] = useState<Mode>('normal')
@@ -121,7 +123,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
       <div className="sheet-stat"><Shield size={14} aria-hidden="true" /><b>{actor.ac}</b><span>AC</span></div>
       <button type="button" className="sheet-stat sheet-rollable" onClick={() => roll('initiative')} aria-label={'ทอย Initiative ' + signed(actor.initiative)}>
         <Zap size={14} aria-hidden="true" /><b>{signed(actor.initiative)}</b><span>Init</span></button>
-      <div className="sheet-stat"><Footprints size={14} aria-hidden="true" /><b>{actor.speed}</b><span>ฟุต</span></div>
+      <div className="sheet-stat" title={overloaded ? 'แบกเกินพิกัด · Speed ปกติ ' + actor.speed + ' ft' : undefined}><Footprints size={14} aria-hidden="true" /><b className={overloaded ? 'carry-over' : undefined}>{overloaded ? 5 : actor.speed}</b><span>ฟุต</span></div>
       <div className="sheet-stat"><b>{signed(actor.proficiency)}</b><span>Prof</span></div>
       <div className="sheet-conditions"><ConditionEditor actor={actor} send={send} /></div>
     </section>

@@ -236,3 +236,24 @@ export function parseMonsterText(source: string): ManualMonster {
     attacks, statBlock: source.trim()
   })
 }
+
+/** The SRD entry an older monster sheet was made from: its catalog id, else the same name (ignoring "Goblin 2"-style numbers). */
+export function srdMatch(sheet: Pick<Sheet, 'name' | 'monsterReference'>, catalog: ManualMonster[]) {
+  const id = sheet.monsterReference?.id
+  if (id) return catalog.find(entry => entry.id === id)
+  const name = sheet.name.trim().replace(/\s+\d+$/, '').toLowerCase()
+  return catalog.find(entry => entry.id.startsWith('srd-') && entry.name.toLowerCase() === name)
+}
+
+/**
+ * An older template brought up to the current SRD sheet: stats, saves, skills,
+ * attacks and art come from the catalog; the name the DM gave it and its loot
+ * (items, search DC and skill) stay. Undefined when no SRD entry matches.
+ */
+export function upgradeFromSrd(sheet: Sheet, catalog: ManualMonster[]): Sheet | undefined {
+  const entry = srdMatch(sheet, catalog)
+  if (!entry) return undefined
+  const fresh = monsterSheet(entry)
+  return { ...fresh, name: sheet.name, portrait: sheet.portrait && !sheet.portrait.startsWith('/art/') ? sheet.portrait : fresh.portrait,
+    inventory: sheet.inventory, lootDc: sheet.lootDc, lootSkill: sheet.lootSkill }
+}

@@ -92,6 +92,8 @@ export type InventoryItem = {
   quantity?: number; tool?: 'thievesTools'; lootTier?: 'basic' | 'bonus'
   /** Set when the item came from the SRD item catalog: the template id and a few facts shown with it. */
   ref?: string; category?: string; rarity?: string; attunement?: boolean; weight?: number
+  /** A +1/+2/+3 weapon, armor, shield or ammunition: the magic bonus, and the plain catalog item it is made from. */
+  bonus?: number; base?: string
 }
 export type ObjectKind = 'container' | 'prop' | 'structure' | 'item'
 export const objectLabels: Record<ObjectKind, string> = {
@@ -171,7 +173,11 @@ export type Room = {
   activeSceneId?: string; scenes: Scene[]; actors: Actor[]; templates: Template[]; rolls: Roll[]
   log?: LogEntry[]
   /** Table rules the DM can switch. autoDamage: a hit applies its damage without waiting for the DM. */
-  settings?: { autoDamage?: boolean }
+  /**
+   * Table rules the DM can switch. autoDamage: a hit applies its damage without waiting for the DM.
+   * encumbrance (on unless false): carrying capacity limits Speed. advancement: level by milestone (default) or by XP.
+   */
+  settings?: { autoDamage?: boolean; encumbrance?: boolean; advancement?: 'milestone' | 'xp' }
 }
 export type Snapshot = Omit<Room, 'invite' | 'dmInvite' | 'actors' | 'members'> & {
   me: Member; members: Member[]; invite?: string; dmInvite?: string; actors: Actor[]

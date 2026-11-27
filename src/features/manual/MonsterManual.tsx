@@ -3,7 +3,8 @@ import { abilities } from '../../../shared/model.ts'
 import type { Sheet } from '../../../shared/model.ts'
 import { abilityModifier } from '../../../shared/characterStats.ts'
 import type { TokenDragProps } from '../board/tokenDrag.ts'
-import { catalogMonsters, crNumber, detailLabels, monsterSheet, parseMonsterText } from '../../../shared/monsterManual.ts'
+import { loadMonsterCatalog } from './catalog.ts'
+import { crNumber, detailLabels, monsterSheet, parseMonsterText } from '../../../shared/monsterManual.ts'
 import type { ManualMonster } from '../../../shared/monsterManual.ts'
 import { damageKinds } from '../../../shared/model.ts'
 
@@ -35,9 +36,7 @@ export function MonsterManual({ addTemplate, placeMonster, dragMonster }: {
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true); setError('')
-    fetch('/data/srd-monsters.json', { signal: controller.signal }).then(async response => {
-      if (!response.ok) throw Error()
-      const entries = catalogMonsters(await response.json())
+    loadMonsterCatalog().then(entries => {
       if (!controller.signal.aborted) setCatalog(entries)
     }).catch(() => { if (!controller.signal.aborted) setError('เปิดคู่มือไม่สำเร็จ') })
       .finally(() => { if (!controller.signal.aborted) setLoading(false) })

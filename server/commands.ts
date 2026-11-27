@@ -69,6 +69,11 @@ function description(value: unknown) {
 }
 const rarities = ['Common', 'Uncommon', 'Rare', 'Very Rare', 'Legendary', 'Artifact', 'Varies']
 /** Facts copied from the SRD item catalog. Optional, so hand-made items and older rooms stay as they are. */
+function baseRef(value: unknown) {
+  const ref = String(value)
+  if (!/^srd-5\.2\.1:equipment:[a-z0-9-]+$/.test(ref)) throw new Invalid('ไอเทมพื้นฐานไม่ถูกต้อง')
+  return ref
+}
 function catalogFields(item: Record<string, unknown>): Partial<InventoryItem> {
   if (item.ref === undefined) return {}
   const ref = text(item.ref)
@@ -78,7 +83,9 @@ function catalogFields(item: Record<string, unknown>): Partial<InventoryItem> {
   if (weight !== undefined && !(Number.isFinite(weight) && weight >= 0 && weight <= 100000)) throw new Invalid('น้ำหนักไม่ถูกต้อง')
   return {
     ref, category: item.category === undefined ? undefined : text(item.category, 40),
-    rarity: item.rarity as string | undefined, attunement: item.attunement === true ? true : undefined, weight
+    rarity: item.rarity as string | undefined, attunement: item.attunement === true ? true : undefined, weight,
+    bonus: item.bonus === undefined || item.bonus === 0 ? undefined : number(item.bonus, 1, 3),
+    base: item.base === undefined ? undefined : baseRef(item.base)
   }
 }
 function parseItem(value: unknown, monster: boolean): InventoryItem {
@@ -184,7 +191,9 @@ function parseCalculations(value: unknown): CharacterCalculations {
     const armor = record(input.armor)
     if (armor.dex !== 'full' && armor.dex !== 'medium' && armor.dex !== 'none') throw new Invalid('เลือกวิธีใช้ DEX กับ AC')
     output.armor = { base: number(armor.base, 1, 99), dex: armor.dex, shield: armor.shield === true,
-      bonus: number(armor.bonus, -30, 99), extra: armor.extra === undefined ? undefined : readAbility(armor.extra) }
+      bonus: number(armor.bonus, -30, 99), extra: armor.extra === undefined ? undefined : readAbility(armor.extra),
+      armorMagic: armor.armorMagic === undefined ? undefined : number(armor.armorMagic, 0, 3),
+      shieldMagic: armor.shieldMagic === undefined ? undefined : number(armor.shieldMagic, 0, 3) }
   }
   if (input.initiativeBonus !== undefined) output.initiativeBonus = number(input.initiativeBonus, -99, 99)
   if (input.spellAbility !== undefined) output.spellAbility = readAbility(input.spellAbility)
@@ -666,6 +675,18 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
       }
       return {}
     }
+    case 'inventoryBonus': {
+      // The DM sets or changes the +1/+2/+3 of an item already in a bag; re-equip it to refresh the sheet.
+      requireDM(member)
+      const creature = actor()
+      const item = get(creature.inventory ?? [], command.itemId)
+      if (!['weapon', 'armor', 'shield', 'ammunition'].includes(item.category ?? '')) throw new Invalid('ใส่โบนัสเวทได้กับอาวุธ เกราะ โล่ และกระสุน')
+      const bonus = number(command.bonus, 0, 3)
+      const plain = item.name.replace(/ \+[1-3]$/, '')
+      if (bonus) Object.assign(item, { bonus, name: plain + ' +' + bonus, base: item.base ?? (item.ref?.includes(':equipment:') ? item.ref : undefined) })
+      else { delete item.bonus; item.name = plain }
+      return {}
+    }
     case 'lootSettings': {
       requireDM(member)
       const creature = actor()
@@ -844,6 +865,16 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
       if (pile.kind === 'container') pile.items.push(item)
       creature.inventory = inventory.filter(entry => entry.id !== item.id)
       addLog(room, { kind: 'scene', sceneId: target.id, name: member.name, text: creature.name + ' ทิ้ง ' + item.name + ' ลงพื้น' })
+      return {}
+    }
+    case 'containerAdd': {
+      // Straight into a box on the map (from the SRD catalog or typed): the DM, or anyone for a temp box.
+      const target = board()
+      const box = object(target.objects ?? [])
+      if (!box.temp) requireDM(member)
+      if (box.kind !== 'container') throw new Invalid('เป้าหมายต้องเป็นกล่อง')
+      if (box.items.length >= 50) throw new Invalid('ใส่ของในกล่องได้สูงสุด 50 รายการ')
+      box.items.push(parseItem(command.item, false))
       return {}
     }
     case 'moveObject': {
@@ -1124,7 +1155,15 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
     case 'settings': {
       requireDM(member)
       const input = record(command.settings)
-      room.settings = { ...room.settings, autoDamage: input.autoDamage === true }
+      // Only the rules named in this command change.
+      const next = { ...room.settings }
+      if (input.autoDamage !== undefined) next.autoDamage = input.autoDamage === true
+      if (input.encumbrance !== undefined) next.encumbrance = input.encumbrance === true
+      if (input.advancement !== undefined) {
+        if (input.advancement !== 'milestone' && input.advancement !== 'xp') throw new Invalid('เลือกวิธีเลื่อนระดับ')
+        next.advancement = input.advancement
+      }
+      room.settings = next
       return {}
     }
     case 'spendHitDie': {

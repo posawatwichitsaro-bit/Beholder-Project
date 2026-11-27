@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import type { Actor, InventoryItem, LootSkill, Snapshot } from '../../../shared/model.ts'
 import { commandId } from '../../lib/api.ts'
-import { armorFromCatalog, weaponAttack } from '../../../shared/itemCatalog.ts'
+import { armorFromCatalog, weaponAttack, withMagicBonus } from '../../../shared/itemCatalog.ts'
 import { itemIcon } from '../../../shared/catalogArt.ts'
 import { ItemCatalogPicker, loadItemCatalog } from '../items/ItemCatalogPicker.tsx'
 import { useRoomStore } from '../../state/roomStore.ts'
+import { carryingLoad } from '../../../shared/encumbrance.ts'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
 
@@ -52,6 +53,9 @@ export function InventoryPanel({ actor, send, expanded = false }: { actor: Actor
   const [equipError, setEquipError] = useState('')
   const monster = actor.kind === 'monster'
   const items = actor.inventory ?? []
+  const dm = useRoomStore(state => state.room?.me.role === 'dm')
+  const encumbrance = useRoomStore(state => state.room?.settings?.encumbrance !== false)
+  const load = !monster && encumbrance ? carryingLoad(actor) : undefined
   // Dropping needs this creature's token on the scene the table is playing.
   const dropScene = useRoomStore(state => {
     const room = state.room
@@ -64,28 +68,39 @@ export function InventoryPanel({ actor, send, expanded = false }: { actor: Actor
   async function equip(item: InventoryItem, as: 'attack' | 'armor') {
     setEquipError('')
     try {
-      const template = (await loadItemCatalog()).find(entry => entry.id === item.ref)
+      // A +N item equips as its plain base item with the bonus added.
+      const template = (await loadItemCatalog()).find(entry => entry.id === (item.base ?? item.ref))
       if (!template) throw new Error('ไม่พบไอเทมนี้ในคลัง SRD')
       const { id: _id, ownerId: _owner, templateId: _template, lootResult: _loot, ...sheet } = actor
       if (as === 'attack') {
-        const attack = weaponAttack(template, actor)
+        const plain = weaponAttack(template, actor)
+        const attack = plain && withMagicBonus(plain, item.bonus)
         if (!attack) throw new Error('ไอเทมนี้ใช้เป็นการโจมตีไม่ได้')
         await send({ type: 'sheet', actorId: actor.id, sheet: { ...sheet, attacks: [...(actor.attacks ?? []), { ...attack, name: item.name }] } })
       } else {
-        const armor = armorFromCatalog(template, actor.calculations?.armor)
+        const armor = armorFromCatalog(template, actor.calculations?.armor, item.bonus)
         if (!armor) throw new Error('ไอเทมนี้สวมใส่ไม่ได้')
         await send({ type: 'sheet', actorId: actor.id, sheet: { ...sheet, calculations: { ...actor.calculations, armor } } })
       }
     } catch (error) { setEquipError((error as Error).message) }
   }
   return <Wrapper className={'inventory' + (expanded ? ' inventory-expanded' : '')}><Title>Inventory ({items.length})</Title>
+    {load && <div className={'carry-load' + (load.over ? ' carry-over' : '')} role={load.over ? 'alert' : undefined}>
+      <span>น้ำหนัก {load.carried} / {load.capacity} lb</span>
+      <meter min={0} max={load.capacity} high={load.capacity * .99} value={Math.min(load.carried, load.capacity)} aria-label="น้ำหนักที่แบก" />
+      {load.over && <small>เกินพิกัดบรรทุก · Speed เหลือ {load.speed} ft</small>}
+    </div>}
     {items.length ? <ul>{items.map(item => <li key={item.id}>
       <ItemName item={item} loot={monster} />
-      {!monster && item.ref?.includes(':equipment:') && item.category === 'weapon' && <button type="button"
+      {!monster && (item.base ?? item.ref)?.includes(':equipment:') && item.category === 'weapon' && <button type="button"
         disabled={actor.attacks?.some(attack => attack.name === item.name)} title="เพิ่มเป็นการโจมตีบนชีต (คิด Proficiency ให้แล้ว)"
         onClick={() => void equip(item, 'attack')}>{actor.attacks?.some(attack => attack.name === item.name) ? 'อยู่ในการโจมตีแล้ว' : 'ใช้เป็นการโจมตี'}</button>}
-      {!monster && item.ref?.includes(':equipment:') && (item.category === 'armor' || item.category === 'shield') && <button type="button"
+      {!monster && (item.base ?? item.ref)?.includes(':equipment:') && (item.category === 'armor' || item.category === 'shield') && <button type="button"
         title="คำนวณ AC จากชิ้นนี้" onClick={() => void equip(item, 'armor')}>{item.category === 'shield' ? 'ถือโล่' : 'สวมใส่'}</button>}
+      {dm && ['weapon', 'armor', 'shield', 'ammunition'].includes(item.category ?? '') && <select className="item-bonus" aria-label={'โบนัสเวทของ ' + item.name}
+        value={item.bonus ?? 0} onChange={event => void send({ type: 'inventoryBonus', actorId: actor.id, itemId: item.id, bonus: Number(event.target.value) })}>
+        {[0, 1, 2, 3].map(value => <option key={value} value={value}>{value ? '+' + value : 'ไม่มีโบนัส'}</option>)}
+      </select>}
       {dropScene && !actor.lootResult && remove !== item.id && <button type="button" aria-label={'ทิ้ง ' + item.name + ' ลงพื้น'} title="วางไว้บนพื้นใต้ Token ใครอยู่ใกล้ก็เก็บได้"
         onClick={() => void send({ type: 'dropItem', sceneId: dropScene, actorId: actor.id, itemId: item.id })}>ทิ้งลงพื้น</button>}
       {remove === item.id ? <><button onClick={() => void send({ type: 'inventoryRemove', actorId: actor.id, itemId: item.id }).then(ok => {

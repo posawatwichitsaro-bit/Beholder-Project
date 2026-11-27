@@ -3,6 +3,8 @@ import { objectLabels } from '../../../shared/model.ts'
 import type { Actor, ObjectDefinition, ObjectKind, SceneObject } from '../../../shared/model.ts'
 import { PictureInput } from '../sheets/PictureInput.tsx'
 import { ItemName } from './Inventory.tsx'
+import { ItemCatalogPicker } from '../items/ItemCatalogPicker.tsx'
+import type { InventoryItem } from '../../../shared/model.ts'
 import { sceneArt, sceneArtByImage } from '../../../shared/catalogArt.ts'
 
 type Point = { x: number; y: number }
@@ -19,6 +21,9 @@ export function ObjectEditor({ initial, point, save, close, error }: {
   const container = initial?.kind === 'container' ? initial : undefined
   const structure = initial?.kind === 'structure' ? initial : undefined
   const [locked, setLocked] = useState(container?.lockDc !== undefined)
+  // Catalog items keep their facts (weight, rarity…); typed lines stay plain names.
+  const [catalogItems, setCatalogItems] = useState<Omit<InventoryItem, 'id'>[]>(() => container?.items.filter(item => item.ref) ?? [])
+  const [browsing, setBrowsing] = useState(false)
   const title = point ? 'นำเข้า Object' : initial ? 'รายละเอียด Object ในคลัง' : 'เพิ่ม Object เข้าคลัง'
   return <div className="scrim"><form className="dialog compact" role="dialog" aria-label={title} onSubmit={async event => {
     event.preventDefault()
@@ -29,13 +34,13 @@ export function ObjectEditor({ initial, point, save, close, error }: {
       width: value('width'), height: value('height') }
     let definition: ObjectDefinition
     if (kind === 'container') {
-      const originalItems = [...(container?.items ?? [])]
+      const originalItems = [...(container?.items.filter(item => !item.ref) ?? [])]
       const names = String(form.get('items')).split('\n').map(item => item.trim()).filter(Boolean)
       const items = names.map(name => {
         const index = originalItems.findIndex(item => item.name === name)
         return index < 0 ? { name, description: '' } : originalItems.splice(index, 1)[0]
       })
-      definition = { ...fields, kind, items, lockDc: locked ? value('lockDc') : undefined }
+      definition = { ...fields, kind, items: [...items, ...catalogItems].slice(0, 50), lockDc: locked ? value('lockDc') : undefined }
     } else if (kind === 'structure') {
       definition = { ...fields, kind, hp: value('hp'), ac: value('ac'), cover: value('cover') as 0 | 2 | 5 | 99 }
     } else definition = { ...fields, kind }
@@ -70,7 +75,13 @@ export function ObjectEditor({ initial, point, save, close, error }: {
       <label>สูง (ช่อง)<input required name="height" type="number" step=".5" min={.5} max={50} defaultValue={initial?.height ?? 1} /></label>
     </div>
     {kind === 'container' && <>
-      <label>ของเริ่มต้นในกล่อง (บรรทัดละหนึ่งชิ้น)<textarea name="items" rows={3} defaultValue={container?.items.map(item => item.name).join('\n')} /></label>
+      <label>ของเริ่มต้นในกล่อง (บรรทัดละหนึ่งชิ้น)<textarea name="items" rows={3} defaultValue={container?.items.filter(item => !item.ref).map(item => item.name).join('\n')} /></label>
+      {catalogItems.length > 0 && <ul className="catalog-chosen" aria-label="ของจากคลัง SRD ในกล่อง">{catalogItems.map((entry, index) => <li key={index}>
+        <ItemName item={{ ...entry, id: String(index) }} />
+        <button type="button" aria-label={'เอา ' + entry.name + ' ออกจากกล่อง'} onClick={() => setCatalogItems(list => list.filter((_, at) => at !== index))}>×</button>
+      </li>)}</ul>}
+      {browsing ? <ItemCatalogPicker actionLabel="ใส่ในกล่อง" close={() => setBrowsing(false)} choose={entry => { setCatalogItems(list => [...list, entry]); return true }} />
+        : <button type="button" onClick={() => setBrowsing(true)}>เพิ่มจากคลัง SRD</button>}
       <label className="inline"><input type="checkbox" checked={locked} onChange={event => setLocked(event.target.checked)} />ล็อกกล่อง</label>
       {locked && <label>DC สะเดาะล็อก<input type="number" name="lockDc" min={1} max={30} defaultValue={container?.lockDc ?? 15} required /></label>}
     </>}
@@ -91,6 +102,7 @@ export function ObjectActions({ item, actors, selected, dm, send, close, copy }:
   const [chosen, setChosen] = useState(selected)
   const [amount, setAmount] = useState(1)
   const [confirmRemove, setConfirmRemove] = useState(false)
+  const [adding, setAdding] = useState(false)
   const actor = actors.find(actor => actor.id === chosen) ?? actors[0]
   const lock = item.kind === 'container' ? item.lock : undefined
   const hasTools = actor?.inventory?.some(entry => entry.tool === 'thievesTools')
@@ -126,6 +138,9 @@ export function ObjectActions({ item, actors, selected, dm, send, close, copy }:
         {item.items.length === 0 && <p className="muted">กล่องว่าง</p>}
         {item.items.map(loot => <div className="actor-item" key={loot.id}><ItemName item={loot} />
           <button disabled={!actor} onClick={() => void perform('takeItem', { itemId: loot.id })}>หยิบ</button></div>)}
+        {(dm || item.temp) && (adding ? <ItemCatalogPicker actionLabel="ใส่ในกล่อง" close={() => setAdding(false)}
+          choose={entry => send({ type: 'containerAdd', objectId: item.id, item: entry })} />
+          : <button type="button" onClick={() => setAdding(true)}>เพิ่มจากคลัง SRD</button>)}
         {actor?.inventory?.length ? <><h3>ฝากจาก Inventory</h3>
           {actor.inventory.map(loot => <div className="actor-item" key={loot.id}><ItemName item={loot} />
             <button onClick={() => void perform('storeItem', { itemId: loot.id })}>ฝาก</button></div>)}</> : null}
