@@ -35,12 +35,13 @@ test('closing a pinned panel clears the pin', () => {
   assert.deepEqual(state, { open: [], pinned: null })
 })
 
-test('players never get DM-only panels, and shortcuts follow the role', () => {
-  assert.ok(panelsFor('dm').some(panel => panel.id === 'manual'))
-  assert.ok(!panelsFor('player').some(panel => panel.id === 'manual'))
-  assert.equal(panelForShortcut('n', 'dm')?.id, 'manual')
-  assert.equal(panelForShortcut('n', 'player'), undefined)
+test('since 0.07 players get the Monster Manual and the SRD item panel too, with the same shortcuts', () => {
+  for (const role of ['dm', 'player'] as const) {
+    assert.equal(panelForShortcut('n', role)?.id, 'manual')
+    assert.equal(panelForShortcut('i', role)?.id, 'items')
+  }
   assert.equal(panelForShortcut('t', 'player')?.id, 'sheets')
+  assert.deepEqual(panelsFor('player').map(panel => panel.id), panelsFor('dm').map(panel => panel.id))
 })
 
 test('shortcuts are unique and never take the board keys R, V and G or the DM storeroom key M', () => {
