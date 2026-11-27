@@ -1,5 +1,5 @@
-/** The release players see, "0.11" for package version 0.11.0. Kept in step with package.json by a test. */
-export const appVersion = '0.11'
+/** The release players see, "0.12" for package version 0.12.0. Kept in step with package.json by a test. */
+export const appVersion = '0.12'
 
 /** "0.7.0" → "0.07", "0.12.0" → "0.12". */
 export function releaseName(packageVersion: string) {

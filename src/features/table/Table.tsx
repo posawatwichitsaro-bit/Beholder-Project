@@ -54,6 +54,7 @@ import { sendCommand } from '../../state/useCommand.ts'
 import { attackOdds, withinReach } from '../../../shared/advantage.ts'
 import type { RollMode } from '../../../shared/advantage.ts'
 import { XpAward } from '../combat/XpAward.tsx'
+import { OpportunityCards } from '../combat/OpportunityCards.tsx'
 import type { Command } from '../../state/useCommand.ts'
 
 type Point = { x: number; y: number }
@@ -238,7 +239,7 @@ export function Table({ account, changeAccount }: AccountProps) {
         void commandHere({ type: 'sheetRoll', rollType: 'attack', actorId: acting.id, targetId: target, weaponIndex })
         return true
       },
-      undo: dm ? () => void send({ type: 'undo' }) : undefined
+      undo: () => void send({ type: 'undo' })
     }
   }
   useEffect(() => {
@@ -589,7 +590,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     ...[4, 6, 8, 10, 12, 100].map(die => ({ id: 'roll-d' + die, label: 'ทอย d' + die, group: 'ลูกเต๋า', keywords: 'roll dice', run: () => void send({ type: 'roll', formula: '1d' + die }) })),
     ...(mainToken ? [{ id: 'focus-main', label: 'ไปที่ ' + actorName(mainToken.actorId), group: 'กระดาน', keywords: 'camera center main character ตัวหลัก', run: focusMain }] : []),
     ...(inviteLink ? [{ id: 'invite', label: 'คัดลอกลิงก์เชิญผู้เล่น', group: 'โต๊ะ', keywords: 'invite link share เชิญ', run: () => void copyInvite() }] : []),
-    ...(dm ? [{ id: 'undo', label: 'ย้อนการเดินหรือการหัก HP ล่าสุด (Ctrl+Z)', group: 'โต๊ะ', keywords: 'undo ย้อน ctrl z', run: () => void send({ type: 'undo' }) }] : []),
+    { id: 'undo', label: 'ย้อนสิ่งที่ฉันทำล่าสุด (Ctrl+Z)', group: 'โต๊ะ', keywords: 'undo ย้อน ctrl z', run: () => void send({ type: 'undo' }) },
     { id: 'reset-ui', label: 'รีเซ็ตตำแหน่ง UI', group: 'โต๊ะ', keywords: 'reset layout ui move position รีเซ็ต ย้าย', run: () => usePrefs.getState().update({ layout: {} }) },
     { id: 'close-panels', label: 'ปิดแผงทั้งหมด', group: 'โต๊ะ', keywords: 'close hide escape', shortcut: 'Esc', run: () => { dispatchDock({ type: 'closeAll' }); setDmCombat(false) } },
     { id: 'tour', label: 'เริ่มทัวร์แนะนำ', group: 'ช่วยเหลือ', keywords: 'tour help guide ทัวร์ ช่วยเหลือ วิธีใช้', run: () => { closePanels(); setManageOpen(false); setTouring(true) } },
@@ -720,6 +721,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       <DamageQueue room={room} send={send} />
       <EncounterEnd scene={scene} />
       <PendingSaves room={room} send={commandHere} />
+      <OpportunityCards room={room} scene={scene} send={commandHere} />
       {calibratingScene && <GridCalibrator key={calibratingScene.id} scene={calibratingScene} rect={calibrating?.rect} preview={setGridPreview} cancel={endCalibration}
         save={async fit => {
           const ok = await send({ type: 'scene', sceneId: calibratingScene.id, name: calibratingScene.name, ...fit })

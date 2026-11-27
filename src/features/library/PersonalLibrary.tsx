@@ -6,6 +6,7 @@ import { blankSheet, objectLabels } from '../../../shared/model.ts'
 import type { Library, ObjectDefinition, SavedObject, Sheet, Template } from '../../../shared/model.ts'
 import { ApiError, api, commandId, json } from '../../lib/api.ts'
 import { SheetEditor } from '../sheets/SheetEditor.tsx'
+import { CharacterWizard } from '../sheets/CharacterWizard.tsx'
 import { ObjectEditor } from '../objects/Objects.tsx'
 
 const base = '/api/library'
@@ -60,6 +61,17 @@ export function PersonalLibrary({ roomName, dm, draft, clearDraft, importSheet, 
   }
   function openSheet(sheet: Sheet) {
     setEditing({ id: commandId(), sheet })
+  }
+  // "+ ตัวละคร" walks through the same character wizard as the table, then saves to the library.
+  const [wizard, setWizard] = useState(false)
+  async function saveNew(sheet: Sheet) {
+    const id = commandId()
+    return run(async () => {
+      const saved = await api<Template>(base + '/sheets/' + id, json(sheet, 'PUT'))
+      setLibrary(current => current && { ...current, sheets: [...current.sheets, saved] })
+      setWizard(false)
+      setMessage('บันทึก ' + sheet.name + ' ลงคลังแล้ว')
+    })
   }
   function save(value: Sheet) {
     if (!editing) return
@@ -117,7 +129,7 @@ export function PersonalLibrary({ roomName, dm, draft, clearDraft, importSheet, 
           <button onClick={clearDraft}>ยกเลิก</button></div>
       </div>}
       <div className="inline library-tools">
-        <button onClick={() => openSheet(blankSheet())}>+ ตัวละคร</button>
+        <button onClick={() => setWizard(true)}>+ ตัวละคร</button>
         <button onClick={() => openSheet(blankSheet('monster'))}>+ มอนสเตอร์</button>
       </div>
       <label>ค้นหาชีต<input value={filter} onChange={event => setFilter(event.target.value)} /></label>
@@ -163,6 +175,8 @@ export function PersonalLibrary({ roomName, dm, draft, clearDraft, importSheet, 
       </>}
     </>}
     {editing && <SheetEditor key={editing.id} initial={editing.sheet} save={save} cancel={() => setEditing(undefined)} />}
+    {wizard && <CharacterWizard save={saveNew} close={() => setWizard(false)}
+      openEditor={sheet => { setWizard(false); openSheet(sheet ?? blankSheet()) }} />}
     {remove && <div className="library-draft">
       <p>ลบ {remove.sheet.name} จากคลังส่วนตัว?</p>
       <div className="inline"><button disabled={busy} onClick={() => void run(async () => {

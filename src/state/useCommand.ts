@@ -45,7 +45,7 @@ async function deliver(command: Command, created?: (sceneId: string) => void): P
   try {
     const silent = room.me.role === 'dm' && store.privateRoll && privateRollTypes.has(String(command.type))
     const payload = json({ ...command, privateRoll: silent, commandId: commandId(), revision: room.revision })
-    let receipt: { sceneId?: string }
+    let receipt: { sceneId?: string; notice?: string }
     try { receipt = await api(roomPath(room.id) + '/commands', payload) }
     catch (error) {
       if (!(error instanceof TypeError)) throw error
@@ -53,6 +53,8 @@ async function deliver(command: Command, created?: (sceneId: string) => void): P
     }
     await refreshRoom(room.id).catch(() => {})
     if (receipt.sceneId) created?.(receipt.sceneId)
+    // Some commands answer with a short message for this seat only (undo says what it took back).
+    if (receipt.notice) useRoomStore.getState().setNotice(receipt.notice)
     return true
   } catch (error) {
     useRoomStore.getState().setError((error as Error).message)

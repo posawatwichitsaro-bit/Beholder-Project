@@ -5,6 +5,7 @@ import { armorFromCatalog, weaponAttack, withMagicBonus } from '../../../shared/
 import { itemIcon } from '../../../shared/catalogArt.ts'
 import { ItemCatalogPicker, loadItemCatalog } from '../items/ItemCatalogPicker.tsx'
 import { useRoomStore } from '../../state/roomStore.ts'
+import { itemLights } from '../../../shared/vision.ts'
 import { carryingLoad } from '../../../shared/encumbrance.ts'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
@@ -101,6 +102,9 @@ export function InventoryPanel({ actor, send, expanded = false }: { actor: Actor
         value={item.bonus ?? 0} onChange={event => void send({ type: 'inventoryBonus', actorId: actor.id, itemId: item.id, bonus: Number(event.target.value) })}>
         {[0, 1, 2, 3].map(value => <option key={value} value={value}>{value ? '+' + value : 'ไม่มีโบนัส'}</option>)}
       </select>}
+      {!monster && item.ref && itemLights[item.ref] && <button type="button" aria-pressed={item.lit === true}
+        title={'สว่าง ' + itemLights[item.ref].bright + ' ฟุต สลัวอีก ' + itemLights[item.ref].dim + ' ฟุต' + (item.ref.endsWith('bullseye') ? ' (กรวยจริงแสดงเป็นวงกลม)' : '')}
+        onClick={() => void send({ type: 'lightItem', actorId: actor.id, itemId: item.id, lit: !item.lit })}>{item.lit ? 'ดับ' : 'จุด'}</button>}
       {dropScene && !actor.lootResult && remove !== item.id && <button type="button" aria-label={'ทิ้ง ' + item.name + ' ลงพื้น'} title="วางไว้บนพื้นใต้ Token ใครอยู่ใกล้ก็เก็บได้"
         onClick={() => void send({ type: 'dropItem', sceneId: dropScene, actorId: actor.id, itemId: item.id })}>ทิ้งลงพื้น</button>}
       {remove === item.id ? <><button onClick={() => void send({ type: 'inventoryRemove', actorId: actor.id, itemId: item.id }).then(ok => {

@@ -208,3 +208,17 @@ label.queue-check { display: inline-flex; align-items: center; gap: 6px; color: 
 @keyframes encounter-end-rise { from { opacity: 0; transform: translateY(24px) scale(.94); } to { opacity: 1; transform: none; } }
 @keyframes encounter-end-fade { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes encounter-end-ember { from { transform: translateY(0); opacity: 0; } 15% { opacity: 1; } to { transform: translateY(-70vh) translateX(20px); opacity: 0; } }
+
+/* ---------- 0.12: Action / Bonus Action / Reaction chips ---------- */
+.turn-chips { display: inline-flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+.turn-chip { padding: 1px 8px; border-radius: 999px; font-size: .74rem; border: 1px solid #685445; background: transparent; color: inherit; }
+.turn-chip.used { background: #3a2b20; color: var(--bh-text-muted); }
+.turn-chip.over { border-color: #e0644f; color: #ff8a6a; }
+.turn-chip.surge { border-color: var(--bh-brass, #8a6d3b); color: var(--bh-brass-bright, #e2c27a); }
+.turn-chips.compact .turn-chip { font-size: .7rem; padding: 0 6px; }
+
+/* ---------- 0.12: Opportunity Attack cards ---------- */
+.table .opportunity-cards { position: absolute; left: 50%; top: 110px; transform: translateX(-50%); z-index: 7; display: grid; gap: 6px; width: min(460px, calc(100% - 32px)); }
+.opportunity-card { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px;
+  background: #2a1512f2; border: 1px solid var(--bh-crimson, #9e3b3b); box-shadow: 0 10px 24px #0008; }
+.opportunity-card span { flex: 1 1 220px; }

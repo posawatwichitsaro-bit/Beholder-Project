@@ -6,7 +6,7 @@ import { key } from '../../../shared/vision.ts'
  * Pointer maths for the DM's vision tools and for opening doors, in cell units.
  * Walls snap to cell corners (or half-corners with `half`), so they line up with the grid.
  */
-export type VisionTool = 'wall' | 'door' | 'light' | 'dark' | 'magic' | 'clear' | 'erase'
+export type VisionTool = 'wall' | 'door' | 'light' | 'dark' | 'magic' | 'clear' | 'terrain' | 'terrainClear' | 'erase'
 
 export const snapCorner = (point: Point, half = false): Point => {
   const step = half ? .5 : 1

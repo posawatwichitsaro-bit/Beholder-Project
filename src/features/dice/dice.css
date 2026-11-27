@@ -108,3 +108,12 @@
 .dice-reveal[data-3d] .dice-reveal-total, .dice-reveal[data-3d] .dice-reveal-banner { opacity: 0; animation: dice-total-in .25s ease-out 1.15s forwards; }
 @keyframes dice-total-in { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .dice-reveal[data-3d] .dice-reveal-total, .dice-reveal[data-3d] .dice-reveal-banner { opacity: 1; animation: none; } }
+
+/* 0.12: a roll the DM took back stays in the log, struck through. */
+.log-undone .log-body { text-decoration: line-through; opacity: .6; }
+.log-undone .log-undone-tag { text-decoration: none; display: inline-block; }
+
+/* 0.12: whispers */
+.log-whisper .log-body { font-style: italic; color: #c8b8e8; }
+.log-whisper-tag { color: #a890d8; font-size: .8em; }
+.adventure-log-form select { max-width: 8.5rem; }

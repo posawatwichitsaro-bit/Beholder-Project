@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { abilities, blankSheet, damageKinds, nextLivingTurn, objectOwner, sizes } from '../shared/model.ts'
-import type { Actor, Combat, DamageKind, InventoryItem, LogEntry, LootSkill, Member, ObjectDefinition, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token, TokenRole, UndoEntry } from '../shared/model.ts'
+import type { Actor, Combat, DamageKind, InventoryItem, LogEntry, LootSkill, Member, ObjectDefinition, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token, TokenRole } from '../shared/model.ts'
 import { areaContains, areaLabels, areaOutline, validArea } from '../shared/area.ts'
 import type { Area } from '../shared/area.ts'
 import { d20, deathSave, die, harm, heal, Invalid, parseDice, rollDice, rollPool } from './rules.ts'
 import { center, isNear, structureCover } from './cover.ts'
 import { createRoadsideEncounter } from './encounter.ts'
 import { bonusForCheck, calculatedSheet, commonSkills } from '../shared/characterStats.ts'
-import { formatConditions, formatSlots, parseSlots, tickConditions } from '../shared/conditions.ts'
+import { conditionBase, formatConditions, formatSlots, parseConditions, parseSlots, tickConditions } from '../shared/conditions.ts'
 import { advanceEffects, concentrationDc, d20Penalty, effectName, hasCondition, incapacitating, tiedTo } from '../shared/effects.ts'
 import { hitDiceLeft, hitDieHealing, restedSheet } from '../shared/rest.ts'
 import type { ClassResource, Effect, HitDie as RestDie } from '../shared/model.ts'
@@ -15,9 +15,13 @@ import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared
 import { attackOdds, chooseMode, chosenMode, rollOdds } from '../shared/advantage.ts'
 import type { Odds } from '../shared/advantage.ts'
 import { criticalFrom, magicalCunning, monsterXp, srdFeats, srdSubclasses } from '../shared/progression.ts'
-import { key, playerView, tokenSeen, wallsForPlayer } from '../shared/vision.ts'
+import { key, lightsOf, playerView, seenBy, tokenCenter, tokenSeen, visionOf, wallsForPlayer } from '../shared/vision.ts'
 import type { ActorVision, Ambient, Door, LightSource, SceneVision, Wall } from '../shared/vision.ts'
-import { gridFeet } from '../shared/movement.ts'
+import { gridFeet, moveCost, speedNow } from '../shared/movement.ts'
+import { afterCommand, beforeCommand, isUndoable, undoLast } from './undo.ts'
+import { freshUse, gapBetween, reachOf } from '../shared/economy.ts'
+import type { TurnUse } from '../shared/economy.ts'
+import { itemLights } from '../shared/vision.ts'
 import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
 export class Forbidden extends Error {}
@@ -118,6 +122,7 @@ function parseItem(value: unknown, monster: boolean): InventoryItem {
     id: id(), name: text(item.name), description: description(item.description), image: image(item.image),
     quantity: number(item.quantity ?? 1, 1, 999), tool: item.tool === 'thievesTools' ? 'thievesTools' : undefined,
     lootTier: monster ? item.lootTier === 'bonus' ? 'bonus' : 'basic' : undefined,
+    lit: item.lit === true ? true : undefined,
     ...catalogFields(item)
   }
 }
@@ -347,6 +352,7 @@ export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory
     sheet.subclass = input.subclass as string
   }
   if (input.vision !== undefined) sheet.vision = parseActorVision(input.vision)
+  if (input.attacksPerAction !== undefined && input.attacksPerAction !== null && input.attacksPerAction !== '') sheet.attacksPerAction = number(input.attacksPerAction, 1, 10)
   if (input.feats !== undefined) {
     if (!Array.isArray(input.feats) || input.feats.length > 20) throw new Invalid('Feat ได้สูงสุด 20 รายการ')
     const known = new Set(srdFeats.map(feat => feat.name))
@@ -376,7 +382,8 @@ export function addLog(room: Room, entry: Omit<LogEntry, 'id' | 'at'>) {
 
 /** Log entries this seat may see: everything without a scene, plus the scene players can see (all scenes for the DM). */
 export function visibleLog(room: Room, me: Member) {
-  return (room.log ?? []).filter(entry => me.role === 'dm' || !entry.sceneId || entry.sceneId === room.activeSceneId)
+  return (room.log ?? []).filter(entry => (me.role === 'dm' || !entry.sceneId || entry.sceneId === room.activeSceneId) &&
+    (!entry.to || me.role === 'dm' || entry.to === me.id || entry.fromId === me.id))
 }
 
 export function visibleRolls(room: Room, me: Member) {
@@ -429,6 +436,10 @@ export function snapshot(room: Room, me: Member): Snapshot {
     view.objects = view.objects?.filter(object => tokenSeen(object, Math.max(object.width, object.height), seen.visible))
     view.view = { visible: [...seen.visible], dimmed: [...seen.dimmed], darkvision: [...seen.darkvision], explored: vision.explored?.[me.id] ?? [] }
     view.vision = { enabled: true, ambient: vision.ambient, walls: wallsForPlayer(vision.walls), lights: vision.lights }
+  }
+  // Opportunity Attack cards go only to whoever controls the creature that may strike.
+  if (!dm) for (const view of scenes) if (view.combat?.prompts) {
+    view.combat = { ...view.combat, prompts: view.combat.prompts.filter(prompt => room.actors.some(actor => actor.id === prompt.attackerId && (actor.ownerId === me.id || actor.temp))) }
   }
   // Creatures in a fight here stay listed (the turn order) even when unseen; the board still leaves them out.
   const visible = new Set(scenes.flatMap(scene => [...scene.tokens.map(token => token.actorId), ...(scene.combat?.order.map(entry => entry.actorId) ?? [])]))
@@ -539,38 +550,13 @@ function pasteBoardSelection(target: Scene, room: Room, member: Member, command:
 }
 
 export function applyCommand(room: Room, member: Member, command: Command, clipboard: BoardPiece[] = []) {
-  const undoable = undoLabels[String(command.type)]
-  const before = undoable ? undoState(room) : undefined
+  const type = String(command.type)
+  const before = isUndoable(type) ? beforeCommand(room) : undefined
+  delete (room as { undo?: unknown }).undo // 0.11's DM-only list; 0.12 keeps steps per member
   const output = runCommand(room, member, command, clipboard)
-  if (before) recordUndo(room, before, undoable)
+  if (before) afterCommand(room, member, type, before)
   rememberSeen(room)
   return output
-}
-
-/** Commands the DM can take back with Ctrl+Z, and how the log names them. */
-const undoLabels: Record<string, string> = {
-  move: 'การเดิน', moveTokens: 'การเดิน', stepCharacter: 'การเดิน',
-  damage: 'การหัก HP', areaDamage: 'ความเสียหายแบบพื้นที่', heal: 'การรักษา', adjustHp: 'การปรับ HP', sheetRoll: 'การหัก HP'
-}
-type UndoState = { tokens: Map<string, UndoEntry['tokens'][number]>; actors: Map<string, UndoEntry['actors'][number]>; moved: Map<string, Combat['moved']> }
-function undoState(room: Room): UndoState {
-  const tokens = new Map<string, UndoEntry['tokens'][number]>()
-  const moved = new Map<string, Combat['moved']>()
-  for (const scene of room.scenes) {
-    for (const token of scene.tokens) tokens.set(scene.id + '/' + token.id, { sceneId: scene.id, tokenId: token.id, x: token.x, y: token.y })
-    if (scene.combat) moved.set(scene.id, scene.combat.moved && { ...scene.combat.moved })
-  }
-  const actors = new Map(room.actors.map(({ id, hp, tempHp, life, successes, failures }) => [id, { id, hp, tempHp, life, successes, failures }]))
-  return { tokens, actors, moved }
-}
-/** Keep what changed (as it was before), newest last, at most 20 steps. */
-function recordUndo(room: Room, before: UndoState, label: string) {
-  const after = undoState(room)
-  const tokens = [...before.tokens].filter(([key, was]) => { const now = after.tokens.get(key); return now && (now.x !== was.x || now.y !== was.y) }).map(([, was]) => was)
-  const actors = [...before.actors].filter(([id, was]) => { const now = after.actors.get(id); return now && (now.hp !== was.hp || now.tempHp !== was.tempHp || now.life !== was.life) }).map(([, was]) => was)
-  if (!tokens.length && !actors.length) return
-  const moved = [...before.moved].filter(([sceneId, was]) => JSON.stringify(after.moved.get(sceneId)) !== JSON.stringify(was)).map(([sceneId, value]) => ({ sceneId, value }))
-  room.undo = [...(room.undo ?? []), { at: Date.now(), label, tokens, actors, ...(moved.length ? { moved } : {}) }].slice(-20)
 }
 
 export { gridFeet }
@@ -620,6 +606,48 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
     requireDM(member)
     return object(scene().objects ?? [])
   }
+  /**
+   * Note an Action (weapon attack or a spell) for a creature in this scene's fight. Off its turn the attack
+   * is a Reaction (an Opportunity Attack, say). Only counts; never stops the roll.
+   */
+  function noteUse(target: Scene, creatureId: string, kind: 'weapon' | 'spell') {
+    const combat = target.combat
+    if (!combat?.order.some(entry => entry.actorId === creatureId)) return
+    const use: TurnUse = { ...freshUse(), ...combat.uses?.[creatureId] }
+    if (combat.order[combat.turn]?.actorId !== creatureId) use.reaction = true
+    else if (kind === 'weapon') use.weaponAttacks++
+    else use.spellActions++
+    combat.uses = { ...combat.uses, [creatureId]: use }
+  }
+  /**
+   * A creature moved by its own controller left an enemy's reach: if that enemy is in the fight,
+   * standing, has its Reaction and can see the mover (vision scenes), its controller gets a card.
+   */
+  function opportunities(target: Scene, moverId: string, from: { x: number; y: number }, to: { x: number; y: number }) {
+    const combat = target.combat
+    const mover = room.actors.find(item => item.id === moverId)
+    if (!combat || !mover || !combat.order.some(entry => entry.actorId === moverId)) return
+    const controls = member.role === 'dm' ? mover.kind === 'monster' || mover.ownerId === member.id || mover.temp : mover.ownerId === member.id || mover.temp
+    if (!controls || combat.uses?.[moverId]?.disengaged) return
+    const side = (creature: Actor) => creature.kind === 'monster' ? 'foe' : 'party'
+    const size = (creature: Actor) => sizes[creature.size]
+    for (const token of target.tokens) {
+      const enemy = room.actors.find(item => item.id === token.actorId)
+      if (!enemy || enemy.id === moverId || side(enemy) === side(mover) || enemy.life !== 'active') continue
+      if (!combat.order.some(entry => entry.actorId === enemy.id) || combat.uses?.[enemy.id]?.reaction) continue
+      if (combat.prompts?.some(prompt => prompt.attackerId === enemy.id && prompt.targetId === moverId)) continue
+      const reach = reachOf(enemy) / 5
+      const was = gapBetween(from, size(mover), token, size(enemy)) < reach
+      const now = gapBetween(to, size(mover), token, size(enemy)) < reach
+      if (!was || now) continue
+      if (target.vision?.enabled) {
+        const lights = lightsOf(target, room.actors, id => { const item = room.actors.find(entry => entry.id === id); return item ? visionOf(item) : {} })
+        const sees = seenBy(tokenCenter(token, enemy), visionOf(enemy), target.vision, lights)
+        if (!tokenSeen(from, size(mover), sees.visible)) continue
+      }
+      combat.prompts = [...(combat.prompts ?? []), { id: id(), attackerId: enemy.id, targetId: moverId, at: Date.now() }].slice(-20)
+    }
+  }
   /** A player's token must stand within one square of the door's middle. */
   function doorReach(target: Scene, creature: Actor, wall: Wall) {
     if (creature.life !== 'active') throw new Invalid('ตัวละครนี้ยังโต้ตอบไม่ได้')
@@ -662,6 +690,10 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
   }
   /** The turn passes from `ended` to `started`: timed effects count down, repeat saves come due. */
   function passTurn(target: Scene, ended?: string, started?: string) {
+    // A creature's Action, Bonus Action and Reaction come back as its own turn starts.
+    if (started && target.combat) target.combat.uses = { ...target.combat.uses, [started]: freshUse() }
+    // Unanswered Opportunity Attacks lapse when the turn moves on.
+    if (target.combat) delete target.combat.prompts
     for (const creature of room.actors) {
       if (!creature.effects?.length) continue
       const result = advanceEffects(creature.id, creature.effects, ended, started)
@@ -978,7 +1010,8 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       if (Math.abs(dx) + Math.abs(dy) !== 1) throw new Invalid('ย้ายได้ทีละหนึ่งช่อง')
       const x = number(token.x + dx, -1000, 1000, .5)
       const y = number(token.y + dy, -1000, 1000, .5)
-      countMove(target, token.actorId, gridFeet(token, { x, y }))
+      countMove(target, token.actorId, moveCost(target, room.actors.find(item => item.id === token.actorId), token, { x, y }))
+      opportunities(target, token.actorId, token, { x, y })
       Object.assign(get(target.tokens, token.id), { x, y })
       return {}
     }
@@ -987,7 +1020,8 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       const token = get(target.tokens, command.tokenId)
       owns(member, get(room.actors, token.actorId))
       const to = { x: number(command.x, -1000, 1000, .5), y: number(command.y, -1000, 1000, .5) }
-      countMove(target, token.actorId, gridFeet(token, to))
+      countMove(target, token.actorId, moveCost(target, room.actors.find(item => item.id === token.actorId), token, to))
+      opportunities(target, token.actorId, { x: token.x, y: token.y }, to)
       Object.assign(token, to)
       return {}
     }
@@ -1002,7 +1036,8 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
         return { token, x: number(token.x + dx, -1000, 1000, .5), y: number(token.y + dy, -1000, 1000, .5) }
       })
       for (const { token, x, y } of moves) {
-        countMove(target, token.actorId, gridFeet(token, { x, y }))
+        countMove(target, token.actorId, moveCost(target, room.actors.find(item => item.id === token.actorId), token, { x, y }))
+        opportunities(target, token.actorId, { x: token.x, y: token.y }, { x, y })
         Object.assign(token, { x, y })
       }
       return {}
@@ -1188,6 +1223,25 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       creature.vision.light.on = command.lightOn === true
       return {}
     }
+    case 'containerRemove': {
+      // DM (from the storeroom): take an item out of a box on any scene.
+      requireDM(member)
+      const box = object(scene().objects ?? [])
+      if (box.kind !== 'container') throw new Invalid('เป้าหมายต้องเป็นกล่อง')
+      const item = get(box.items, command.itemId)
+      box.items = box.items.filter(entry => entry.id !== item.id)
+      return {}
+    }
+    case 'lightItem': {
+      // Light or put out a Torch / Lamp / Lantern / Candle in your own bag (players may, no DM needed).
+      const creature = actor()
+      owns(member, creature)
+      const item = get(creature.inventory ?? [], command.itemId)
+      if (!item.ref || !itemLights[item.ref]) throw new Invalid('ไอเทมนี้จุดเป็นแสงไม่ได้')
+      if (command.lit === true) item.lit = true
+      else delete item.lit
+      return {}
+    }
     case 'moveObject': {
       const target = object(board().objects ?? [])
       if (!target.temp) requireDM(member)
@@ -1356,6 +1410,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
         if (cover === 99) throw new Invalid('เป้าหมายอยู่หลังที่กำบังเต็ม')
         // Spend the slot only once the attack is valid (target in scene, not behind full cover).
         if (rollType === 'spellAttack') spendSlot(creature, command.slotLevel, command.pact === true)
+        noteUse(target, creature.id, rollType === 'attack' ? 'weapon' : 'spell')
         const adjacent = isNear(tokenOf(creature.id), creature, { ...tokenOf(victim.id), width: sizes[victim.size], height: sizes[victim.size] })
         const odds = decide(attackOdds(creature, victim, adjacent))
         // Archery: +2 with weapons that fire ammunition.
@@ -1402,6 +1457,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       owns(member, caster)
       const victim = get(room.actors, command.targetId)
       if (![caster.id, victim.id].every(key => target.tokens.some(token => token.actorId === key))) throw new Invalid('ผู้ร่ายและเป้าหมายต้องอยู่ในฉาก')
+      noteUse(target, caster.id, 'spell')
       const ability = command.ability as typeof abilities[number]
       if (!abilities.includes(ability)) throw new Invalid('เลือกค่าความสามารถสำหรับ Save')
       const damage = command.formula ? text(command.formula) : undefined
@@ -1481,23 +1537,70 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       return {}
     }
     case 'undo': {
-      // DM: take back the last move or HP change (Ctrl+Z), newest first.
+      // Anyone takes back their own newest step (Ctrl+Z); a step someone else built on is dropped, not overwritten.
+      const outcome = undoLast(room, member)
+      if (outcome.result === 'empty') throw new Invalid('ไม่มีอะไรให้ย้อนแล้ว')
+      if (outcome.result === 'blocked') return { notice: 'ย้อน' + outcome.label + 'ไม่ได้ เพราะมีคนแก้ต่อแล้ว · กด Ctrl+Z อีกครั้งเพื่อย้อนขั้นก่อนหน้า' }
+      return { notice: 'ย้อน' + outcome.label + 'แล้ว' }
+    }
+    case 'opportunity': {
+      // The controller of the creature that may strike answers: attack (main attack, uses the Reaction) or pass.
+      const target = active()
+      const combat = target.combat
+      const prompt = combat?.prompts?.find(item => item.id === command.promptId)
+      if (!combat || !prompt) throw new Conflict('Opportunity Attack นี้หมดเวลาแล้ว')
+      owns(member, get(room.actors, prompt.attackerId))
+      combat.prompts = combat.prompts!.filter(item => item.id !== prompt.id)
+      if (command.attack !== true) return {}
+      if (!target.tokens.some(token => token.actorId === prompt.targetId)) throw new Invalid('เป้าหมายออกจากฉากแล้ว')
+      return runCommand(room, member, { type: 'sheetRoll', rollType: 'attack', sceneId: target.id, actorId: prompt.attackerId, targetId: prompt.targetId })
+    }
+    case 'terrain': {
+      // DM paints Difficult Terrain (any scene, vision or not), or clears it.
       requireDM(member)
-      const entry = room.undo?.pop()
-      if (!entry) throw new Invalid('ไม่มีอะไรให้ย้อนแล้ว')
-      for (const was of entry.tokens) {
-        const token = room.scenes.find(scene => scene.id === was.sceneId)?.tokens.find(item => item.id === was.tokenId)
-        if (token) Object.assign(token, { x: was.x, y: was.y })
+      const target = scene()
+      if (!Array.isArray(command.cells) || command.cells.length > 5000) throw new Invalid('ระบายได้ครั้งละไม่เกิน 5000 ช่อง')
+      const cells = new Set(target.terrain ?? [])
+      for (const cell of command.cells.map(cellKey)) {
+        if (command.mode === 'difficult') cells.add(cell)
+        else if (command.mode === 'clear') cells.delete(cell)
+        else throw new Invalid('เลือกชนิดพื้นที่')
       }
-      for (const was of entry.actors) {
-        const creature = room.actors.find(item => item.id === was.id)
-        if (creature) Object.assign(creature, { hp: was.hp, tempHp: was.tempHp, life: was.life, successes: was.successes, failures: was.failures })
-      }
-      for (const was of entry.moved ?? []) {
-        const combat = room.scenes.find(scene => scene.id === was.sceneId)?.combat
-        if (combat) combat.moved = was.value
-      }
-      addLog(room, { kind: 'combat', name: member.name, text: 'DM ย้อน' + entry.label + 'ล่าสุด' })
+      if (cells.size > 40000) throw new Invalid('Difficult Terrain ในฉากมากเกินไป')
+      target.terrain = [...cells]
+      return {}
+    }
+    case 'standUp': {
+      // Prone → standing costs half the creature's Speed this turn (counted, not enforced).
+      const target = board()
+      const creature = actor()
+      owns(member, creature)
+      if (!hasCondition(creature, 'Prone')) throw new Invalid('ตัวนี้ไม่ได้ล้มอยู่')
+      creature.conditions = formatConditions(parseConditions(creature.conditions).filter(item => conditionBase(item.name).base !== 'Prone'))
+      if (creature.effects) creature.effects = creature.effects.filter(effect => effect.condition !== 'Prone')
+      countMove(target, creature.id, Math.floor(speedNow(creature, room.settings?.encumbrance !== false) / 2))
+      return {}
+    }
+    case 'turnAction': {
+      // Owner or DM marks Action / Bonus Action / Reaction / Disengage by hand, or uses Action Surge. Counting only.
+      const target = board()
+      const creature = actor()
+      owns(member, creature)
+      const combat = target.combat
+      if (!combat?.order.some(entry => entry.actorId === creature.id)) throw new Invalid('ตัวนี้ไม่ได้อยู่ในการต่อสู้')
+      const use: TurnUse = { ...freshUse(), ...combat.uses?.[creature.id] }
+      const count = (value: unknown) => number(value, 0, 9)
+      if (command.kind === 'action') use.manualActions = count(command.value)
+      else if (command.kind === 'bonus') use.bonus = count(command.value)
+      else if (command.kind === 'reaction') use.reaction = command.value === true
+      else if (command.kind === 'disengage') use.disengaged = command.value === true
+      else if (command.kind === 'surge') {
+        const surge = creature.resources?.find(resource => resource.name === 'Action Surge')
+        if (!surge || surge.used >= surge.max) throw new Invalid('ไม่มี Action Surge เหลือ')
+        surge.used++
+        use.extraActions++
+      } else throw new Invalid('เลือกสิ่งที่จะใช้')
+      combat.uses = { ...combat.uses, [creature.id]: use }
       return {}
     }
     case 'settings': {
@@ -1756,7 +1859,10 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
     }
     case 'chat': {
       const message = text(command.text, 500)
-      addLog(room, { kind: 'chat', text: message, name: member.name })
+      // A whisper goes to one member; the DM sees every whisper (marked as one).
+      const to = command.to === undefined || command.to === '' ? undefined : get(room.members, command.to)
+      if (to && to.id === member.id) throw new Invalid('กระซิบถึงตัวเองไม่ได้')
+      addLog(room, { kind: 'chat', text: message, name: member.name, ...(to ? { to: to.id, fromId: member.id } : {}) })
       return {}
     }
     case 'slots': {

@@ -1,5 +1,6 @@
 import type { Area } from './area.ts'
 import type { ActorVision, SceneVision } from './vision.ts'
+import type { TurnUse } from './economy.ts'
 import type { CharacterCalculations, CheckBonus, Skill } from './characterStats.ts'
 
 export const abilities = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'] as const
@@ -61,6 +62,8 @@ export type Sheet = {
   /** SRD subclass and feats picked when levelling; a few have effects worked out for you (shared/progression.ts). */
   subclass?: string
   feats?: string[]
+  /** Weapon attacks per Attack action, when the DM sets it (else Multiattack or Extra Attack decide). */
+  attacksPerAction?: number
   /** Vision range, Darkvision and a carried light (the DM sets these; players can light or put out their own light). */
   vision?: ActorVision
 }
@@ -106,6 +109,8 @@ export type InventoryItem = {
   ref?: string; category?: string; rarity?: string; attunement?: boolean; weight?: number
   /** A +1/+2/+3 weapon, armor, shield or ammunition: the magic bonus, and the plain catalog item it is made from. */
   bonus?: number; base?: string
+  /** A light source in a bag (Torch, Lamp, Lantern, Candle) that is burning: the carrier sheds its light. */
+  lit?: boolean
 }
 export type ObjectKind = 'container' | 'prop' | 'structure' | 'item'
 export const objectLabels: Record<ObjectKind, string> = {
@@ -150,13 +155,10 @@ export type Combat = {
   deathSaveAt?: string
   /** Feet the creature whose turn it is has moved this turn (diagonals count 5 ft, 2024 rules). */
   moved?: { actorId: string; turnKey: string; feet: number }
-}
-/** One step the DM can take back (Ctrl+Z): token positions and HP as they were before a move or an HP change. */
-export type UndoEntry = {
-  at: number; label: string
-  tokens: { sceneId: string; tokenId: string; x: number; y: number }[]
-  actors: { id: string; hp: number; tempHp: number; life: Sheet['life']; successes: number; failures: number }[]
-  moved?: { sceneId: string; value?: Combat['moved'] }[]
+  /** Action, Bonus Action and Reaction use per creature (shared/economy.ts); a creature's entry resets when its turn starts. */
+  uses?: Record<string, TurnUse>
+  /** Opportunity Attacks waiting for an answer this turn: the creature that may strike and the one that left its reach. */
+  prompts?: { id: string; attackerId: string; targetId: string; at: number }[]
 }
 export function nextLivingTurn(combat: Combat, isDead: (actorId: string) => boolean) {
   for (let offset = 1; offset <= combat.order.length; offset++) {
@@ -167,6 +169,8 @@ export function nextLivingTurn(combat: Combat, isDead: (actorId: string) => bool
 }
 /** XP waiting for the DM after a fight: the total from defeated monsters and who fought. */
 export type XpAward = { total: number; actorIds: string[]; at: number }
+/** One undo step: the units a command changed, with their old value and the fingerprint the command left (server/undo.ts). */
+export type UndoStep = { at: number; label: string; units: { key: string; before: unknown; after: number }[]; rollIds?: string[] }
 export type Scene = {
   /** XP from the last fight, until the DM shares it out or skips it. */
   xpAward?: XpAward
@@ -177,6 +181,8 @@ export type Scene = {
   damageEvents?: DamageEvent[]; areaEffect?: { area: Area; kind: DamageKind; at: number }
   /** Walls, doors, light, darkness and what each player has explored (see shared/vision.ts). */
   vision?: SceneVision
+  /** Difficult Terrain squares ("x,y"): moving into one costs 5 ft more. */
+  terrain?: string[]
   /** Sent to a player only: what their tokens see on this scene right now, as "x,y" cells. */
   view?: { visible: string[]; dimmed: string[]; darkvision: string[]; explored: string[] }
 }
@@ -187,6 +193,8 @@ export type Roll = {
   critical?: boolean; privateTo?: string; sceneId?: string; sourceId?: string; damageKind?: DamageKind
   /** When the roll happened (ms). Older rolls have none. */
   at?: number
+  /** The DM took this roll back (0.12 undo): it stays in the log, struck through. */
+  undone?: boolean
 }
 /**
  * One line of the Adventure Log besides rolls: chat, scene changes, combat
@@ -196,13 +204,15 @@ export type Roll = {
 export type LogEntry = {
   id: string; at: number; kind: 'chat' | 'scene' | 'combat' | 'hp' | 'join'
   text: string; name?: string; sceneId?: string
+  /** A whisper (0.12): only the sender, this member and the DM see it. */
+  to?: string; fromId?: string
 }
 export type Room = {
   id: string; name: string; invite: string; dmInvite?: string; revision: number; members: (Member & { profileId?: string })[]
   activeSceneId?: string; scenes: Scene[]; actors: Actor[]; templates: Template[]; rolls: Roll[]
   log?: LogEntry[]
-  /** The last moves and HP changes, newest last, for the DM's undo (never sent to players). */
-  undo?: UndoEntry[]
+  /** Each member's undo steps, newest last (server/undo.ts); never sent in snapshots. */
+  undoSteps?: Record<string, UndoStep[]>
   /** Table rules the DM can switch. autoDamage: a hit applies its damage without waiting for the DM. */
   /**
    * Table rules the DM can switch. autoDamage: a hit applies its damage without waiting for the DM.

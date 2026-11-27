@@ -27,8 +27,9 @@ import type { VisionTool } from './visionTools.ts'
 import { playerView } from '../../../shared/vision.ts'
 import type { Wall } from '../../../shared/vision.ts'
 import { Eye as EyeIcon } from 'lucide-react'
-import { feetMoved, gridFeet, speedNow } from '../../../shared/movement.ts'
+import { feetMoved, moveCost, speedNow, speedReasons } from '../../../shared/movement.ts'
 import { parseConditions, srdConditions } from '../../../shared/conditions.ts'
+import { TurnChips } from '../combat/TurnChips.tsx'
 import type { ObjectLook, PixiBoard, TokenLook } from './pixiBoard.ts'
 
 /** A token-bar / context command. `roll` makes it a d20 roll with a right-click menu for Advantage or Disadvantage. */
@@ -284,6 +285,12 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
     if (ready) pixi.current!.setView({ camera, zoom }, gridSpec, transformNow, showGrid, Boolean(map), size)
   }, [ready, camera, zoom, size, gridSpec.cell, gridSpec.originX, gridSpec.originY, showGrid, map])
   useEffect(() => { if (ready) pixi.current!.setMap(map) }, [ready, map])
+  useEffect(() => {
+    if (!ready) return
+    const preview = painting && visionTool === 'terrain' ? [...painting] : []
+    const cleared = painting && visionTool === 'terrainClear' ? painting : undefined
+    pixi.current!.setTerrain([...(scene.terrain ?? []).filter(cell => !cleared?.has(cell)), ...preview])
+  }, [ready, scene.terrain, painting, visionTool, detailZoom, gridSpec.cell, gridSpec.originX, gridSpec.originY])
   useEffect(() => {
     const effect = scene.areaEffect
     if (!ready || !effect || seenArea.current === effect.at) return
@@ -569,7 +576,9 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
     }
     const action = gesture.current
     if (action?.mode === 'paint' && painting && command) {
-      void command({ type: 'darkness', cells: [...painting], mode: visionTool === 'magic' ? 'magic' : visionTool === 'dark' ? 'dark' : 'clear' })
+      void command(visionTool === 'terrain' || visionTool === 'terrainClear'
+        ? { type: 'terrain', cells: [...painting], mode: visionTool === 'terrain' ? 'difficult' : 'clear' }
+        : { type: 'darkness', cells: [...painting], mode: visionTool === 'magic' ? 'magic' : visionTool === 'dark' ? 'dark' : 'clear' })
       setPainting(undefined)
     } else if (action?.mode === 'area' && areaKind) {
       const area = { kind: areaKind, from: areaPoint(action.from), to: areaPoint(pointer(event)) }
@@ -648,11 +657,11 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
     const sheet = token && room.actors.find(actor => actor.id === token.actorId)
     if (!token || !sheet || scene.combat?.order[scene.combat.turn]?.actorId !== token.actorId) return undefined
     const used = feetMoved(scene, token.actorId) + extra
-    return { used, speed: speedNow(sheet, encumbrance) }
+    return { used, speed: speedNow(sheet, encumbrance), reasons: speedReasons(sheet, encumbrance) }
   }
   const barBudget = budget(selectedToken)
   const dragging = draft && draft.tokenIds.length === 1 ? scene.tokens.find(token => token.id === draft.tokenIds[0]) : undefined
-  const dragBudget = dragging && draft ? budget(dragging, gridFeet(dragging, { x: dragging.x + draft.delta.x, y: dragging.y + draft.delta.y })) : undefined
+  const dragBudget = dragging && draft ? budget(dragging, moveCost(scene, room.actors.find(actor => actor.id === dragging.actorId), dragging, { x: dragging.x + draft.delta.x, y: dragging.y + draft.delta.y })) : undefined
   // One-click conditions on the token bar (the DM, or the token's owner).
   const [conditionsOpen, setConditionsOpen] = useState(false)
   useEffect(() => setConditionsOpen(false), [selected])
@@ -747,7 +756,7 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         <Ruler size={16} aria-hidden="true" /><span className="board-tool-label">วัดระยะ</span></button>
       <button aria-label="แสดง Grid" aria-pressed={gridPref} onClick={() => usePrefs.getState().update({ showGrid: !gridPref })} title="แสดงหรือซ่อนเส้น Grid (G)">
         <Grid3x3 size={16} aria-hidden="true" /></button>
-      {dm && command && <button aria-label="การมองเห็น" aria-pressed={visionOpen} onClick={() => setVisionOpen(open => !open)} title="ผนัง ประตู แสง ความมืด และการมองเห็นของผู้เล่น">
+      {dm && command && <button aria-label="เครื่องมือฉาก" aria-pressed={visionOpen} onClick={() => setVisionOpen(open => !open)} title="ผนัง ประตู แสง ความมืด Difficult Terrain และการมองเห็นของผู้เล่น">
         <EyeIcon size={16} aria-hidden="true" /></button>}
       <span className="board-tools-sep" aria-hidden="true" />
       <button aria-label="ซูมออก" title="ซูมออก (ล้อเมาส์ หรือหยิกสองนิ้ว)" onClick={() => zoomAt(1 / 1.2, center)}><Minus size={16} aria-hidden="true" /></button>
@@ -775,8 +784,10 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         <b>{barActor?.name ?? barObject?.name}</b>
         {barActor && <span className="selection-bar-hp">{barActor.hp}/{barActor.maxHp} HP{barSheet ? ' · AC ' + barSheet.ac : ''}</span>}
         {barActor && (barActor.conditions || barActor.effects?.length) ? <span className="selection-bar-conditions"><ConditionBadges creature={barActor} max={4} /></span> : null}
-        {barBudget && <span className={'selection-bar-move' + (barBudget.used > barBudget.speed ? ' over' : '')}>เดินแล้ว {barBudget.used}/{barBudget.speed} ฟุต</span>}
+        {barBudget && <span className={'selection-bar-move' + (barBudget.used > barBudget.speed ? ' over' : '')} title={barBudget.reasons.join(' · ') || undefined}>
+          เดินแล้ว {barBudget.used}/{barBudget.speed} ฟุต{barBudget.reasons.length ? ' · ' + barBudget.reasons[0] : ''}</span>}
       </span>
+      {barSheet && (dm || barSheet.ownerId === room.me.id) && <TurnChips actor={barSheet} scene={scene} command={command} />}
       {canCondition && <button type="button" aria-pressed={conditionsOpen} onClick={() => setConditionsOpen(open => !open)}>สภาพ</button>}
       {canCondition && conditionsOpen && barSheet && <span className="selection-bar-chips" role="group" aria-label={'สภาพของ ' + barSheet.name}>
         {srdConditions.filter(name => name !== 'Exhaustion').map(name => {

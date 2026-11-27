@@ -40,12 +40,34 @@ export const feetPerCell = 5
 export const maxSight = 60
 export const key = (x: number, y: number) => x + ',' + y
 
+/** SRD 5.2.1 light sources that can be lit from a bag: bright / dim feet (a Bullseye Lantern's 60-ft cone is drawn as a circle). */
+export const itemLights: Record<string, { bright: number; dim: number }> = {
+  'srd-5.2.1:equipment:candle': { bright: 5, dim: 5 },
+  'srd-5.2.1:equipment:lamp': { bright: 15, dim: 30 },
+  'srd-5.2.1:equipment:torch': { bright: 20, dim: 20 },
+  'srd-5.2.1:equipment:lantern-hooded': { bright: 30, dim: 30 },
+  'srd-5.2.1:equipment:lantern-bullseye': { bright: 60, dim: 60 }
+}
+/** The brightest burning item a creature carries, if any. */
+export function litItem(inventory: { ref?: string; lit?: boolean }[] = []) {
+  let best: { bright: number; dim: number } | undefined
+  for (const item of inventory) {
+    const light = item.lit && item.ref ? itemLights[item.ref] : undefined
+    if (light && (!best || light.bright + light.dim > best.bright + best.dim)) best = light
+  }
+  return best
+}
+
 /** SRD 5.2.1 species with Darkvision (feet). */
 export const speciesDarkvision: Record<string, number> = { Dragonborn: 60, Dwarf: 120, Elf: 60, Gnome: 60, Orc: 120, Tiefling: 60 }
 
 /** A creature's vision: what the DM set, else Darkvision from its species or its stat block ("Darkvision 60 ft."). */
 export function visionOf(sheet: Pick<Sheet, 'kind' | 'characterDetails' | 'monsterReference'> & { vision?: ActorVision }): ActorVision {
   const set = sheet.vision ?? {}
+  const burning = litItem((sheet as { inventory?: { ref?: string; lit?: boolean }[] }).inventory)
+  const own = set.light?.on ? set.light : undefined
+  const light = burning && (!own || burning.bright + burning.dim > own.bright + own.dim) ? { ...burning, on: true } : set.light
+  if (light !== set.light) return visionOf({ ...sheet, vision: { ...set, light } } as typeof sheet)
   if (set.darkvision !== undefined) return set
   const species = sheet.characterDetails?.species?.split(/[\s(·,]/)[0]
   const fromSpecies = species ? speciesDarkvision[species] : undefined
