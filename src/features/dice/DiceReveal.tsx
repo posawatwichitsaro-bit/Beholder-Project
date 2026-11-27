@@ -4,6 +4,8 @@ import { usePrefs } from '../../state/prefs.ts'
 import { diceOutcome, dieOf, faceOf } from './diceOutcome.ts'
 import type { DiceOutcome } from './diceOutcome.ts'
 import { playDiceSound } from './sound.ts'
+import { diceFor } from './dice3d/plan.ts'
+import type { Die } from './dice3d/plan.ts'
 
 type Reveal = { roll: Roll; outcome: DiceOutcome; key: number }
 const shapes: Record<number, string> = {
@@ -23,6 +25,9 @@ const shapes: Record<number, string> = {
  */
 export function DiceReveal({ rolls }: { rolls: Roll[] }) {
   const sound = usePrefs(state => state.sound)
+  // 3D dice unless switched off or motion is reduced (the app setting or the system one).
+  const dice3d = usePrefs(state => state.dice3d && !state.reduceMotion) && !matchMedia('(prefers-reduced-motion: reduce)').matches
+  const tray = useRef<HTMLDivElement>(null)
   const seen = useRef<Set<string> | null>(null)
   const queue = useRef<Reveal[]>([])
   const counter = useRef(0)
@@ -43,19 +48,35 @@ export function DiceReveal({ rolls }: { rolls: Roll[] }) {
   useEffect(() => {
     if (!current) return
     if (sound) playDiceSound(current.outcome)
-    const timer = setTimeout(() => setCurrent(queue.current.shift()), current.outcome === 'normal' ? 1700 : 2600)
+    // 3D dice need time to land and be read before the reveal fades.
+    const shows3d = dice3d && Boolean(diceFor(current.roll))
+    const timer = setTimeout(() => setCurrent(queue.current.shift()), (current.outcome === 'normal' ? 1700 : 2600) + (shows3d ? 900 : 0))
     return () => clearTimeout(timer)
   }, [current])
+  // three.js loads with the first 3D roll; a slow or failed load just leaves the flat die.
+  const list = current && dice3d ? diceFor(current.roll) : undefined
+  useEffect(() => {
+    if (!current || !list || !tray.current) return
+    let cancelled = false
+    const host = tray.current
+    import('./dice3d/tray.ts').then(module => {
+      if (cancelled) return
+      host.dataset.ready = 'true'
+      void module.playDice(host, list as Die[], current.outcome)
+    }).catch(() => {})
+    return () => { cancelled = true; import('./dice3d/tray.ts').then(module => module.stopDice()).catch(() => {}) }
+  }, [current?.key, Boolean(list)])
 
   if (!current) return null
   const { roll, outcome } = current
   const sides = dieOf(roll)
   const banner = outcome === 'critical' ? 'CRITICAL!' : outcome === 'fumble' ? 'พลาดเต็ม ๆ' : ''
-  return <div key={current.key} className="dice-reveal" data-outcome={outcome} aria-hidden="true">
-    <div className="dice-reveal-die">
-      <svg viewBox="0 0 100 100" width="76" height="76"><polygon points={shapes[sides] ?? shapes[20]} /></svg>
-      <span className="dice-reveal-face" data-text={String(faceOf(roll))} />
-    </div>
+  return <div key={current.key} className="dice-reveal" data-outcome={outcome} data-3d={list ? 'true' : undefined} aria-hidden="true">
+    {list ? <div className="dice-reveal-3d" ref={tray} data-dice={list.length} />
+      : <div className="dice-reveal-die">
+        <svg viewBox="0 0 100 100" width="76" height="76"><polygon points={shapes[sides] ?? shapes[20]} /></svg>
+        <span className="dice-reveal-face" data-text={String(faceOf(roll))} />
+      </div>}
     <div className="dice-reveal-text">
       <span className="dice-reveal-who" data-text={roll.name + ' · ' + roll.label} />
       <span className="dice-reveal-total" data-text={String(roll.total)} />

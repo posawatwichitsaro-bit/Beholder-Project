@@ -8,6 +8,8 @@
 import { chromium } from 'playwright-core'
 import type { Page } from 'playwright-core'
 import { randomUUID } from 'node:crypto'
+/** The board's canvas (the 3D dice add their own canvas while a roll shows). */
+const boardCanvas = 'canvas.board-canvas'
 import { mkdirSync, writeFileSync } from 'node:fs'
 
 const base = 'http://127.0.0.1:3000'
@@ -110,7 +112,7 @@ async function placeOwn(page: Page, name: string, x: number, y: number) {
   await page.keyboard.press('Escape')
   await openPanel(page, 'ชีตในห้อง')
   await page.getByRole('button', exact('วาง ' + name)).click()
-  await page.locator('canvas').click({ position: { x, y } })
+  await page.locator(boardCanvas).click({ position: { x, y } })
   await page.waitForTimeout(500)
 }
 await step('Players place their own tokens at the entrance', async () => {
@@ -129,7 +131,7 @@ await step('DM prepares two Goblin Warriors in the inner room (players must not 
     await dm.getByLabel('ค้นหาชื่อหรือประเภท').fill('Goblin Warrior')
     await dm.locator('.manual-list button').first().click()
     await dm.getByRole('button', exact('วางมอนสเตอร์ในฉาก')).click()
-    await dm.locator('canvas').click({ position: { x, y: 300 } })
+    await dm.locator(boardCanvas).click({ position: { x, y: 300 } })
     await dm.waitForTimeout(500)
     await openPanel(dm, 'Monster Manual')
     const back = dm.getByRole('button', exact('← กลับไปยังรายการ'))
@@ -187,10 +189,10 @@ const whoseTurn = async () => {
 const goblinPixel = { x: 500, y: 300 }
 async function playerTurn(page: Page, name: string) {
   // Step toward the goblins with the arrow keys, then attack from the goblin's token bar.
-  await page.locator('canvas').click({ position: { x: 700, y: 600 } })
+  await page.locator(boardCanvas).click({ position: { x: 700, y: 600 } })
   await page.keyboard.press('ArrowRight')
   await page.waitForTimeout(400)
-  await page.locator('canvas').click({ position: goblinPixel })
+  await page.locator(boardCanvas).click({ position: goblinPixel })
   const bar = page.getByRole('toolbar', { name: /^คำสั่งของ Goblin/ })
   await bar.waitFor()
   await snap(page, 'turn-' + name + '-bar')

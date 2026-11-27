@@ -14,6 +14,8 @@ import { writeFileSync, mkdirSync } from 'node:fs'
 import { chromium } from 'playwright-core'
 import type { Page } from 'playwright-core'
 import { blankSheet } from '../shared/model.ts'
+/** The board's canvas (the 3D dice add their own canvas while a roll shows). */
+const boardCanvas = 'canvas.board-canvas'
 import type { Snapshot } from '../shared/model.ts'
 
 const base = process.env.BEHOLDER_TEST_URL ?? 'http://127.0.0.1:3000'
@@ -86,7 +88,7 @@ if (process.env.BEHOLDER_PERF_VISION === '1') {
 }
 const seat = seatPage
 await seat.goto(base + '/room/' + room.id)
-const canvas = seat.locator('canvas')
+const canvas = seat.locator(boardCanvas)
 await canvas.waitFor()
 await seat.waitForTimeout(1500)
 const box = (await canvas.boundingBox())!
