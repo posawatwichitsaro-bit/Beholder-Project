@@ -1,10 +1,11 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { blankSheet, objectDefinition, objectLabels, objectOwner, tokenRoleLabels } from '../../../shared/model.ts'
-import type { Actor, ObjectDefinition, Roll, Scene, Sheet, Snapshot, Template, TokenRole } from '../../../shared/model.ts'
+import type { Actor, InventoryItem, ObjectDefinition, Roll, Scene, Sheet, Snapshot, Template, TokenRole } from '../../../shared/model.ts'
 import type { Area, AreaKind } from '../../../shared/area.ts'
 import { AccountPanel } from '../account/AccountPanel.tsx'
 import { MonsterManual } from '../manual/MonsterManual.tsx'
+import { ItemCatalogPicker } from '../items/ItemCatalogPicker.tsx'
 import { Board } from '../board/Board.tsx'
 import { CombatPanel } from '../combat/CombatPanel.tsx'
 import { DamageTypeSelect } from '../combat/CombatEffects.tsx'
@@ -119,6 +120,8 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [wizard, setWizard] = useState(false)
   const [tokenPlacement, setPlacing] = useState<TokenPlacement>()
   const [objectPlacement, setObjectPlacement] = useState<{ sceneId: string; definition: ObjectDefinition }>()
+  /** A catalog item waiting for a click on the map (anyone; it lands as a temp item). */
+  const [itemPlacement, setItemPlacement] = useState<{ sceneId: string; item: Omit<InventoryItem, 'id'> }>()
   const [combatTarget, setCombatTarget] = useState('')
   const [cameraFocus, setCameraFocus] = useState<{ actorId: string; sequence: number }>()
   const [areaKind, setAreaKind] = useState<AreaKind>()
@@ -139,6 +142,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   const scene = (dm && focusScene ? room.scenes.find(item => item.id === focusScene) : undefined) ?? published
   const placingObject = objectPlacement?.sceneId === scene?.id ? objectPlacement?.definition : undefined
   const placing = tokenPlacement?.sceneId === scene?.id ? tokenPlacement : undefined
+  const placingItem = itemPlacement && itemPlacement.sceneId === scene?.id ? itemPlacement.item : undefined
   const mainToken = !dm ? scene?.tokens.find(token => token.role === 'character' && room.actors.some(actor => actor.id === token.actorId)) : undefined
   const editingScene = typeof modal === 'object' ? room.scenes.find(item => item.id === modal.sceneId) : undefined
   const actor = room.actors.find(item => item.id === selected)
@@ -222,7 +226,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   }, [mainTokenId, keyboardSceneId])
   function switchView(id: string) {
     setFocusScene(id); setPlacing(undefined); setPlacementPoint(undefined); setCombatTarget('')
-    setObjectTarget(undefined); setLootTarget(undefined); setObjectImport(undefined); setObjectPlacement(undefined)
+    setObjectTarget(undefined); setLootTarget(undefined); setObjectImport(undefined); setObjectPlacement(undefined); setItemPlacement(undefined)
   }
   function clearArea() { setAreaKind(undefined); setAreaPreview(undefined) }
   useEffect(() => { setOlder([]); setHistoryEnded(false) }, [room.activeSceneId])
@@ -243,6 +247,7 @@ export function Table({ account, changeAccount }: AccountProps) {
         setDmCombat(false)
         setPlacing(undefined)
         setObjectPlacement(undefined)
+        setItemPlacement(undefined)
         setPlacementPoint(undefined)
         clearArea()
         setCalibrating(undefined)
@@ -407,8 +412,16 @@ export function Table({ account, changeAccount }: AccountProps) {
           {scene && <button onClick={() => chooseToken({ templateId: item.id })}>วาง</button>}
         </div>)}</>}
     </>,
+    items: () => <ItemCatalogPicker actionLabel={scene ? 'วางบนฉาก' : 'เปิดฉากก่อนวางไอเทม'} close={closePanels}
+      choose={item => {
+        if (!scene) return false
+        setPlacing(undefined); setObjectPlacement(undefined)
+        setItemPlacement({ sceneId: scene.id, item })
+        closePanels()
+        return true
+      }} />,
     manual: () => <MonsterManual
-      addTemplate={sheet => send({ type: 'template', sheet })}
+      addTemplate={dm ? sheet => send({ type: 'template', sheet }) : undefined}
       placeMonster={scene ? sheet => chooseToken({ sheet }) : undefined}
       dragMonster={scene ? sheet => tokenDragProps({ source: { sheet } }) : undefined} />,
     library: () => <PersonalLibrary key={account?.email} useAccount={Boolean(account)} roomName={room.me.name} dm={dm} draft={libraryDraft} clearDraft={() => setLibraryDraft(undefined)}
@@ -536,10 +549,12 @@ export function Table({ account, changeAccount }: AccountProps) {
         copy={copyBoard} paste={position => void pasteBoard(position)}
         drop={dropToken}
         moveObject={(objectId, position) => void commandHere({ type: 'moveObject', objectId, ...position })}
-        place={placingObject ? point => void commandHere({ type: 'importObject', definition: placingObject, ...point })
+        place={placingItem ? point => void commandHere({ type: 'placeItem', item: placingItem, ...point })
+          .then(ok => { if (ok) setItemPlacement(undefined) })
+          : placingObject ? point => void commandHere({ type: 'importObject', definition: placingObject, ...point })
           .then(ok => { if (ok) setObjectPlacement(undefined) })
           : placing && (point => void placeToken(placing, point).then(ok => { if (ok) setPlacing(undefined) }))}
-        placementLabel={placingObject && 'คลิกช่องเพื่อวาง ' + placingObject.name}
+        placementLabel={placingItem ? 'คลิกช่องเพื่อวาง ' + placingItem.name : placingObject && 'คลิกช่องเพื่อวาง ' + placingObject.name}
         actions={(token, point, object) => {
           if (object) return [
             { label: 'โต้ตอบกับ Object', run: () => setObjectTarget(object.id) },
@@ -595,8 +610,8 @@ export function Table({ account, changeAccount }: AccountProps) {
           : <EmptyState title="รอ DM เปิดฉาก" hint="ระหว่างนี้สร้างตัวละครไว้ก่อนได้ พอ DM เปิดฉากแล้วค่อยลากลงกระดาน">
               <button className="primary" onClick={() => setWizard(true)}>สร้างตัวละคร</button>
             </EmptyState>}</div>}
-      {(placing || placingObject) && <button className="cancel-placement" onClick={() => { setPlacing(undefined); setObjectPlacement(undefined) }}>ยกเลิกการวาง</button>}
-      {!placing && !placingObject && <div className="board-status">
+      {(placing || placingObject || placingItem) && <button className="cancel-placement" onClick={() => { setPlacing(undefined); setObjectPlacement(undefined); setItemPlacement(undefined) }}>ยกเลิกการวาง</button>}
+      {!placing && !placingObject && !placingItem && <div className="board-status">
         {mainToken && <button className="main-token-control" title="คลิกเพื่อไปที่ตัวละครหลัก" onClick={focusMain}>
           <kbd>↑ ↓ ← →</kbd><span>{actorName(mainToken.actorId)}</span>
         </button>}

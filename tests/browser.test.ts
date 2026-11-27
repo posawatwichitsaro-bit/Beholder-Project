@@ -881,6 +881,67 @@ test('0.06: dice pool, signed quick HP, box selection, encounter end, and a mova
   await page.waitForFunction(x => Math.abs(document.querySelector('.dice-tray')!.getBoundingClientRect().x - x) < 2, before.x)
 })
 
+test('0.07: a player sets an SRD item on the map, drops a bag item to the floor, and a friend picks it up', { timeout: 60000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await seat(browser)
+  const mira = await seat(browser, { viewport: { width: 1280, height: 850 } })
+  const room: Snapshot = await (await dm.request.post(base + '/api/rooms', { data: { name: 'Release 0.07 items', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const state = await (await page.request.get(path)).json() as Snapshot
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: state.revision } })
+    assert.equal(response.status(), 200, await response.text())
+    return (await page.request.get(path)).json() as Promise<Snapshot>
+  }
+  const state = async () => (await (await dm.request.get(path)).json()) as Snapshot
+  const sceneId = (await command(dm, { type: 'scene', name: 'Camp', cell: 48, originX: 0, originY: 0 })).scenes[0].id
+  assert.equal((await mira.request.post(base + '/api/join', { data: { invite: room.invite, name: 'Mira', role: 'player' } })).status(), 200)
+  const lyra = (await command(mira, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Lyra',
+    inventory: [{ id: 'g', name: 'Gem', description: 'A blue stone' }] } })).actors.find(actor => actor.name === 'Lyra')!
+  await command(mira, { type: 'place', sceneId, actorId: lyra.id, role: 'character', x: 2, y: 2 })
+  await mira.goto(base + '/room/' + room.id)
+  await mira.getByRole('button', exact('เมนูโต๊ะ')).waitFor()
+
+  // Pick Rope from the SRD item panel and click a square: it lands as a temp item with its map art.
+  await openPanel(mira, 'คลังไอเทม SRD')
+  await mira.getByLabel('ค้นหาไอเทม').fill('Rope')
+  await mira.locator('.item-catalog-list').getByRole('button', { name: /^Rope/ }).first().click()
+  await mira.getByRole('button', exact('วางบนฉาก')).click()
+  await mira.getByText('คลิกช่องเพื่อวาง Rope').waitFor()
+  const frame = (await mira.locator('canvas').boundingBox())!
+  const cellAt = (x: number, y: number) => ({ x: frame.x + 36 + x * 48, y: frame.y + 36 + y * 48 })
+  const spot = cellAt(3.5, 2.5)
+  await mira.mouse.click(spot.x, spot.y)
+  await mira.waitForFunction(async url => (await (await fetch(url)).json()).scenes[0].objects?.some((object: { name: string; temp?: boolean }) => object.name === 'Rope' && object.temp), path)
+  const rope = (await state()).scenes[0].objects!.find(object => object.name === 'Rope')!
+  assert.equal(rope.image, '/art/srd/objects/rope.webp')
+  assert.ok((await state()).log!.some(entry => entry.text === 'Mira วาง Rope'), 'the DM can see who placed it')
+
+  // Drop the Gem from Lyra's bag: a floor pile appears under her token.
+  await openPanel(mira, 'ชีตในห้อง')
+  await mira.getByRole('button', exact('Lyra')).click()
+  const sheet = mira.getByRole('article', { name: 'ชีต Lyra' })
+  await sheet.getByRole('tab', { name: /Inventory|ของ/ }).first().click()
+  await sheet.getByRole('button', exact('ทิ้ง Gem ลงพื้น')).click()
+  await mira.waitForFunction(async url => (await (await fetch(url)).json()).scenes[0].objects?.some((object: { pile?: boolean }) => object.pile), path)
+  const after = await state()
+  assert.equal(after.actors.find(actor => actor.id === lyra.id)!.inventory?.length ?? 0, 0)
+
+  // Another player next to the pile takes the Gem; the empty pile goes away.
+  const bramSeat = await seat(browser)
+  assert.equal((await bramSeat.request.post(base + '/api/join', { data: { invite: room.invite, name: 'Bram', role: 'player' } })).status(), 200)
+  const bram = (await command(bramSeat, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Bram' } })).actors.find(actor => actor.name === 'Bram')!
+  await command(bramSeat, { type: 'place', sceneId, actorId: bram.id, role: 'character', x: 3, y: 3 })
+  const pile = after.scenes[0].objects!.find(object => object.pile)!
+  assert.ok(pile.kind === 'container')
+  await command(bramSeat, { type: 'takeItem', sceneId, objectId: pile.id, actorId: bram.id, itemId: pile.items[0].id })
+  await command(bramSeat, { type: 'takeItem', sceneId, objectId: rope.id, actorId: bram.id })
+  const final = await state()
+  assert.deepEqual(final.actors.find(actor => actor.id === bram.id)!.inventory!.map(item => item.name).sort(), ['Gem', 'Rope'])
+  assert.ok(!final.scenes[0].objects!.some(object => object.pile))
+})
+
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')

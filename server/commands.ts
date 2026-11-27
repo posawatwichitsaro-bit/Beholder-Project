@@ -12,7 +12,7 @@ import { advanceEffects, concentrationDc, d20Penalty, effectName, incapacitating
 import { hitDiceLeft, hitDieHealing, restedSheet } from '../shared/rest.ts'
 import type { ClassResource, Effect, HitDie as RestDie } from '../shared/model.ts'
 import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared/characterStats.ts'
-import { isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
+import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
 export class Forbidden extends Error {}
 export class Conflict extends Error {}
@@ -711,7 +711,10 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
     }
     case 'place': {
       const target = board()
-      if (command.templateId || command.kind === 'monster') requireDM(member)
+      if (command.templateId) requireDM(member)
+      // A player's monster from the Manual is a temp token: it belongs to the scene, and anyone there can run it.
+      const playerMonster = member.role !== 'dm' && command.kind === 'monster' && command.sheet !== undefined
+      if (command.kind === 'monster' && !playerMonster) requireDM(member)
       if ([command.templateId, command.actorId, command.sheet].filter(value => value !== undefined).length !== 1) throw new Invalid('เลือกชีตสำหรับวาง Token')
       const template = command.templateId ? get(room.templates, command.templateId) : undefined
       const sheet = command.sheet === undefined ? undefined : parseSheet(command.sheet, command.kind === 'monster' ? 'monster' : 'pc')
@@ -720,7 +723,8 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
         : sheet ? { ...sheet, id: id(), ownerId: member.id } : actor()
       owns(member, creature)
       if (creature.temp) throw new Invalid('Temp Token ผูกกับฉากที่วางไว้')
-      if (creature.kind === 'monster') requireDM(member)
+      if (creature.kind === 'monster' && !playerMonster) requireDM(member)
+      if (playerMonster) Object.assign(creature, { ownerId: '', temp: true as const })
       if (target.tokens.some(token => token.actorId === creature.id)) throw new Invalid('มี Token ของตัวนี้ในฉากแล้ว')
       const tokens = withTokenRoles(target, room.actors)
       const hasMain = tokens.some(token => token.role === 'character' && room.actors.some(actor => actor.id === token.actorId && actor.ownerId === creature.ownerId))
@@ -745,6 +749,7 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
       }
       if (template || sheet) room.actors.push(creature)
       target.tokens = [...tokens, token]
+      if (playerMonster) addLog(room, { kind: 'scene', sceneId: target.id, name: member.name, text: member.name + ' วาง ' + creature.name })
       return {}
     }
     case 'tokenRole': {
@@ -806,6 +811,41 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
       ;(target.objects ??= []).push(imported)
       return {}
     }
+    case 'placeItem': {
+      // Anyone may set a catalog item on the map. It is temp: anyone nearby can pick it up.
+      const target = board()
+      if ((target.objects ?? []).length >= 300) throw new Invalid('ฉากนี้มี Object มากเกินไป')
+      const { id: _id, ...item } = parseItem(command.item, false)
+      const placed: SceneObject = { id: id(), kind: 'item', name: item.name, description: item.description, image: boardArt(item),
+        item: { ...item, id: id() }, temp: true, width: 1, height: 1,
+        x: number(command.x, -1000, 1000, .5), y: number(command.y, -1000, 1000, .5) }
+      ;(target.objects ??= []).push(placed)
+      addLog(room, { kind: 'scene', sceneId: target.id, name: member.name, text: member.name + ' วาง ' + item.name })
+      return {}
+    }
+    case 'dropItem': {
+      // Out of a bag onto the floor under the token: joins a pile already in that square, or starts one.
+      const target = board()
+      const creature = actor()
+      owns(member, creature)
+      const token = target.tokens.find(entry => entry.actorId === creature.id)
+      if (!token) throw new Invalid('วาง Token ของตัวนี้ในฉากก่อน')
+      const inventory = creature.inventory ?? []
+      const item = get(inventory, command.itemId)
+      const x = Math.floor(token.x), y = Math.floor(token.y)
+      let pile = target.objects?.find(entry => entry.pile && entry.kind === 'container' && Math.floor(entry.x) === x && Math.floor(entry.y) === y)
+      if (pile?.kind === 'container' && pile.items.length >= 50) throw new Invalid('กองของตรงนี้เต็มแล้ว')
+      if (!pile) {
+        if ((target.objects ?? []).length >= 300) throw new Invalid('ฉากนี้มี Object มากเกินไป')
+        pile = { id: id(), kind: 'container', name: 'ของบนพื้น', description: '', image: boardArt(item), open: true, items: [],
+          pile: true, temp: true, x, y, width: 1, height: 1 }
+        ;(target.objects ??= []).push(pile)
+      }
+      if (pile.kind === 'container') pile.items.push(item)
+      creature.inventory = inventory.filter(entry => entry.id !== item.id)
+      addLog(room, { kind: 'scene', sceneId: target.id, name: member.name, text: creature.name + ' ทิ้ง ' + item.name + ' ลงพื้น' })
+      return {}
+    }
     case 'moveObject': {
       const target = object(board().objects ?? [])
       if (!target.temp) requireDM(member)
@@ -857,7 +897,7 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
       const current = object(target.objects ?? [])
       const creature = command.actorId ? actor() : undefined
       if (creature) {
-        nearby(target, creature, current)
+        if (member.role !== 'dm') nearby(target, creature, current)
       } else if (member.role !== 'dm' || command.type !== 'openObject') throw new Invalid('เลือกตัวละครก่อน')
       if (command.type === 'openObject') {
         if (current.kind !== 'container') throw new Invalid('เป้าหมายต้องเป็นกล่อง')
@@ -883,11 +923,13 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
         if (current.kind === 'item') {
           const art = current.image ? sceneArtByImage(current.image) : undefined
           const ref = art?.name === current.name ? art.ref ?? undefined : undefined
-          item = { id: current.id, name: current.name, description: current.description, image: itemIcon(ref) ?? current.image, ref }
+          item = current.item ? { ...current.item, id: id() }
+            : { id: current.id, name: current.name, description: current.description, image: itemIcon(ref) ?? current.image, ref }
           target.objects = target.objects!.filter(entry => entry.id !== current.id)
         } else if (current.kind === 'container' && current.open) {
           item = get(current.items, command.itemId)
           current.items = current.items.filter(entry => entry.id !== item.id)
+          if (current.pile && !current.items.length) target.objects = target.objects!.filter(entry => entry.id !== current.id)
         } else throw new Invalid('เปิดกล่องก่อนหยิบของ')
         inventory.push(item)
       }

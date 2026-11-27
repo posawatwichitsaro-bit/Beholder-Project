@@ -106,6 +106,7 @@ export function ItemCatalogPicker({ choose, close, actionLabel = 'เพิ่�
       </li>)}</ul>
     </>}
     <footer><a href="/data/SRD-LICENSE.txt" target="_blank" rel="noreferrer">SRD 5.2.1 · CC BY 4.0</a>
-      {' · '}<a href="/art/srd/inventory/CREDITS.md" target="_blank" rel="noreferrer">เครดิตภาพไอเทม</a></footer>
+      {' · '}<a href="/art/srd/inventory/CREDITS.md" target="_blank" rel="noreferrer">เครดิตภาพไอเทม</a>
+      {' · '}<a href="/art/srd/objects/CREDITS.md" target="_blank" rel="noreferrer">เครดิตภาพวัตถุ</a></footer>
   </section>
 }

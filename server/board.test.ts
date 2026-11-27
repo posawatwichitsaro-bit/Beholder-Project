@@ -310,3 +310,62 @@ test('a monster search transfers either the base items or all loot to one charac
     assert.throws(() => applyCommand(room, player, search), /ค้นศพนี้แล้ว/)
   }
 })
+
+test('0.07: anyone sets catalog items on the map as temp items, drops bag items into floor piles, and picks them up nearby', () => {
+  const { dm, player, actor, scene, room } = table()
+  const other: Member = { id: 'p2', name: 'Bram', role: 'player' }
+  room.members.push(other)
+  const bram: Actor = { ...blankSheet(), id: 'bram', ownerId: other.id, name: 'Bram' }
+  room.actors.push(bram)
+  scene.tokens.push({ id: 't4', actorId: bram.id, x: 1, y: 0 })
+
+  // A player places a catalog rope: a temp item object with the scene art, keeping the full item.
+  applyCommand(room, player, { type: 'placeItem', sceneId: scene.id, x: 1, y: 1,
+    item: { name: 'Rope', description: '50 feet', ref: 'srd-5.2.1:equipment:rope', category: 'Adventuring Gear', weight: 5 } })
+  const rope = scene.objects![0]
+  assert.equal(rope.kind, 'item')
+  assert.equal(rope.temp, true)
+  assert.equal(rope.image, '/art/srd/objects/rope.webp')
+  assert.match(room.log!.at(-1)!.text, /Player วาง Rope/)
+
+  // Another player standing next to it picks it up; it becomes theirs with the catalog facts.
+  applyCommand(room, other, { type: 'takeItem', sceneId: scene.id, objectId: rope.id, actorId: bram.id })
+  assert.equal(scene.objects!.length, 0)
+  assert.equal(bram.inventory![0].name, 'Rope')
+  assert.equal(bram.inventory![0].weight, 5)
+
+  // Dropping from a bag starts a pile under the token; a second drop in the same square joins it.
+  actor.inventory = [{ id: 'gem', name: 'Gem', description: '' }, { id: 'coin', name: 'Coin', description: '' }]
+  applyCommand(room, player, { type: 'dropItem', sceneId: scene.id, actorId: actor.id, itemId: 'gem' })
+  applyCommand(room, player, { type: 'dropItem', sceneId: scene.id, actorId: actor.id, itemId: 'coin' })
+  assert.equal(scene.objects!.length, 1)
+  const pile = scene.objects![0]
+  assert(pile.kind === 'container' && pile.pile && pile.open && pile.temp)
+  assert.deepEqual(pile.items.map(item => item.name), ['Gem', 'Coin'])
+  assert.equal(actor.inventory?.length, 0)
+  assert.throws(() => applyCommand(room, other, { type: 'dropItem', sceneId: scene.id, actorId: actor.id, itemId: 'x' }), /ไม่ได้ควบคุม/)
+
+  // Too far away: a player cannot reach it; the DM can, from anywhere.
+  scene.tokens.find(token => token.actorId === bram.id)!.x = 6
+  assert.throws(() => applyCommand(room, other, { type: 'takeItem', sceneId: scene.id, objectId: pile.id, actorId: bram.id, itemId: pile.items[0].id }), /เข้าใกล้/)
+  applyCommand(room, dm, { type: 'takeItem', sceneId: scene.id, objectId: pile.id, actorId: bram.id, itemId: pile.items[0].id })
+  applyCommand(room, player, { type: 'takeItem', sceneId: scene.id, objectId: pile.id, actorId: actor.id, itemId: pile.items[0].id })
+  assert.equal(scene.objects!.length, 0, 'an empty pile goes away')
+  assert.deepEqual(bram.inventory!.map(item => item.name), ['Rope', 'Gem'])
+  assert.deepEqual(actor.inventory!.map(item => item.name), ['Coin'])
+})
+
+test('0.07: a player places a Manual monster as a temp token anyone in the scene can run', () => {
+  const { dm, player, scene, room } = table()
+  applyCommand(room, player, { type: 'place', sceneId: scene.id, kind: 'monster', sheet: { ...blankSheet('monster'), name: 'Wolf', hp: 11, maxHp: 11 }, x: 4, y: 4 })
+  const wolf = room.actors.find(actor => actor.name === 'Wolf')!
+  assert.equal(wolf.temp, true)
+  assert.equal(wolf.ownerId, '')
+  assert.match(room.log!.at(-1)!.text, /Player วาง Wolf/)
+  const token = scene.tokens.find(entry => entry.actorId === wolf.id)!
+  applyCommand(room, player, { type: 'move', sceneId: scene.id, tokenId: token.id, x: 5, y: 4 })
+  assert.equal(token.x, 5)
+  assert.throws(() => applyCommand(room, player, { type: 'place', sceneId: scene.id, templateId: 'none' }), /DM/)
+  applyCommand(room, dm, { type: 'removeToken', sceneId: scene.id, tokenId: token.id })
+  assert(!room.actors.some(actor => actor.id === wolf.id), 'removing a temp token removes its creature')
+})

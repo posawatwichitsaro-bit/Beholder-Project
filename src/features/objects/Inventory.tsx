@@ -4,6 +4,7 @@ import { commandId } from '../../lib/api.ts'
 import { armorFromCatalog, weaponAttack } from '../../../shared/itemCatalog.ts'
 import { itemIcon } from '../../../shared/catalogArt.ts'
 import { ItemCatalogPicker, loadItemCatalog } from '../items/ItemCatalogPicker.tsx'
+import { useRoomStore } from '../../state/roomStore.ts'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
 
@@ -51,6 +52,12 @@ export function InventoryPanel({ actor, send, expanded = false }: { actor: Actor
   const [equipError, setEquipError] = useState('')
   const monster = actor.kind === 'monster'
   const items = actor.inventory ?? []
+  // Dropping needs this creature's token on the scene the table is playing.
+  const dropScene = useRoomStore(state => {
+    const room = state.room
+    const active = room?.scenes.find(scene => scene.id === room.activeSceneId)
+    return active?.tokens.some(token => token.actorId === actor.id) ? active.id : undefined
+  })
   const Wrapper = expanded ? 'section' : 'details'
   const Title = expanded ? 'h3' : 'summary'
   /** Turn a catalog weapon into a sheet attack, or wear catalog armor / a shield, through the normal sheet update. */
@@ -79,6 +86,8 @@ export function InventoryPanel({ actor, send, expanded = false }: { actor: Actor
         onClick={() => void equip(item, 'attack')}>{actor.attacks?.some(attack => attack.name === item.name) ? 'อยู่ในการโจมตีแล้ว' : 'ใช้เป็นการโจมตี'}</button>}
       {!monster && item.ref?.includes(':equipment:') && (item.category === 'armor' || item.category === 'shield') && <button type="button"
         title="คำนวณ AC จากชิ้นนี้" onClick={() => void equip(item, 'armor')}>{item.category === 'shield' ? 'ถือโล่' : 'สวมใส่'}</button>}
+      {dropScene && !actor.lootResult && remove !== item.id && <button type="button" aria-label={'ทิ้ง ' + item.name + ' ลงพื้น'} title="วางไว้บนพื้นใต้ Token ใครอยู่ใกล้ก็เก็บได้"
+        onClick={() => void send({ type: 'dropItem', sceneId: dropScene, actorId: actor.id, itemId: item.id })}>ทิ้งลงพื้น</button>}
       {remove === item.id ? <><button onClick={() => void send({ type: 'inventoryRemove', actorId: actor.id, itemId: item.id }).then(ok => {
         if (ok) setRemove(undefined)
       })}>ยืนยันนำออก</button><button onClick={() => setRemove(undefined)}>ยกเลิก</button></>

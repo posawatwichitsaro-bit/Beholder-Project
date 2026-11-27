@@ -100,6 +100,10 @@ export const objectLabels: Record<ObjectKind, string> = {
 export type SceneObject = {
   id: string; name: string; description: string; image?: string
   ownerId?: string; temp?: true; copyShared?: boolean
+  /** The full inventory item an `item` object stands for, so picking it up keeps its catalog facts. */
+  item?: InventoryItem
+  /** A pile of dropped things on the floor: removed once it is empty. */
+  pile?: true
   x: number; y: number; width: number; height: number
 } & (
   { kind: 'container'; open: boolean; items: InventoryItem[]; lock?: { dc: number; locked: boolean; tried: string[]; last?: { total: number; passed: boolean } } }
