@@ -22,14 +22,14 @@ let queued = 0
  * response at all, the same payload is retried once and the server answers
  * from its receipt instead of applying it twice.
  */
-export function sendCommand(command: Command, created?: (sceneId: string) => void): Promise<boolean> {
+export function sendCommand(command: Command, created?: (sceneId: string) => void, answered?: (receipt: Record<string, unknown>) => void): Promise<boolean> {
   if (queued > queueLimit) {
     useRoomStore.getState().setError('ส่งคำสั่งถี่เกินไป รอสักครู่แล้วลองอีกครั้ง')
     return Promise.resolve(false)
   }
   queued++
   useRoomStore.setState(state => ({ pending: state.pending + 1 }))
-  const run = tail.then(() => deliver(command, created)).finally(() => {
+  const run = tail.then(() => deliver(command, created, answered)).finally(() => {
     queued--
     useRoomStore.setState(state => ({ pending: Math.max(0, state.pending - 1) }))
   })
@@ -37,7 +37,7 @@ export function sendCommand(command: Command, created?: (sceneId: string) => voi
   return run
 }
 
-async function deliver(command: Command, created?: (sceneId: string) => void): Promise<boolean> {
+async function deliver(command: Command, created?: (sceneId: string) => void, answered?: (receipt: Record<string, unknown>) => void): Promise<boolean> {
   const store = useRoomStore.getState()
   const room = store.room
   if (!room) return false
@@ -53,6 +53,7 @@ async function deliver(command: Command, created?: (sceneId: string) => void): P
     }
     await refreshRoom(room.id).catch(() => {})
     if (receipt.sceneId) created?.(receipt.sceneId)
+    answered?.(receipt as Record<string, unknown>)
     // Some commands answer with a short message for this seat only (undo says what it took back).
     if (receipt.notice) useRoomStore.getState().setNotice(receipt.notice)
     return true

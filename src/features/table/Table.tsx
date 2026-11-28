@@ -20,6 +20,8 @@ import { ActorActions } from '../sheets/ActorActions.tsx'
 import { SheetView } from '../sheets/SheetView.tsx'
 import { CharacterWizard } from '../sheets/CharacterWizard.tsx'
 import { AdventureLog } from '../dice/AdventureLog.tsx'
+import { HandoutInbox, HandoutsPanel, HandoutViewer } from '../handouts/Handouts.tsx'
+import type { Handout } from '../../../shared/handouts.ts'
 import { DiceReveal } from '../dice/DiceReveal.tsx'
 import { DiceRoller } from '../dice/DiceRoller.tsx'
 import { usePrefs } from '../../state/prefs.ts'
@@ -163,6 +165,9 @@ export function Table({ account, changeAccount }: AccountProps) {
   const showTurnRail = Boolean(combat && (dm || combat.order.some(entry => room.actors.some(actor => actor.id === entry.actorId))))
   const menuOpen = dock.open.length > 0
   const base = roomPath(room.id)
+  // Handouts (0.14): the one open in the viewer, by id so edits show at once.
+  const [reading, setReading] = useState<string>()
+  const readingHandout = room.handouts?.find(item => item.id === reading)
   const refresh = () => refreshRoom(room.id)
   const send = sendCommand
 
@@ -541,6 +546,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       drawArea={(shape, done) => setSpellArea({ ...shape, done })}
       send={send} /> : <EmptyState title="ยังไม่ได้เลือกตัวละคร" hint="เลือกจากชีตในห้อง (T) หรือคลิก Token บนกระดาน" />,
     log: () => <AdventureLog room={room} send={send} />,
+    handouts: () => <HandoutsPanel room={room} send={send} open={handout => setReading(handout.id)} />,
     dice: () => <>
       <div className="section-head"><h2>ผลทอย</h2></div>
       {dm && <div className="dice-settings">
@@ -751,6 +757,8 @@ export function Table({ account, changeAccount }: AccountProps) {
       chooseArea={kind => { setAreaPreview(undefined); setAreaKind(kind) }}
       send={commandHere} close={() => setDmCombat(false)}
       advanced={(acting, target) => <ActorActions key={acting.id} actor={acting} room={room} scene={scene} send={commandHere} combatTarget={target} />} />}
+    <HandoutInbox room={room} open={(handout: Handout) => setReading(handout.id)} />
+    {readingHandout && <HandoutViewer room={room} handout={readingHandout} close={() => setReading(undefined)} />}
     <RollMenuHost />
     <XpAward room={room} scene={scene} send={commandHere} />
     {sending && <div className="send-status" aria-live="polite">กำลังส่ง…{sending > 1 ? ` (${sending})` : ''}</div>}

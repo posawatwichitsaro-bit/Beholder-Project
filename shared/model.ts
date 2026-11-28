@@ -1,3 +1,4 @@
+import type { Handout, Presenting } from './handouts.ts'
 import type { Area } from './area.ts'
 import type { ActorVision, SceneVision } from './vision.ts'
 import type { TurnUse } from './economy.ts'
@@ -233,6 +234,9 @@ export type Room = {
    * encumbrance (on unless false): carrying capacity limits Speed. advancement: level by milestone (default) or by XP.
    */
   settings?: { autoDamage?: boolean; encumbrance?: boolean; advancement?: 'milestone' | 'xp' }
+  /** Handouts (0.14, shared/handouts.ts); players are sent only their own. */
+  handouts?: Handout[]
+  presenting?: Presenting
 }
 export type Snapshot = Omit<Room, 'invite' | 'dmInvite' | 'actors' | 'members'> & {
   me: Member; members: Member[]; invite?: string; dmInvite?: string; actors: Actor[]

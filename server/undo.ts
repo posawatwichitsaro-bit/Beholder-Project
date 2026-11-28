@@ -77,6 +77,7 @@ function units(room: Room) {
   map.set('sceneOrder', room.scenes.map(scene => scene.id))
   for (const actor of room.actors) map.set('actor:' + actor.id, actor)
   for (const template of room.templates) map.set('template:' + template.id, template)
+  for (const handout of room.handouts ?? []) map.set('handout:' + handout.id, handout)
   for (const scene of room.scenes) {
     const { tokens, objects, vision, combat, damageEvents: _damage, areaEffect: _area, view: _view, ...meta } = scene
     map.set('scene:' + scene.id, meta)
@@ -173,6 +174,7 @@ function restore(room: Room, key: string, value: unknown) {
     room.scenes.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
   } else if (parts[0] === 'actor') replace(room.actors, parts[1])
   else if (parts[0] === 'template') replace(room.templates, parts[1])
+  else if (parts[0] === 'handout') replace(room.handouts ??= [], parts[1])
   else if (parts[0] === 'scene') {
     const sceneId = parts[1]
     let scene = room.scenes.find(item => item.id === sceneId)

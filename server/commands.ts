@@ -23,6 +23,8 @@ import { freshUse, gapBetween, reachOf } from '../shared/economy.ts'
 import type { TurnUse } from '../shared/economy.ts'
 import { itemLights } from '../shared/vision.ts'
 import { serverSpell } from './spellCatalog.ts'
+import { canSee, canvaEmbed, handoutLimits } from '../shared/handouts.ts'
+import type { Handout } from '../shared/handouts.ts'
 import { scaledDice } from '../shared/spells.ts'
 import { bardicDie, featureResource, inspirationDie, isRaging, levelIn, plusModifier, rageDamage, resists } from '../shared/classFeatures.ts'
 import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
@@ -486,6 +488,8 @@ export function snapshot(room: Room, me: Member): Snapshot {
     rolls: rolls.slice(-40),
     log: visibleLog(room, me).slice(-80).map(entry => unseen.length ? { ...entry, text: mask(entry.text) } : entry),
     settings: room.settings,
+    handouts: room.handouts?.filter(item => canSee(item, me)).map(item => dm ? item : { ...item, recipients: item.recipients === 'all' ? 'all' : [me.id] }),
+    presenting: room.presenting && room.handouts?.some(item => item.id === room.presenting!.handoutId && canSee(item, me)) ? room.presenting : undefined,
     combatQueue: dm && active ? rolls.filter(roll =>
       (roll.sceneId === active.id || (!roll.sceneId && active.tokens.some(token => token.actorId === roll.targetId))) &&
       (roll.applied === false || (roll.cast && !roll.cast.resolved))) : undefined
@@ -1723,6 +1727,54 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       if (outcome.result === 'empty') throw new Invalid('ไม่มีอะไรให้ย้อนแล้ว')
       if (outcome.result === 'blocked') return { notice: 'ย้อน' + outcome.label + 'ไม่ได้ เพราะมีคนแก้ต่อแล้ว · กด Ctrl+Z อีกครั้งเพื่อย้อนขั้นก่อนหน้า' }
       return { notice: 'ย้อน' + outcome.label + 'แล้ว' }
+    }
+    case 'handout': {
+      // DM: write a handout (title, text, a Canva view link) for everyone or some players; edit or remove it.
+      requireDM(member)
+      const list = room.handouts ??= []
+      const existing = command.handoutId === undefined ? undefined : get(list, command.handoutId)
+      if (command.remove === true) {
+        if (!existing) throw new Invalid('ไม่พบเอกสาร')
+        room.handouts = list.filter(item => item !== existing)
+        if (room.presenting?.handoutId === existing.id) delete room.presenting
+        // The picture file stays on disk, so undo can bring the handout back whole.
+        return {}
+      }
+      if (!existing && list.length >= handoutLimits.count) throw new Invalid('เอกสารในห้องได้สูงสุด ' + handoutLimits.count + ' ชิ้น')
+      const handout: Handout = existing ?? { id: id(), title: '', recipients: 'all', at: Date.now() }
+      if (command.title !== undefined || !existing) handout.title = text(command.title, handoutLimits.title)
+      if (command.text !== undefined) {
+        if (command.text === '') delete handout.text
+        else handout.text = text(command.text, handoutLimits.text)
+      }
+      if (command.canva !== undefined) {
+        if (command.canva === '') delete handout.canva
+        else {
+          const embed = canvaEmbed(String(command.canva))
+          if ('error' in embed) throw new Invalid(embed.error)
+          handout.canva = embed.url
+        }
+      }
+      if (command.recipients !== undefined) {
+        if (command.recipients === 'all') handout.recipients = 'all'
+        else {
+          if (!Array.isArray(command.recipients) || !command.recipients.length) throw new Invalid('เลือกผู้รับอย่างน้อยหนึ่งคน')
+          const players = new Set(room.members.filter(item => item.role === 'player').map(item => item.id))
+          const ids = [...new Set(command.recipients.map(String))]
+          if (ids.some(item => !players.has(item))) throw new Invalid('ผู้รับต้องเป็นผู้เล่นในห้อง')
+          handout.recipients = ids
+        }
+      }
+      if (!existing) list.push(handout)
+      return { handoutId: handout.id }
+    }
+    case 'present': {
+      // DM: open a handout full screen for everyone who has it, or stop presenting.
+      requireDM(member)
+      if (command.handoutId === null) { delete room.presenting; return {} }
+      const handout = get(room.handouts ?? [], command.handoutId)
+      room.presenting = { handoutId: handout.id, at: Date.now() }
+      return {}
     }
     case 'dmNotes': {
       // Secret notes on a scene or a sheet: the DM writes them, players never get them.
