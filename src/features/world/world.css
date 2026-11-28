@@ -1,0 +1,40 @@
+/* World maps (0.16): the panel list and the full-screen viewer with pins. */
+.world-maps { display: grid; gap: var(--bh-space-3); }
+.world-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--bh-space-2); }
+.world-list li { display: grid; gap: 6px; padding: 8px; border-radius: var(--bh-radius-md); border: 1px solid var(--bh-line); }
+.world-list li.presenting { border-color: var(--bh-brass-bright); box-shadow: 0 0 0 1px var(--bh-brass-bright) inset; }
+.table .world-open { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: transparent; border: 0; padding: 2px; }
+.world-open img, .world-blank { width: 64px; height: 44px; object-fit: cover; border-radius: 4px; flex: none; display: grid; place-items: center; background: #0003; }
+.world-open span { display: grid; gap: 2px; min-width: 0; }
+.world-open small { color: var(--bh-text-muted); font-size: var(--bh-text-xs); }
+.world-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.world-actions button, .world-actions .button-like { display: inline-flex; align-items: center; gap: 4px; }
+.world-actions .button-like { cursor: pointer; padding: 4px 8px; border: 1px solid var(--bh-line); border-radius: var(--bh-radius-sm, 4px); }
+.world-new { display: grid; gap: 6px; }
+.world-new h3 { margin: 0; font-size: .95rem; }
+.world-new label { display: grid; gap: 4px; }
+
+.world-viewer { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: #0b0806f2; color: var(--bh-text-strong); }
+.world-viewer > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; flex-wrap: wrap; }
+.world-tools { display: flex; gap: 6px; flex-wrap: wrap; }
+.world-tools button { display: inline-flex; align-items: center; gap: 4px; }
+.world-tools button[aria-pressed='true'] { outline: 2px solid var(--bh-brass-bright); }
+.world-hint { margin: 0; padding: 0 16px 6px; color: var(--bh-brass-bright); }
+.world-frame { position: relative; flex: 1; overflow: hidden; touch-action: none; cursor: grab; }
+.world-frame.world-pin, .world-frame.world-party { cursor: crosshair; }
+.world-layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.world-layer img { display: block; user-select: none; pointer-events: none; }
+.world-pin, .world-party { position: absolute; transform-origin: 50% 100%; white-space: nowrap; }
+.table .world-pin, .world-pin { display: grid; justify-items: center; gap: 0; background: transparent; border: 0; padding: 0; cursor: pointer; color: #fff; }
+.world-pin span { font-size: 26px; line-height: 1; filter: drop-shadow(0 2px 2px #000); }
+.world-pin small { font-size: 12px; padding: 1px 6px; border-radius: 8px; background: #000b; }
+.world-pin.hidden-pin { opacity: .55; }
+.world-pin.open small { background: var(--bh-brass-bright); color: #1a120a; }
+.world-party { transform-origin: 50% 50%; padding: 2px 8px; border-radius: 10px; background: var(--bh-crimson, #8a1a1a); color: #fff; font-weight: 700; box-shadow: 0 2px 6px #000; pointer-events: none; }
+.world-card { position: absolute; right: 16px; top: 64px; width: min(320px, calc(100vw - 32px)); max-height: calc(100vh - 96px); overflow: auto;
+  padding: 12px; border-radius: var(--bh-radius-md); background: var(--bh-parchment); color: var(--bh-ink); box-shadow: var(--bh-shadow-3); }
+.world-card h3 { margin: 0; }
+.world-pin-form, .world-pin-details { display: grid; gap: 8px; }
+.world-pin-form label { display: grid; gap: 4px; }
+.world-pin-details header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.world-note { margin: 0; white-space: pre-wrap; line-height: 1.5; }

@@ -12,6 +12,7 @@ import { Invalid } from './rules.ts'
 import type { Database, Query } from './store.ts'
 import { libraryRoutes } from './library.ts'
 import { canSee } from '../shared/handouts.ts'
+import { worldMapFor } from '../shared/worldMaps.ts'
 import { playerView } from '../shared/vision.ts'
 import { maskedMap } from './mapMask.ts'
 import { createAuthThrottle } from './authThrottle.ts'
@@ -332,6 +333,42 @@ export async function createApp(database: Database, assetDirectory: string) {
     const handout = room.handouts?.find(item => item.id === req.params.handoutId && canSee(item, member))
     if (!handout?.image) throw new Forbidden('ไม่สามารถเปิดภาพนี้ได้')
     res.type(handout.image.mime).set('Cache-Control', 'private, max-age=3600').sendFile(handout.image.id, { root: assets })
+  })
+  // World map pictures (0.16): the DM uploads one per map; players can open it once the map is shared.
+  app.put('/api/rooms/:id/world/:mapId/image', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp'], limit: '25mb' }), async (req, res) => {
+    const id = await memberId(database.query, req.params.id, req.headers.cookie)
+    const initial = await roomBy(database.query, req.params.id)
+    if (memberOf(initial, id).role !== 'dm') throw new Forbidden('สงวนให้ DM')
+    if (!Buffer.isBuffer(req.body)) throw new Invalid('ใช้ไฟล์ PNG, JPEG หรือ WebP')
+    const mime = imageType(req.body)
+    if (mime !== req.headers['content-type']) throw new Invalid('ชนิดไฟล์ไม่ตรงกับข้อมูลภาพ')
+    const image = { id: randomUUID(), mime }
+    const path = resolve(assets, image.id)
+    await writeFile(path, req.body, { flag: 'wx' })
+    let room: Room
+    try {
+      room = await database.transaction(async query => {
+        const room = await roomBy(query, req.params.id, true)
+        const map = room.worldMaps?.find(item => item.id === req.params.mapId)
+        if (!map) throw new Invalid('ไม่พบแผนที่')
+        map.image = image
+        await save(query, room)
+        return room
+      })
+    } catch (error) {
+      await unlink(path).catch(() => {})
+      throw error
+    }
+    publish(room)
+    res.status(204).end()
+  })
+  app.get('/api/rooms/:id/world/:mapId/image', async (req, res) => {
+    const id = await memberId(database.query, req.params.id, req.headers.cookie)
+    const room = await roomBy(database.query, req.params.id)
+    const member = memberOf(room, id)
+    const map = room.worldMaps?.find(item => item.id === req.params.mapId)
+    if (!map?.image || !worldMapFor(map, member)) throw new Forbidden('ไม่สามารถเปิดภาพนี้ได้')
+    res.type(map.image.mime).set('Cache-Control', 'private, max-age=3600').sendFile(map.image.id, { root: assets })
   })
   app.get('/api/rooms/:id/maps/:assetId', async (req, res) => {
     const id = await memberId(database.query, req.params.id, req.headers.cookie)

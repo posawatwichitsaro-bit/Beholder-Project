@@ -6,7 +6,7 @@
  * here and its content in Table. `roles` hides panels a seat cannot use, so
  * players never see DM tools.
  */
-export type PanelId = 'scenes' | 'sheets' | 'actor' | 'objects' | 'combat' | 'dice' | 'log' | 'handouts' | 'encounters' | 'manual' | 'items' | 'library' | 'account' | 'settings'
+export type PanelId = 'scenes' | 'sheets' | 'actor' | 'objects' | 'combat' | 'dice' | 'log' | 'handouts' | 'world' | 'encounters' | 'manual' | 'items' | 'library' | 'account' | 'settings'
 export type PanelGroup = 'board' | 'play' | 'personal'
 export type Role = 'dm' | 'player'
 
@@ -34,6 +34,7 @@ export const panels: readonly PanelDef[] = [
   { id: 'dice', label: 'ลูกเต๋า', group: 'play', roles: everyone, shortcut: 'D', inRail: true, keywords: 'dice roll d20 ทอย ผลทอย' },
   { id: 'log', label: 'บันทึกการผจญภัย', group: 'play', roles: everyone, shortcut: 'L', inRail: true, keywords: 'adventure log chat history message แชท ข้อความ บันทึก ประวัติ' },
   { id: 'handouts', label: 'เอกสาร', group: 'play', roles: everyone, shortcut: 'H', inRail: true, keywords: 'handout letter document canva presentation slide เอกสาร จดหมาย นำเสนอ ภาพ' },
+  { id: 'world', label: 'แผนที่โลก', group: 'play', roles: everyone, shortcut: 'W', inRail: true, keywords: 'world map region city travel pin party แผนที่โลก ภูมิภาค เมือง หมุด เดินทาง ปาร์ตี้' },
   { id: 'encounters', label: 'Encounter', group: 'play', roles: ['dm'], shortcut: 'E', inRail: true, keywords: 'encounter builder xp budget difficulty monster group ambush ต่อสู้ มอนสเตอร์ งบ xp ความยาก' },
   { id: 'manual', label: 'Monster Manual', group: 'play', roles: everyone, shortcut: 'N', inRail: true, keywords: 'monster srd bestiary มอนสเตอร์' },
   { id: 'items', label: 'คลังไอเทม SRD', group: 'play', roles: everyone, shortcut: 'I', inRail: true, keywords: 'item catalog equipment loot srd ไอเทม ของ อาวุธ วางบนฉาก' },
