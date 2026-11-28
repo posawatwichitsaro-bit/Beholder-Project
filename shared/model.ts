@@ -105,7 +105,8 @@ export type Library = { name: string; sheets: Template[]; objects: SavedObject[]
 export type MapAsset = { id: string; mime: string }
 export const tokenRoleLabels = { character: 'Character Token', companion: 'Companion Token' } as const
 export type TokenRole = keyof typeof tokenRoleLabels
-export type Token = { id: string; actorId: string; x: number; y: number; role?: TokenRole; copyShared?: boolean }
+/** `facing` (0.14): which way the token looks, in degrees (0 east, 90 south), one of 8 directions; aims a Bullseye Lantern's cone. */
+export type Token = { id: string; actorId: string; x: number; y: number; role?: TokenRole; copyShared?: boolean; facing?: number }
 export type ItemProficiency = { thievesTools: boolean; sleight: boolean; investigation: boolean; perception: boolean }
 export type LootSkill = 'investigation' | 'perception'
 export type LootResult = { passed: boolean; total: number; searcher: string; found: { name: string; quantity: number }[] }
@@ -202,7 +203,7 @@ export type Roll = {
     /** The condition a failed save gives (0.13): the save result offers a button to apply it. */
     condition?: string; spell?: string; concentration?: boolean; damageKind?: DamageKind }
   /** On a failed spell save: the condition its caster's side may apply with one click. */
-  offer?: { condition: string; targetId: string; sourceId: string; label: string; concentration?: boolean }
+  offer?: { condition: string; targetId: string; sourceId: string; label: string; concentration?: boolean; dismissed?: boolean }
   critical?: boolean; privateTo?: string; sceneId?: string; sourceId?: string; damageKind?: DamageKind
   /** When the roll happened (ms). Older rolls have none. */
   at?: number

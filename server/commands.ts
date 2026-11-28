@@ -15,7 +15,7 @@ import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared
 import { attackOdds, chooseMode, chosenMode, rollOdds } from '../shared/advantage.ts'
 import type { Odds } from '../shared/advantage.ts'
 import { characterLevel, criticalFrom, magicalCunning, monsterXp, srdFeats, srdSubclasses } from '../shared/progression.ts'
-import { key, lightsOf, playerView, seenBy, tokenCenter, tokenSeen, visionOf, wallsForPlayer } from '../shared/vision.ts'
+import { facingOf, key, lightsOf, playerView, seenBy, tokenCenter, tokenSeen, visionOf, wallsForPlayer } from '../shared/vision.ts'
 import type { ActorVision, Ambient, Door, LightSource, SceneVision, Wall } from '../shared/vision.ts'
 import { gridFeet, moveCost, speedNow } from '../shared/movement.ts'
 import { afterCommand, beforeCommand, isUndoable, redoLast, undoLast } from './undo.ts'
@@ -33,6 +33,13 @@ export class Forbidden extends Error {}
 export class Conflict extends Error {}
 export type Command = Record<string, unknown>
 const id = randomUUID
+/** A moved token turns the way it went (0.14), so a carried Bullseye Lantern points ahead. East is left unset. */
+function turnToward(token: Token, dx: number, dy: number) {
+  const facing = facingOf(dx, dy)
+  if (facing === undefined) return
+  if (facing) token.facing = facing
+  else delete token.facing
+}
 
 export function text(value: unknown, max = 120) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Invalid('กรุณากรอกข้อความให้ถูกต้อง')
@@ -490,10 +497,18 @@ export function snapshot(room: Room, me: Member): Snapshot {
     settings: room.settings,
     handouts: room.handouts?.filter(item => canSee(item, me)).map(item => dm ? item : { ...item, recipients: item.recipients === 'all' ? 'all' : [me.id] }),
     presenting: room.presenting && room.handouts?.some(item => item.id === room.presenting!.handoutId && canSee(item, me)) ? room.presenting : undefined,
-    combatQueue: dm && active ? rolls.filter(roll =>
+    combatQueue: dm && active ? rolls.filter((roll, index) =>
       (roll.sceneId === active.id || (!roll.sceneId && active.tokens.some(token => token.actorId === roll.targetId))) &&
-      (roll.applied === false || (roll.cast && !roll.cast.resolved))) : undefined
+      (roll.applied === false || (roll.cast && !roll.cast.resolved) || (index >= rolls.length - 40 && openOffer(room, roll)))) : undefined
   }
+}
+
+/** A failed save's condition button (0.14 also on the DM's card): open until applied or dismissed. */
+function openOffer(room: Room, roll: Roll) {
+  const offer = roll.offer
+  if (!offer || offer.dismissed) return false
+  const target = room.actors.find(actor => actor.id === offer.targetId)
+  return Boolean(target && !target.effects?.some(effect => effect.condition === offer.condition && effect.sourceId === offer.sourceId))
 }
 
 export type BoardPiece = { token: Token; actor: Actor } | { object: SceneObject }
@@ -1112,7 +1127,18 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       const to = { x: number(command.x, -1000, 1000, .5), y: number(command.y, -1000, 1000, .5) }
       countMove(target, token.actorId, moveCost(target, room.actors.find(item => item.id === token.actorId), token, to))
       opportunities(target, token.actorId, { x: token.x, y: token.y }, to)
+      turnToward(token, to.x - token.x, to.y - token.y)
       Object.assign(token, to)
+      return {}
+    }
+    case 'face': {
+      // 0.14: turn a token (aims a Bullseye Lantern): its owner or the DM, one of 8 directions.
+      const target = board()
+      const token = get(target.tokens, command.tokenId)
+      owns(member, get(room.actors, token.actorId))
+      const facing = number(command.facing, 0, 315, 45)
+      if (facing) token.facing = facing
+      else delete token.facing
       return {}
     }
     case 'moveTokens': {
@@ -1128,6 +1154,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       for (const { token, x, y } of moves) {
         countMove(target, token.actorId, moveCost(target, room.actors.find(item => item.id === token.actorId), token, { x, y }))
         opportunities(target, token.actorId, { x: token.x, y: token.y }, { x, y })
+        turnToward(token, x - token.x, y - token.y)
         Object.assign(token, { x, y })
       }
       return {}
@@ -1727,6 +1754,14 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       if (outcome.result === 'empty') throw new Invalid('ไม่มีอะไรให้ย้อนแล้ว')
       if (outcome.result === 'blocked') return { notice: 'ย้อน' + outcome.label + 'ไม่ได้ เพราะมีคนแก้ต่อแล้ว · กด Ctrl+Z อีกครั้งเพื่อย้อนขั้นก่อนหน้า' }
       return { notice: 'ย้อน' + outcome.label + 'แล้ว' }
+    }
+    case 'dismissOffer': {
+      // 0.14: the DM (or the caster's player) decides not to apply a failed save's condition.
+      const roll = get(room.rolls, command.rollId)
+      if (!roll.offer) throw new Invalid('ผลทอยนี้ไม่มี Condition ให้ใส่')
+      if (member.role !== 'dm') owns(member, get(room.actors, roll.offer.sourceId))
+      roll.offer.dismissed = true
+      return {}
     }
     case 'handout': {
       // DM: write a handout (title, text, a Canva view link) for everyone or some players; edit or remove it.

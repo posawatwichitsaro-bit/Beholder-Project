@@ -24,7 +24,7 @@ import { boardTransform, bounds, pieceAt, piecesIn, rulerFeet } from './geometry
 import { VisionToolbar } from './VisionToolbar.tsx'
 import { doorAt, knownDoor, lightAt, snapCorner, strokeCells, wallAt, wallEdit, wallEndAt, wallsIn } from './visionTools.ts'
 import type { VisionTool, WallGrab } from './visionTools.ts'
-import { playerView } from '../../../shared/vision.ts'
+import { playerView, visionOf } from '../../../shared/vision.ts'
 import type { Wall } from '../../../shared/vision.ts'
 import { Eye as EyeIcon } from 'lucide-react'
 import { feetMoved, moveCost, speedNow, speedReasons } from '../../../shared/movement.ts'
@@ -701,8 +701,18 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       { label: 'เปลี่ยนเป็นผนัง', run: () => set(null) }
     ]
   }
+  // 0.14: a token carrying a lit Bullseye Lantern can be turned 45° at a time (moving also turns it).
+  const lanternActions = (token?: Token): Action[] => {
+    const sheet = token && room.actors.find(actor => actor.id === token.actorId)
+    if (!token || !sheet || !command || !(dm || sheet.ownerId === room.me.id) || !visionOf(sheet).light?.cone) return []
+    const turn = (step: number) => void command({ type: 'face', tokenId: token.id, facing: (((token.facing ?? 0) + step) % 360 + 360) % 360 })
+    const arrows = ['→', '↘', '↓', '↙', '←', '↖', '↑', '↗']
+    const now = arrows[Math.round((token.facing ?? 0) / 45) % 8]
+    return [{ label: 'หมุนโคมตามเข็ม ' + now + ' ↻', run: () => turn(45) }, { label: 'หมุนโคมทวนเข็ม ' + now + ' ↺', run: () => turn(-45) }]
+  }
   const boardActions: Action[] = menu?.door ? doorActions(menu.door) : menu ? [
     ...actions(menu.token, menu.cell, menu.object),
+    ...lanternActions(menu.token),
     ...(menu.token || menu.object ? [] : [
       { label: 'วัดระยะ', run: () => setTool('measure') },
       { label: 'พอดีกระดาน', run: fit }

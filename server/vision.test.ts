@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { blankSheet } from '../shared/model.ts'
+import type { Room } from '../shared/model.ts'
 import { inside, insideStar, key, playerView, sightPolygon, speciesDarkvision, star, visionOf, wallsForPlayer } from '../shared/vision.ts'
 import type { SceneVision, Wall } from '../shared/vision.ts'
 import { species } from '../src/features/sheets/origins.ts'
@@ -66,4 +67,32 @@ test('the fast star test agrees with the plain polygon test (edge points aside)'
     if (insideStar(shape, { x: x + .5, y: y + .5 }) !== inside(shape.points, { x: x + .5, y: y + .5 })) disagree++
   }
   assert.ok(disagree <= total / 1000, disagree + ' of ' + total + ' cells disagree')
+})
+
+test('0.14: a Bullseye Lantern lights a 60-ft cone the way its carrier faces, and moving turns it', async () => {
+  const { facingOf } = await import('../shared/vision.ts')
+  const { applyCommand } = await import('./commands.ts')
+  const lantern = { ...hero, inventory: [{ id: 'l', name: 'Lantern, Bullseye', description: '', ref: 'srd-5.2.1:equipment:lantern-bullseye', lit: true }] }
+  assert.equal(visionOf(lantern).light?.cone, true)
+  const dark = (facing?: number) => playerView({ tokens: [{ id: 't1', actorId: 'hero', x: 20, y: 20, facing }], vision: { enabled: true, ambient: 'night', walls: [] } }, [lantern], 'm').visible
+  const east = dark()
+  assert.ok(east.has(key(30, 20)) && east.has(key(40, 20)), 'lit ahead, 50 and 100 ft east')
+  assert.ok(east.has(key(30, 24)), 'the cone widens: 20 ft off the line, 50 ft out')
+  assert.ok(!east.has(key(30, 27)), 'outside the cone stays dark')
+  assert.ok(!east.has(key(15, 20)), 'behind the carrier stays dark')
+  const south = dark(90)
+  assert.ok(south.has(key(20, 30)) && !south.has(key(30, 20)), 'facing south lights south, not east')
+  assert.deepEqual([facingOf(1, 0), facingOf(0, 1), facingOf(-2, -2), facingOf(0, -3), facingOf(0, 0)], [0, 90, 225, 270, undefined])
+  // Moving turns the token toward where it went; the owner can also turn it by hand.
+  const room: Room = {
+    id: 'r', name: 'R', invite: 'i', revision: 0, activeSceneId: 's', templates: [], rolls: [], actors: [lantern],
+    members: [{ id: 'dm', name: 'DM', role: 'dm' as const }, { id: 'm', name: 'Mira', role: 'player' as const }],
+    scenes: [{ id: 's', name: 'Hall', cell: 48, originX: 0, originY: 0, tokens: [{ id: 't1', actorId: 'hero', x: 20, y: 20 }] }]
+  }
+  const mira = room.members[1]
+  applyCommand(room, mira, { type: 'move', sceneId: 's', tokenId: 't1', x: 20, y: 23 })
+  assert.equal(room.scenes[0].tokens[0].facing, 90)
+  applyCommand(room, mira, { type: 'face', sceneId: 's', tokenId: 't1', facing: 180 })
+  assert.equal(room.scenes[0].tokens[0].facing, 180)
+  assert.throws(() => applyCommand(room, mira, { type: 'face', sceneId: 's', tokenId: 't1', facing: 100 }))
 })
