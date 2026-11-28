@@ -77,6 +77,10 @@
 /* ---------- 0.09: vision tools (DM) ---------- */
 .table .vision-tools { position: absolute; top: 58px; right: 12px; z-index: 6; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   max-width: min(720px, calc(100% - 24px)); padding: 6px 8px; border-radius: 8px; background: #1b1411f2; border: 1px solid #685445; font-size: .82rem; }
+/* 0.17: with a dock panel open, the tools sit left of it instead of covering its top. */
+.table:has(.hud-dock:not([hidden])) .vision-tools { --_dock-edge: calc(var(--hud-rail) + var(--hud-dock-width) + 2 * var(--hud-gap));
+  right: var(--_dock-edge); max-width: min(720px, calc(100% - var(--_dock-edge) - var(--hud-gap))); }
+.table.with-combat:has(.hud-dock:not([hidden])) .vision-tools { --_dock-edge: calc(var(--combat-width) + var(--hud-rail) + var(--hud-dock-width) + 2 * var(--hud-gap)); }
 .vision-tools select { max-width: 11rem; }
 .vision-tools .vision-switch { display: inline-flex; gap: 4px; align-items: center; font-weight: 600; }
 .vision-tool-buttons { display: inline-flex; gap: 2px; }

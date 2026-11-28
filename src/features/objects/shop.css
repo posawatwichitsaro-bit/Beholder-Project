@@ -1,0 +1,16 @@
+/* Shop counter and purse (0.15, styled in 0.17). */
+.shop-counter { display: grid; gap: 8px; }
+.shop-admin { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.shop-admin label { display: grid; gap: 2px; }
+.shop-admin input { width: 5.5em; }
+.shop-purse { margin: 0; }
+.shop-closed { margin: 0; font-weight: 700; }
+.shop-wares { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.shop-wares li { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; padding: 6px 0; border-bottom: 1px solid var(--bh-parchment-line, #0002); }
+.shop-wares li > :first-child { min-width: 0; }
+.shop-price { font-weight: 700; white-space: nowrap; }
+.shop-wares .inline { grid-column: 1 / -1; display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
+.shop-wares input[type='number'] { width: 5em; }
+.purse { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.purse-form label { display: grid; gap: 2px; font-size: .8rem; }
+.purse-form input { width: 6em; }

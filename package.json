@@ -1,6 +1,6 @@
 {
   "name": "beholder-table",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.25.0",
@@ -11,6 +11,7 @@
     "test:browser": "node --test tests/browser.test.ts",
     "playtest": "node tests/playtest.ts",
     "perf": "node tests/perf.ts",
+    "load": "node tests/load.ts",
     "import:dndbeyond": "node scripts/import-dndbeyond.ts",
     "check": "tsc --noEmit"
   },

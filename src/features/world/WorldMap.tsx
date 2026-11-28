@@ -160,7 +160,7 @@ export function WorldMapViewer({ room, map, send, close, presenting = false }: {
       </span>
     </header>
     {mode !== 'look' && <p className="world-hint" role="status">{mode === 'pin' ? 'คลิกบนแผนที่เพื่อปักหมุด' : 'คลิกจุดที่ปาร์ตี้อยู่'}</p>}
-    <div ref={frame} className={'world-frame world-' + mode} onPointerDown={down} onPointerMove={move} onPointerUp={up}
+    <div ref={frame} className={'world-frame mode-' + mode} onPointerDown={down} onPointerMove={move} onPointerUp={up}
       onWheel={event => { const box = frame.current!.getBoundingClientRect(); zoomAt(event.deltaY < 0 ? 1.15 : 1 / 1.15, event.clientX - box.left, event.clientY - box.top) }}>
       {map.image ? <div className="world-layer" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`, width: size?.width, height: size?.height }}>
         <img src={worldImageUrl(room.id, map)} alt={map.name} draggable={false} onLoad={event => fit(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)} />
