@@ -22,8 +22,8 @@ import { hasCondition } from '../../../shared/effects.ts'
 import { isMonsterArt, sceneArtByImage } from '../../../shared/catalogArt.ts'
 import { boardTransform, bounds, pieceAt, piecesIn, rulerFeet } from './geometry.ts'
 import { VisionToolbar } from './VisionToolbar.tsx'
-import { doorAt, knownDoor, lightAt, snapCorner, strokeCells, wallAt } from './visionTools.ts'
-import type { VisionTool } from './visionTools.ts'
+import { doorAt, knownDoor, lightAt, snapCorner, strokeCells, wallAt, wallEdit, wallEndAt, wallsIn } from './visionTools.ts'
+import type { VisionTool, WallGrab } from './visionTools.ts'
 import { playerView } from '../../../shared/vision.ts'
 import type { Wall } from '../../../shared/vision.ts'
 import { Eye as EyeIcon } from 'lucide-react'
@@ -63,10 +63,12 @@ type Props = {
   attackDrop?: (attackerId: string, targetId: string) => void
 }
 const objectColors = { container: '#6e5432', prop: '#4b5e58', structure: '#5c5a66', item: '#6a5470' }
-type Mode = 'pan' | 'measure' | 'select' | 'move' | 'area' | 'object' | 'calibrate' | 'paint'
+type Mode = 'pan' | 'measure' | 'select' | 'move' | 'area' | 'object' | 'calibrate' | 'paint' | 'wall' | 'wallBox'
 type Gesture = {
   from: Point; camera: Point; mode: Mode; tokens: Token[]; delta?: Point
   moved: boolean; token?: Token; object?: SceneObject
+  /** Editing walls (0.14): what was grabbed, and where the pointer went down in cells. */
+  wall?: WallGrab; spot?: Point
 }
 const editableTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && Boolean(target.closest('input,select,textarea,[contenteditable]'))
@@ -107,6 +109,11 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
   const [cursor, setCursor] = useState<Point>()
   const [painting, setPainting] = useState<Set<string>>()
   const [viewAs, setViewAs] = useState('')
+  // Editing walls (0.14): the selected walls, the walls as they would be mid-drag, and a selection box in cells.
+  const [wallSel, setWallSel] = useState<string[]>([])
+  const [wallDraft, setWallDraft] = useState<{ id: string; a: Point; b: Point }[]>()
+  const [wallBox, setWallBox] = useState<{ from: Point; to: Point }>()
+  useEffect(() => { if (visionTool !== 'select') { setWallSel([]); setWallDraft(undefined); setWallBox(undefined) } }, [visionTool])
   useEffect(() => { if (!visionOpen) { setVisionTool(undefined); setViewAs('') } }, [visionOpen])
   useEffect(() => { setDrawing([]); setCursor(undefined) }, [visionTool])
   useEffect(() => { if (placing) setTool('token') }, [placing])
@@ -377,15 +384,18 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       visible: new Set(scene.view!.visible), dimmed: new Set(scene.view!.dimmed), darkvision: new Set(scene.view!.darkvision),
       explored: new Set(scene.view!.explored), opaque: true
     } : watched ? { ...watched, explored: new Set(vision?.explored?.[viewAs] ?? []), opaque: false } : undefined
+    const draftById = new Map((wallDraft ?? []).map(wall => [wall.id, wall]))
+    const shown = (list: Wall[]) => wallDraft ? list.map(wall => draftById.has(wall.id) ? { ...wall, ...draftById.get(wall.id)! } : wall) : list
     pixi.current!.setVision({
-      fog, walls: dm ? vision?.walls ?? [] : [], showWalls: dm,
-      doors: knownDoors,
+      fog, walls: dm ? shown(vision?.walls ?? []) : [], showWalls: dm,
+      doors: dm ? shown(knownDoors) : knownDoors,
+      selectedWalls: dm ? wallSel : undefined, box: dm ? wallBox : undefined,
       lights: dm ? vision?.lights ?? [] : [],
       darkness: dm && visionOpen ? { dark: [...(vision?.darkness ?? []), ...(painting && visionTool === 'dark' ? painting : [])],
         magic: [...(vision?.magicDarkness ?? []), ...(painting && visionTool === 'magic' ? painting : [])] } : undefined,
       drawing, cursor
     })
-  }, [ready, scene.vision, scene.view, scene.tokens, room.actors, viewAs, visionOpen, visionTool, painting, drawing, cursor, detailZoom, gridSpec.cell, gridSpec.originX, gridSpec.originY])
+  }, [ready, scene.vision, scene.view, scene.tokens, room.actors, viewAs, visionOpen, visionTool, painting, drawing, cursor, wallSel, wallDraft, wallBox, detailZoom, gridSpec.cell, gridSpec.originX, gridSpec.originY])
 
   function pointer(event: { clientX: number; clientY: number; currentTarget: Element }) {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -454,6 +464,25 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
     const spot = transformNow.at(point)
     if (dm && visionTool && command && !pan) {
       const walls = scene.vision?.walls ?? []
+      if (visionTool === 'select') {
+        // Grab an end, else a wall's body (Shift adds it to the selection), else start a selection box.
+        const end = wallEndAt(walls, spot, wallSel)
+        const hit = end ? undefined : wallAt(walls, spot)
+        if (end) {
+          if (!wallSel.includes(end.wallId) && !event.shiftKey) setWallSel([end.wallId])
+          gesture.current = { from: point, camera, mode: 'wall', tokens: [], moved: false, wall: end, spot }
+        } else if (hit) {
+          const next = event.shiftKey ? wallSel.includes(hit.id) ? wallSel.filter(id => id !== hit.id) : [...wallSel, hit.id]
+            : wallSel.includes(hit.id) ? wallSel : [hit.id]
+          setWallSel(next)
+          gesture.current = { from: point, camera, mode: 'wall', tokens: [], moved: false, wall: { kind: 'body' }, spot }
+        } else {
+          if (!event.shiftKey) setWallSel([])
+          gesture.current = { from: point, camera, mode: 'wallBox', tokens: [], moved: false, spot }
+          setWallBox({ from: spot, to: spot })
+        }
+        return
+      }
       if (visionTool === 'wall' || visionTool === 'door') {
         const corner = snapCorner(spot, event.shiftKey)
         const last = drawing.at(-1)
@@ -555,6 +584,19 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       action.moved = true
       clearTimeout(longPress.current)
     }
+    if (action.mode === 'wall' && action.wall && action.spot) {
+      const spot = transformNow.at(point)
+      const walls = scene.vision?.walls ?? []
+      // A body drag moves the walls selected when it began (the click may have just selected one).
+      const grabbed = action.wall
+      const selection = grabbed.kind === 'end' ? (wallSel.includes(grabbed.wallId) ? wallSel : [grabbed.wallId])
+        : wallSel.length ? wallSel : (() => { const hit = wallAt(walls, action.spot!); return hit ? [hit.id] : [] })()
+      setWallDraft(action.moved ? wallEdit(walls, selection, grabbed, grabbed.kind === 'end'
+        ? { to: snapCorner(spot, event.shiftKey) }
+        : { delta: { x: Math.round(spot.x - action.spot.x), y: Math.round(spot.y - action.spot.y) } }, event.altKey) : undefined)
+      return
+    }
+    if (action.mode === 'wallBox' && action.spot) { setWallBox({ from: action.spot, to: transformNow.at(point) }); return }
     if (action.mode === 'area' && areaKind) setAreaDraft(sized({ kind: areaKind, from: areaPoint(action.from), to: areaPoint(point) }))
     else if (action.mode === 'measure') setRuler({ from: cell(action.from), to: cell(point) })
     else if (action.mode === 'select') setSelection({ from: action.from, to: point })
@@ -580,7 +622,14 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       return
     }
     const action = gesture.current
-    if (action?.mode === 'paint' && painting && command) {
+    if (action?.mode === 'wall') {
+      if (wallDraft?.length && command) void command({ type: 'walls', move: wallDraft })
+      setWallDraft(undefined)
+    } else if (action?.mode === 'wallBox' && wallBox) {
+      const found = wallsIn(scene.vision?.walls ?? [], wallBox.from, wallBox.to).map(wall => wall.id)
+      setWallSel(current => [...new Set([...current, ...found])])
+      setWallBox(undefined)
+    } else if (action?.mode === 'paint' && painting && command) {
       void command(visionTool === 'terrain' || visionTool === 'terrainClear'
         ? { type: 'terrain', cells: [...painting], mode: visionTool === 'terrain' ? 'difficult' : 'clear' }
         : { type: 'darkness', cells: [...painting], mode: visionTool === 'magic' ? 'magic' : visionTool === 'dark' ? 'dark' : 'clear' })
@@ -689,6 +738,19 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
     }
   }, [])
   useEffect(() => {
+    // Delete / Backspace removes the selected walls (capture phase, so the token shortcuts never see it).
+    if (visionTool !== 'select' || !wallSel.length || !command) return
+    const remove = (event: KeyboardEvent) => {
+      if ((event.key !== 'Delete' && event.key !== 'Backspace') || editableTarget(event.target) || document.querySelector('.scrim')) return
+      event.preventDefault()
+      event.stopPropagation()
+      void command({ type: 'walls', remove: wallSel })
+      setWallSel([])
+    }
+    window.addEventListener('keydown', remove, true)
+    return () => window.removeEventListener('keydown', remove, true)
+  }, [visionTool, wallSel, command])
+  useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || event.isComposing || event.altKey || event.shiftKey ||
         !(event.ctrlKey || event.metaKey) || editableTarget(event.target) || document.querySelector('.scrim') ||
@@ -772,7 +834,7 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         setMenu({ pixel: center, cell: cell(center), token })
       }}><MoreHorizontal size={16} aria-hidden="true" /></button>
     </div>
-    {dm && command && visionOpen && <VisionToolbar scene={scene} members={room.members} tool={visionTool} setTool={setVisionTool}
+    {dm && command && visionOpen && <VisionToolbar scene={scene} members={room.members} tool={visionTool} setTool={setVisionTool} selectedWalls={wallSel.length}
       viewAs={viewAs} setViewAs={setViewAs} command={command} />}
     {menu && <div className="context-popover" ref={menuRef} aria-label="คำสั่งตามตำแหน่ง" role="group"
       onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); closeMenu() } }}>

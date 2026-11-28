@@ -1202,6 +1202,18 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       const walls = vision.walls ??= []
       const remove = new Set(Array.isArray(command.remove) ? command.remove.map(String) : [])
       vision.walls = walls.filter(wall => !remove.has(wall.id))
+      // 0.14: move wall ends (an edit sends every wall it changes, so joined walls move in one step).
+      const move = Array.isArray(command.move) ? command.move : []
+      if (move.length > 2000) throw new Invalid('ย้ายผนังได้ครั้งละไม่เกิน 2000 เส้น')
+      for (const value of move) {
+        const input = record(value)
+        const wall = get(vision.walls, input.id)
+        const a = cellPoint(input.a)
+        const b = cellPoint(input.b)
+        if (a.x === b.x && a.y === b.y) throw new Invalid('ปลายผนังทั้งสองข้างอยู่จุดเดียวกัน')
+        wall.a = a
+        wall.b = b
+      }
       const add = Array.isArray(command.add) ? command.add : []
       if (vision.walls.length + add.length > 2000) throw new Invalid('ผนังในฉากได้สูงสุด 2000 เส้น')
       for (const value of add) {

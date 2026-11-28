@@ -78,3 +78,15 @@ test('night: lights, darkness painting, actor vision and masked names', () => {
   assert.match(snapshot(room, mira).rolls.at(-1)!.label, /บางสิ่ง/)
   assert.match(snapshot(room, dm).rolls.at(-1)!.label, /Goblin/)
 })
+
+test('0.14: the DM moves wall ends; a player cannot, and a moved wall opens the view', () => {
+  const { dm, mira, room, run } = table()
+  const walls = () => room.scenes[0].vision!.walls!
+  const top = walls().find(wall => wall.a.y === 0)!
+  assert.throws(() => run(mira, { type: 'walls', move: [{ id: top.id, a: { x: 5, y: 0 }, b: { x: 5, y: 1 } }] }))
+  assert.throws(() => run(dm, { type: 'walls', move: [{ id: top.id, a: { x: 5, y: 0 }, b: { x: 5, y: 0 } }] }), /จุดเดียวกัน/)
+  // Slide the whole dividing line off the map: the goblin comes into view.
+  run(dm, { type: 'walls', move: walls().map(wall => ({ id: wall.id, a: { x: 20, y: wall.a.y }, b: { x: 20, y: wall.b.y } })) })
+  assert.ok(walls().every(wall => wall.a.x === 20 && wall.b.x === 20))
+  assert.deepEqual(snapshot(room, mira).scenes[0].tokens.map(token => token.actorId), ['hero', 'gob'])
+})

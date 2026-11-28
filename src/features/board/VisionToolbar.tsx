@@ -1,4 +1,4 @@
-import { BrickWall, DoorOpen, Eraser, Eye, Flame, Footprints, Moon, Sparkles, SunDim, Trash2 } from 'lucide-react'
+import { BrickWall, MousePointer2, DoorOpen, Eraser, Eye, Flame, Footprints, Moon, Sparkles, SunDim, Trash2 } from 'lucide-react'
 import type { Member, Scene } from '../../../shared/model.ts'
 import { ambientLabels } from '../../../shared/vision.ts'
 import type { Ambient } from '../../../shared/vision.ts'
@@ -7,6 +7,7 @@ import type { VisionTool } from './visionTools.ts'
 type Command = (command: Record<string, unknown>) => Promise<boolean>
 
 const tools: { id: VisionTool; label: string; hint: string; icon: typeof BrickWall }[] = [
+  { id: 'select', label: 'เลือกผนัง', hint: 'คลิกหรือลากกรอบเพื่อเลือก (Shift เลือกเพิ่ม) · ลากปลายหรือลากเส้นเพื่อย้าย ผนังที่ต่อกันย้ายตาม (กด Alt เพื่อแยก) · Delete ลบ · Ctrl+Z ย้อน', icon: MousePointer2 },
   { id: 'wall', label: 'ผนัง', hint: 'คลิกทีละมุมเพื่อลากผนังต่อกัน · Esc หรือคลิกขวาเพื่อจบเส้น', icon: BrickWall },
   { id: 'door', label: 'ประตู', hint: 'คลิกสองจุดเป็นบานประตู · คลิกขวาที่ประตูเพื่อล็อก ตั้ง DC หรือทำเป็นประตูลับ', icon: DoorOpen },
   { id: 'light', label: 'แหล่งแสง', hint: 'คลิกช่องเพื่อวางคบไฟ (สว่าง 20 ฟุต สลัวอีก 20 ฟุต) · คลิกที่แสงเดิมเพื่อเปิดหรือปิด', icon: Flame },
@@ -19,8 +20,8 @@ const tools: { id: VisionTool; label: string; hint: string; icon: typeof BrickWa
 ]
 
 /** The DM's vision controls: switch, scene light, drawing tools and "see as" a player. */
-export function VisionToolbar({ scene, members, tool, setTool, viewAs, setViewAs, command }: {
-  scene: Scene; members: Member[]; tool?: VisionTool; setTool: (tool?: VisionTool) => void
+export function VisionToolbar({ scene, members, tool, setTool, selectedWalls, viewAs, setViewAs, command }: {
+  scene: Scene; members: Member[]; tool?: VisionTool; setTool: (tool?: VisionTool) => void; selectedWalls?: number
   viewAs: string; setViewAs: (memberId: string) => void; command: Command
 }) {
   const vision = scene.vision
@@ -44,6 +45,7 @@ export function VisionToolbar({ scene, members, tool, setTool, viewAs, setViewAs
     </select></label>
     <button type="button" onClick={() => void command({ type: 'visionSettings', clearExplored: true })} disabled={!vision?.explored}>ล้างพื้นที่สำรวจ</button>
     {current && <small className="vision-hint">{current.hint}</small>}
+    {tool === 'select' && selectedWalls ? <small className="vision-hint" role="status">เลือกผนังแล้ว {selectedWalls} เส้น</small> : null}
     {enabled && !vision?.walls?.length && <small className="vision-hint vision-warn" role="note">ยังไม่มีผนังในฉาก ผู้เล่นจะเห็นทุกอย่างในระยะสายตาและแสง</small>}
   </div>
 }
