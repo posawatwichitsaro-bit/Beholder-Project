@@ -24,6 +24,7 @@ import type { TurnUse } from '../shared/economy.ts'
 import { itemLights } from '../shared/vision.ts'
 import { serverSpell } from './spellCatalog.ts'
 import { scaledDice } from '../shared/spells.ts'
+import { bardicDie, featureResource, inspirationDie, isRaging, levelIn, plusModifier, rageDamage, resists } from '../shared/classFeatures.ts'
 import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
 export class Forbidden extends Error {}
@@ -283,7 +284,8 @@ function damageKind(value: unknown): DamageKind {
 }
 function applyDamage(scene: Scene, actor: Actor, amount: number, kind: DamageKind, critical = false, room?: Room) {
   const before = actor.hp + actor.tempHp
-  harm(actor, amount, critical)
+  // Resistance (Rage: Bludgeoning, Piercing, Slashing) halves the damage, rounded down.
+  harm(actor, resists(actor, kind) ? Math.floor(amount / 2) : amount, critical)
   const lost = before - actor.hp - actor.tempHp
   if (lost > 0 && room) {
     // Concentration: a CON save after taking damage, or lost outright at 0 HP.
@@ -689,6 +691,19 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
     return { advantage: mode === 'advantage', disadvantage: mode === 'disadvantage', note: note ? ' · ' + note : '' }
   }
   /**
+   * "เพิ่ม Inspiration" from the roll menu: roll the Bardic Inspiration die the creature holds,
+   * add it to this d20 roll, and the die is spent.
+   */
+  function inspired<T extends { total: number; modifier: number; formula: string }>(creature: Actor, result: T): T {
+    if (command.inspiration !== true) return result
+    const sides = inspirationDie(creature)
+    if (!sides) throw new Invalid(creature.name + ' ไม่มี Bardic Inspiration')
+    const face = die(sides)
+    creature.effects = (creature.effects ?? []).filter(effect => effect.condition !== 'Inspired')
+    addLog(room, { kind: 'combat', sceneId: sceneOf(room, creature.id), text: creature.name + ' ใช้ Bardic Inspiration d' + sides + ' ได้ +' + face })
+    return { ...result, total: result.total + face, modifier: result.modifier + face, formula: result.formula + '+1d' + sides + '(' + face + ')' }
+  }
+  /**
    * One attack roll from `creature` at `victim` in `target`, with cover worked out, then the damage
    * (applied at once when the table's autoDamage rule is on). `before` runs once the attack is valid.
    */
@@ -708,13 +723,15 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
     const odds = decide(attackOdds(creature, victim, adjacent))
     // Archery: +2 with weapons that fire ammunition.
     const archery = !how.spell && creature.feats?.includes('Archery') && /Ammunition/.test(how.weapon?.notes ?? '') ? 2 : 0
-    const hitRoll = d20((how.spell ? creature.spellAttack : how.weapon?.bonus ?? creature.attack) + archery + d20Penalty(creature), odds.advantage, odds.disadvantage)
+    const hitRoll = inspired(creature, d20((how.spell ? creature.spellAttack : how.weapon?.bonus ?? creature.attack) + archery + d20Penalty(creature), odds.advantage, odds.disadvantage))
     const critical = hitRoll.natural >= (how.spell ? 20 : criticalFrom(creature))
     const hit = critical || (hitRoll.natural !== 1 && hitRoll.total >= victim.ac + cover)
     const context = { sceneId: target.id, sourceId: creature.id, targetId: victim.id }
     saveRoll(how.label + ' · ' + creature.name + odds.note, hitRoll, { ...context, outcome: critical ? 'คริติคัล' : hit ? 'โดน' : 'พลาด' })
     if (!hit) return {}
-    const receipt = saveRoll('Damage · ' + victim.name, rollDice(how.formula, die, critical), { ...context, applied: false, critical, damageKind: how.damageKind })
+    // Rage Damage on a Barbarian's weapon hits while Raging.
+    const rage = !how.spell && isRaging(creature) && levelIn(creature, 'Barbarian') ? rageDamage(levelIn(creature, 'Barbarian')) : 0
+    const receipt = saveRoll('Damage · ' + victim.name + (rage ? ' · Rage +' + rage : ''), rollDice(rage ? plusModifier(how.formula, rage) : how.formula, die, critical), { ...context, applied: false, critical, damageKind: how.damageKind })
     if (room.settings?.autoDamage) {
       // Table rule: hits apply at once; the DM can still adjust HP afterwards.
       const damageRoll = room.rolls[room.rolls.length - 1]
@@ -1476,7 +1493,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       }
       if (rollType === 'initiative') {
         const odds = decide(rollOdds(creature, 'initiative'))
-        return saveRoll('Initiative · ' + creature.name + odds.note, d20(creature.initiative + d20Penalty(creature), odds.advantage, odds.disadvantage))
+        return saveRoll('Initiative · ' + creature.name + odds.note, inspired(creature, d20(creature.initiative + d20Penalty(creature), odds.advantage, odds.disadvantage)))
       }
       if (rollType !== 'check' && rollType !== 'save') throw new Invalid('ประเภทการทอยไม่ถูกต้อง')
       if (!abilities.includes(command.ability as typeof abilities[number])) throw new Invalid('เลือกค่าความสามารถ')
@@ -1488,7 +1505,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       const checkOdds = rollOdds(creature, rollType, ability)
       const odds = decide(checkOdds)
       return saveRoll((rollType === 'check' && skill ? skill : ability) + ' ' + rollType + ' · ' + creature.name + odds.note,
-        d20(bonus + d20Penalty(creature), odds.advantage, odds.disadvantage), checkOdds.autoFail ? { outcome: 'ล้มเหลวอัตโนมัติ (' + checkOdds.autoFail + ')' } : {})
+        inspired(creature, d20(bonus + d20Penalty(creature), odds.advantage, odds.disadvantage)), checkOdds.autoFail ? { outcome: 'ล้มเหลวอัตโนมัติ (' + checkOdds.autoFail + ')' } : {})
     }
     case 'castSave': {
       const target = active()
@@ -1627,7 +1644,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       const bonus = saved ? bonusForCheck(victim, saved) : modifier(victim.abilities[roll.cast.ability]) + proficient
       const saveOdds = rollOdds(victim, 'save', roll.cast.ability)
       const decided = chooseMode(saveOdds, chosenMode(command))
-      const result = d20(bonus + d20Penalty(victim), decided.mode === 'advantage', decided.mode === 'disadvantage')
+      const result = inspired(victim, d20(bonus + d20Penalty(victim), decided.mode === 'advantage', decided.mode === 'disadvantage'))
       const passed = !saveOdds.autoFail && result.total >= roll.cast.dc
       roll.cast.resolved = true
       const context = { sceneId: target.id, sourceId: roll.sourceId, targetId: victim.id }
@@ -1802,7 +1819,52 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       owns(member, creature)
       const resource = creature.resources?.[number(command.index, 0, 11)]
       if (!resource) throw new Invalid('ทรัพยากรนี้เปลี่ยนแล้ว')
-      resource.used = number(command.used, 0, resource.max)
+      const used = number(command.used, 0, resource.max)
+      if (command.log === true && used > resource.used) {
+        addLog(room, { kind: 'combat', sceneId: sceneOf(room, creature.id), text: creature.name + ' ใช้ ' + resource.name + (used - resource.used > 1 ? ' ' + (used - resource.used) : '') + ' · เหลือ ' + (resource.max - used) + '/' + resource.max })
+      }
+      resource.used = used
+      return {}
+    }
+    case 'classFeature': {
+      // Rage, Second Wind and Bardic Inspiration (0.13): spend the use and the Bonus Action, then do what the class table says.
+      const creature = actor()
+      owns(member, creature)
+      const feature = command.feature as keyof typeof featureResource
+      if (!Object.hasOwn(featureResource, feature)) throw new Invalid('เลือกความสามารถของคลาส')
+      const resource = creature.resources?.find(entry => entry.name === featureResource[feature])
+      if (!resource || resource.used >= resource.max) throw new Invalid('ไม่มี ' + featureResource[feature] + ' เหลือ')
+      const friend = feature === 'bardicInspiration' ? get(room.actors, command.targetId) : undefined
+      if (friend && friend.id === creature.id) throw new Invalid('Bardic Inspiration ให้คนอื่นเท่านั้น')
+      resource.used++
+      const fight = room.scenes.find(item => item.combat?.order.some(entry => entry.actorId === creature.id))
+      if (fight?.combat) {
+        const use: TurnUse = { ...freshUse(), ...fight.combat.uses?.[creature.id] }
+        use.bonus++
+        fight.combat.uses = { ...fight.combat.uses, [creature.id]: use }
+      }
+      const sceneId = sceneOf(room, creature.id)
+      if (feature === 'rage') {
+        // Raging can't keep Concentration; it lasts 10 rounds here (the DM ends it early if the rage stops).
+        if (creature.effects?.some(effect => effect.condition === 'Concentration')) breakConcentration(room, creature, 'เข้าสู่ Rage')
+        creature.effects = [...(creature.effects ?? []).filter(effect => effect.condition !== 'Raging'),
+          { id: id(), condition: 'Raging', sourceId: creature.id, sourceLabel: 'Rage +' + rageDamage(levelIn(creature, 'Barbarian')), ends: { at: 'end', actorId: creature.id, turns: 10 } }]
+        addLog(room, { kind: 'combat', sceneId, text: creature.name + ' เข้าสู่ Rage · ต้านทาน Bludgeoning, Piercing, Slashing · ความเสียหาย +' + rageDamage(levelIn(creature, 'Barbarian')) })
+        return {}
+      }
+      if (feature === 'secondWind') {
+        const level = levelIn(creature, 'Fighter')
+        const face = die(10)
+        const before = creature.hp
+        heal(creature, face + level)
+        addLog(room, { kind: 'hp', sceneId, text: creature.name + ' ใช้ Second Wind ฟื้น ' + (creature.hp - before) + ' HP' })
+        return saveRoll('Second Wind · ' + creature.name, { formula: '1d10+' + level, faces: [face], modifier: level, total: face + level })
+      }
+      const sides = bardicDie(levelIn(creature, 'Bard'))
+      const target = friend as Actor
+      target.effects = [...(target.effects ?? []).filter(effect => effect.condition !== 'Inspired'),
+        { id: id(), condition: 'Inspired', sourceId: creature.id, sourceLabel: 'Bardic Inspiration d' + sides }]
+      addLog(room, { kind: 'combat', sceneId, text: creature.name + ' ให้ Bardic Inspiration d' + sides + ' แก่ ' + target.name })
       return {}
     }
     case 'conditions': {
@@ -1884,7 +1946,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       const bonus = (trained ? bonusForCheck(creature, trained) : modifier(creature.abilities[ability])) + d20Penalty(creature)
       const saveOdds = rollOdds(creature, 'save', ability)
       const decided = chooseMode(saveOdds, chosenMode(command))
-      const result = d20(bonus, decided.mode === 'advantage', decided.mode === 'disadvantage')
+      const result = inspired(creature, d20(bonus, decided.mode === 'advantage', decided.mode === 'disadvantage'))
       const passed = !saveOdds.autoFail && result.total >= dc
       effect.pending = undefined
       const label = reason === 'concentration' ? 'Concentration' : effectName(effect)

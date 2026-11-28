@@ -90,7 +90,8 @@ test('Cure Wounds heals a friend at once, scaled by the slot; the caster may und
 
 test('Fire Bolt grows with the character level; Detect Magic as a Ritual spends no slot and not in a fight', () => {
   const { room, wizard, run } = table()
-  run(mira, { type: 'cast', actorId: 'wiz', spellId: spell('fire-bolt'), targetIds: ['g1'] })
+  // A natural 1 misses even at +99: cast until it hits.
+  for (let tries = 0; tries < 20 && !/Damage/.test(room.rolls.at(-1)?.label ?? ''); tries++) run(mira, { type: 'cast', actorId: 'wiz', spellId: spell('fire-bolt'), targetIds: ['g1'] })
   const damage = room.rolls[room.rolls.length - 1]
   assert.match(damage.label, /Damage/)
   assert.match(damage.formula, /^3d10/)
@@ -102,4 +103,39 @@ test('Fire Bolt grows with the character level; Detect Magic as a Ritual spends 
   assert.throws(() => run(mira, { type: 'cast', actorId: 'wiz', spellId: spell('fireball'), ritual: true }), /Ritual/)
   const fight = table(true)
   assert.throws(() => fight.run(mira, { type: 'cast', actorId: 'wiz', spellId: spell('detect-magic'), ritual: true }), /ระหว่างต่อสู้/)
+})
+
+test('Rage, Second Wind and Bardic Inspiration spend a use and the Bonus Action and do what the class table says', () => {
+  const barb: Actor = { ...blankSheet(), id: 'barb', ownerId: 'm', name: 'Barb', classLevel: 'Barbarian 9', hp: 40, maxHp: 60, attack: 99, damage: '1d8+3',
+    resources: [{ name: 'Rage', max: 3, used: 0, short: 'one' }], effects: [{ id: 'c', condition: 'Concentration', sourceId: 'barb', sourceLabel: 'Bless' }] }
+  const fighter: Actor = { ...blankSheet(), id: 'fig', ownerId: 'm', name: 'Fig', classLevel: 'Fighter 4', hp: 10, maxHp: 40, resources: [{ name: 'Second Wind', max: 3, used: 0, short: 'one' }] }
+  const bard: Actor = { ...blankSheet(), id: 'bard', ownerId: 'm', name: 'Bard', classLevel: 'Bard 5', resources: [{ name: 'Bardic Inspiration', max: 3, used: 0, short: 'all' }] }
+  const ogre: Actor = { ...blankSheet('monster'), id: 'ogre', ownerId: 'dm', name: 'Ogre', hp: 200, maxHp: 200, ac: 1 }
+  const room: Room = { id: 'r', name: 'R', invite: 'i', revision: 0, activeSceneId: 's', members: [dm, mira], templates: [], rolls: [], actors: [barb, fighter, bard, ogre],
+    scenes: [{ id: 's', name: 'S', cell: 48, originX: 0, originY: 0, tokens: [{ id: 't1', actorId: 'barb', x: 0, y: 0 }, { id: 't2', actorId: 'ogre', x: 1, y: 0 }, { id: 't3', actorId: 'fig', x: 3, y: 3 }, { id: 't4', actorId: 'bard', x: 4, y: 4 }],
+      combat: { round: 1, turn: 0, order: [{ actorId: 'barb', initiative: 20 }, { actorId: 'ogre', initiative: 5 }] } }] }
+  const run = (who: Member, body: Record<string, unknown>) => applyCommand(room, who, { sceneId: 's', ...body })
+  run(mira, { type: 'classFeature', actorId: 'barb', feature: 'rage' })
+  assert.equal(barb.resources![0].used, 1)
+  assert.equal(room.scenes[0].combat!.uses!.barb.bonus, 1)
+  assert.deepEqual(barb.effects!.map(effect => effect.condition), ['Raging'], 'Rage ends Concentration')
+  // Rage Damage +3 at Barbarian 9 on weapon hits; B/P/S damage taken is halved.
+  for (let tries = 0; tries < 20 && !/Damage/.test(room.rolls.at(-1)?.label ?? ''); tries++) run(mira, { type: 'sheetRoll', rollType: 'attack', actorId: 'barb', targetId: 'ogre' })
+  assert.match(room.rolls.at(-1)!.formula, /^1d8\+6$/)
+  run(dm, { type: 'adjustHp', actorId: 'barb', mode: 'damage', amount: 11, damageKind: 'slashing' })
+  assert.equal(barb.hp, 35)
+  run(dm, { type: 'adjustHp', actorId: 'barb', mode: 'damage', amount: 10, damageKind: 'fire' })
+  assert.equal(barb.hp, 25)
+  run(mira, { type: 'classFeature', actorId: 'fig', feature: 'secondWind' })
+  assert.ok(fighter.hp >= 15 && fighter.hp <= 24, 'Second Wind heals 1d10 + 4: ' + fighter.hp)
+  run(mira, { type: 'classFeature', actorId: 'bard', feature: 'bardicInspiration', targetId: 'barb' })
+  assert.equal(barb.effects!.find(effect => effect.condition === 'Inspired')?.sourceLabel, 'Bardic Inspiration d8')
+  assert.throws(() => run(mira, { type: 'classFeature', actorId: 'bard', feature: 'bardicInspiration', targetId: 'bard' }), /คนอื่น/)
+  // Spending it on a check adds the d8 once.
+  run(mira, { type: 'sheetRoll', rollType: 'check', actorId: 'barb', ability: 'STR', inspiration: true })
+  assert.match(room.rolls.at(-1)!.formula, /\+1d8\(\d\)$/)
+  assert.ok(!barb.effects!.some(effect => effect.condition === 'Inspired'))
+  assert.throws(() => run(mira, { type: 'sheetRoll', rollType: 'check', actorId: 'barb', ability: 'STR', inspiration: true }), /ไม่มี Bardic Inspiration/)
+  bard.resources![0].used = 3
+  assert.throws(() => run(mira, { type: 'classFeature', actorId: 'bard', feature: 'bardicInspiration', targetId: 'fig' }), /ไม่มี Bardic Inspiration เหลือ/)
 })

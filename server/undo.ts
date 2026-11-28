@@ -25,7 +25,7 @@ const skip = new Set(['undo', 'chat'])
 export const undoLabels: Record<string, string> = {
   move: 'การเดิน', moveTokens: 'การเดิน', stepCharacter: 'การเดิน', standUp: 'การลุกขึ้น',
   damage: 'การหัก HP', areaDamage: 'ความเสียหายแบบพื้นที่', heal: 'การรักษา', adjustHp: 'การปรับ HP',
-  sheetRoll: 'การทอยจากชีต', roll: 'การทอย', castSave: 'การร่ายเวท', cast: 'การร่ายเวท', spellbook: 'การแก้รายการเวท', spellSave: 'การทอยเซฟ', effectSave: 'การทอยเซฟ',
+  sheetRoll: 'การทอยจากชีต', roll: 'การทอย', castSave: 'การร่ายเวท', cast: 'การร่ายเวท', classFeature: 'การใช้ความสามารถของคลาส', spellbook: 'การแก้รายการเวท', spellSave: 'การทอยเซฟ', effectSave: 'การทอยเซฟ',
   conditions: 'การเปลี่ยน Condition', addEffect: 'การเพิ่ม effect', removeEffect: 'การลบ effect',
   slots: 'การใช้ช่องเวท', useResource: 'การใช้ทรัพยากร', spendHitDie: 'การใช้ Hit Die', rest: 'การพัก', magicalCunning: 'Magical Cunning',
   turnAction: 'การใช้ Action', sheet: 'การแก้ชีต', inventoryAdd: 'การเพิ่มไอเทม', inventoryRemove: 'การนำไอเทมออก', inventoryBonus: 'การตั้งโบนัสเวท',

@@ -8,20 +8,21 @@ import type { Odds, RollMode } from '../../shared/advantage.ts'
  * pick Normal, Advantage or Disadvantage. A plain click still rolls the way
  * the conditions say. The suggestion from the conditions is marked with why.
  */
-type Open = { x: number; y: number; run: (mode: RollMode) => void; odds?: Odds; title?: string }
+type Open = { x: number; y: number; run: (mode: RollMode, inspired?: boolean) => void; odds?: Odds; title?: string; inspiration?: number }
 
 let show: ((state: Open | undefined) => void) | undefined
 /** Long-press opened the menu: the click that follows the finger lifting must not also roll. */
 let swallowClick = false
 const holdMs = 500
 
-export type RollMenuOptions = { odds?: () => Odds | undefined; title?: string }
+/** `inspiration`: the Bardic Inspiration die the roller holds; the menu then offers to add it. */
+export type RollMenuOptions = { odds?: () => Odds | undefined; title?: string; inspiration?: () => number | undefined }
 
 /** Props to spread on a roll button: `run(mode)` rolls with that mode chosen by the player. */
-export function rollMenuProps(run: (mode: RollMode) => void, options: RollMenuOptions = {}) {
+export function rollMenuProps(run: (mode: RollMode, inspired?: boolean) => void, options: RollMenuOptions = {}) {
   let timer: ReturnType<typeof setTimeout> | undefined
   let start: { x: number; y: number } | undefined
-  const open = (x: number, y: number) => show?.({ x, y, run, odds: options.odds?.(), title: options.title })
+  const open = (x: number, y: number) => show?.({ x, y, run, odds: options.odds?.(), title: options.title, inspiration: options.inspiration?.() })
   const cancel = () => { if (timer) clearTimeout(timer); timer = undefined }
   return {
     onContextMenu: (event: ReactMouseEvent) => {
@@ -81,5 +82,8 @@ export function RollMenuHost() {
         <b>{modeLabels[mode]}</b>{suggested && <small>แนะนำ · {reason}</small>}
       </button>
     })}
+    {state.inspiration && <button type="button" role="menuitem" data-mode="inspiration"
+      onClick={() => { setState(undefined); state.run(suggestion?.mode ?? 'normal', true) }}>
+      <b>เพิ่ม Inspiration</b><small>ทอยตามเงื่อนไข + d{state.inspiration} แล้วใช้หมด</small></button>}
   </div>
 }

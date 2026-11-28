@@ -31,12 +31,18 @@ export function catalogSpells(data: unknown): Spell[] {
   return spells
 }
 
-/** Add `extra` dice of the same size to a formula's first dice group: "8d6" + "2d6" = "10d6"; different sizes are appended. */
+/** Add `extra` dice of the same size to a formula's dice: "8d6" + "2d6" = "10d6". Other sizes are left for people to add (see `scalesCleanly`). */
 export function addDice(formula: string, extra: string) {
   const [count, sides] = extra.split('d').map(Number)
   const match = /^(\d+)d(\d+)/.exec(formula)
   if (match && Number(match[2]) === sides) return Number(match[1]) + count + 'd' + sides + formula.slice(match[0].length)
-  return formula + '+' + extra
+  return formula
+}
+/** True when the slot or cantrip step is read and adds dice of the same size (Ice Knife's explosion does not). */
+export function scalesCleanly(spell: Spell) {
+  const step = spell.level === 0 ? spell.cantripScaling : spell.perSlot
+  const base = spell.damage ?? spell.healing
+  return Boolean(step && base && /^\d+d(\d+)/.exec(base)?.[1] === step.split('d')[1])
 }
 
 /** How many times an amount is added: slot levels above the spell's own, or cantrip tiers reached (5, 11, 17). */

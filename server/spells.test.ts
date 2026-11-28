@@ -63,7 +63,7 @@ test('damage and healing scale with the slot, cantrips with the character level'
   assert.equal(scaledDice(bolt, bolt.damage, 0, 4), '1d10')
   assert.equal(scaledDice(bolt, bolt.damage, 0, 11), '3d10')
   assert.equal(scaledDice(bolt, bolt.damage, 0, 17), '4d10')
-  assert.equal(addDice('1d4+1', '1d6'), '1d4+1+1d6')
+  assert.equal(addDice('1d4+1', '1d6'), '1d4+1', 'a different die size is left to the table')
 })
 
 test('limits from the class tables, and old spell notes turned into catalog spells', async () => {

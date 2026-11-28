@@ -3,7 +3,7 @@ import { Sparkles, Trash2 } from 'lucide-react'
 import type { Actor, KnownSpell, Scene, Snapshot } from '../../../shared/model.ts'
 import { parseSlots } from '../../../shared/conditions.ts'
 import { characterLevel } from '../../../shared/progression.ts'
-import { areaFor, scaledDice, spellLimits, spellsInText } from '../../../shared/spells.ts'
+import { areaFor, scaledDice, scalesCleanly, spellLimits, spellsInText } from '../../../shared/spells.ts'
 import type { Spell } from '../../../shared/spells.ts'
 import type { Area } from '../../../shared/area.ts'
 import type { Send } from '../../state/useCommand.ts'
@@ -108,7 +108,7 @@ function CastPanel({ actor, spell, scene, send, targets, targetId, fighting, dra
   const healing = scaledDice(spell, spell.healing, slotLevel, level)
   const bonus = spell.healingAddsModifier ? Math.max(0, actor.spellAttack - actor.proficiency) : 0
   const area = areaFor(spell)
-  const upcastUnread = spell.level > 0 && slotLevel > spell.level && !spell.perSlot && spell.higherLevels
+  const upcastUnread = spell.level > 0 && slotLevel > spell.level && !scalesCleanly(spell) && spell.higherLevels
   const needsSlot = spell.level > 0
   const automated = Boolean(spell.attack || spell.save || spell.healing || spell.damage)
   const preview = [

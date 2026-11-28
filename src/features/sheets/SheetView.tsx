@@ -20,6 +20,8 @@ import { GiveXp } from '../combat/XpAward.tsx'
 import { VisionFields } from './VisionFields.tsx'
 import { RestPanel } from './RestPanel.tsx'
 import { Spellbook } from '../spells/Spellbook.tsx'
+import { inspirationDie } from '../../../shared/classFeatures.ts'
+import { ClassFeatures } from './ClassFeatures.tsx'
 import type { DrawArea } from '../spells/Spellbook.tsx'
 
 type Tab = 'overview' | 'actions' | 'spells' | 'rest' | 'inventory' | 'notes'
@@ -70,8 +72,9 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
   const castLevel = slotLevel !== undefined && (slotLevel === 0 || (usePact ? pactLevels : slotLevels).some(slot => slot.level === slotLevel && slot.left > 0)) ? slotLevel : lowest
   type RollExtra = { ability?: Ability; skill?: Skill; weaponIndex?: number; slotLevel?: number }
   /** A sheet roll. `chosen` comes from the right-click menu; otherwise the Mode toggle, else the conditions decide. */
-  function roll(rollType: string, extra: RollExtra = {}, chosen?: RollMode) {
+  function roll(rollType: string, extra: RollExtra = {}, chosen?: RollMode, inspiration = false) {
     void send({
+      ...(inspiration ? { inspiration: true } : {}),
       type: 'sheetRoll', rollType, actorId: actor.id, sceneId: scene?.id, targetId,
       ability: extra.ability ?? 'STR', skill: extra.skill, weaponIndex: extra.weaponIndex, slotLevel: extra.slotLevel || undefined,
       ...(chosen ? { rollMode: chosen } : { advantage: mode === 'advantage', disadvantage: mode === 'disadvantage' }),
@@ -91,7 +94,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
     return rollOdds(actor, rollType === 'initiative' ? 'initiative' : rollType === 'save' ? 'save' : 'check', ability)
   }
   const menu = (rollType: string, extra: RollExtra = {}) =>
-    rollMenuProps(chosen => roll(rollType, extra, chosen), { odds: () => oddsFor(rollType, extra.ability), title: actor.name })
+    rollMenuProps((chosen, inspiration) => roll(rollType, extra, chosen, inspiration), { odds: () => oddsFor(rollType, extra.ability), title: actor.name, inspiration: () => inspirationDie(actor) })
   const saveBonus = (key: Ability) => {
     const saved = actor.savingThrows?.[key]
     return saved ? bonusForCheck(actor, saved) : abilityModifier(actor.abilities[key])
@@ -222,6 +225,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
           </div>)}
         </div>
         {!onBoard && <p className="sheet-note">วาง Token ของตัวละครนี้ในฉากก่อนจึงจะโจมตีได้</p>}
+        <ClassFeatures actor={actor} send={send} friends={targets.filter(item => !item.foe)} />
         <button type="button" className="sheet-wide" {...menu('initiative')} onClick={() => roll('initiative')}>ทอย Initiative {signed(actor.initiative)}</button>
       </>}
 
