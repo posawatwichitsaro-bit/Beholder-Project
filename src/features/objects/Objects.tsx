@@ -6,6 +6,9 @@ import { ItemName } from './Inventory.tsx'
 import { ItemCatalogPicker } from '../items/ItemCatalogPicker.tsx'
 import type { InventoryItem } from '../../../shared/model.ts'
 import { sceneArt, sceneArtByImage } from '../../../shared/catalogArt.ts'
+import { formatCopper } from '../../../shared/shop.ts'
+import type { ShopItem } from '../../../shared/shop.ts'
+import { PurseEditor, ShopCounter, pricedFromCatalog } from './Shop.tsx'
 
 type Point = { x: number; y: number }
 type Send = (command: Record<string, unknown>) => Promise<boolean>
@@ -20,6 +23,9 @@ export function ObjectEditor({ initial, point, save, close, error }: {
   const [saving, setSaving] = useState(false)
   const container = initial?.kind === 'container' ? initial : undefined
   const structure = initial?.kind === 'structure' ? initial : undefined
+  const shop = initial?.kind === 'shop' ? initial : undefined
+  /** Shop wares (0.15): catalog items keep their SRD price. */
+  const [wares, setWares] = useState<Omit<ShopItem, 'id'>[]>(() => shop?.items ?? [])
   const [locked, setLocked] = useState(container?.lockDc !== undefined)
   // Catalog items keep their facts (weight, rarity…); typed lines stay plain names.
   const [catalogItems, setCatalogItems] = useState<Omit<InventoryItem, 'id'>[]>(() => container?.items.filter(item => item.ref) ?? [])
@@ -43,7 +49,10 @@ export function ObjectEditor({ initial, point, save, close, error }: {
       definition = { ...fields, kind, items: [...items, ...catalogItems].slice(0, 50), lockDc: locked ? value('lockDc') : undefined }
     } else if (kind === 'structure') {
       definition = { ...fields, kind, hp: value('hp'), ac: value('ac'), cover: value('cover') as 0 | 2 | 5 | 99 }
-    } else definition = { ...fields, kind }
+    } else if (kind === 'shop') {
+      const typed = String(form.get('wares') ?? '').split('\n').map(line => line.trim()).filter(Boolean).map(name => ({ name, description: '' }))
+      definition = { ...fields, kind, markup: value('markup'), items: [...wares, ...typed].slice(0, 100) }
+    } else definition = { ...fields, kind: kind as 'prop' | 'item' }
     setSaving(true)
     try {
       if (await save(definition, point && { x: value('x'), y: value('y') })) close()
@@ -85,6 +94,19 @@ export function ObjectEditor({ initial, point, save, close, error }: {
       <label className="inline"><input type="checkbox" checked={locked} onChange={event => setLocked(event.target.checked)} />ล็อกกล่อง</label>
       {locked && <label>DC สะเดาะล็อก<input type="number" name="lockDc" min={1} max={30} defaultValue={container?.lockDc ?? 15} required /></label>}
     </>}
+    {kind === 'shop' && <>
+      <label>ราคาทั้งร้าน (%)<input name="markup" type="number" min={10} max={1000} defaultValue={shop?.markup ?? 100} required /></label>
+      {wares.length > 0 && <ul className="catalog-chosen" aria-label="สินค้าในร้าน">{wares.map((entry, index) => <li key={index}>
+        <ItemName item={{ ...entry, id: String(index) }} /><small>{entry.price === undefined ? 'ราคาตามตกลง' : formatCopper(entry.price)}</small>
+        <button type="button" aria-label={'เอา ' + entry.name + ' ออกจากร้าน'} onClick={() => setWares(list => list.filter((_, at) => at !== index))}>×</button>
+      </li>)}</ul>}
+      {browsing ? <ItemCatalogPicker actionLabel="วางขายในร้าน" close={() => setBrowsing(false)} choose={async entry => {
+        const priced = await pricedFromCatalog(entry)
+        setWares(list => [...list, priced])
+        return true
+      }} /> : <button type="button" onClick={() => setBrowsing(true)}>เพิ่มสินค้าจากคลัง SRD</button>}
+      <label>สินค้าอื่น (บรรทัดละชิ้น ไม่มีราคา ตั้งทีหลังได้)<textarea name="wares" rows={2} /></label>
+    </>}
     {kind === 'structure' && <div className="form-grid">
       <label>HP<input name="hp" type="number" min={1} max={9999} defaultValue={structure?.hp ?? 12} required /></label>
       <label>AC<input name="ac" type="number" min={1} max={99} defaultValue={structure?.ac ?? 12} required /></label>
@@ -118,6 +140,8 @@ export function ObjectActions({ item, actors, selected, dm, send, close, copy }:
       {actors.map(actor => <option key={actor.id} value={actor.id}>{actor.name}</option>)}
     </select></label>}
     {item.kind === 'item' && <button className="primary" disabled={!actor} onClick={() => void perform('takeItem')}>เก็บเข้า Inventory</button>}
+    {item.kind === 'shop' && <ShopCounter shop={item} actor={actor} dm={dm} send={send} perform={perform} />}
+    {item.kind === 'shop' && actor && <PurseEditor key={actor.id} actor={actor} send={send} />}
     {item.kind === 'container' && <>
       {lock?.locked ? <div className="lock-state">
         <strong>ล็อกอยู่ · DC {lock.dc}</strong>

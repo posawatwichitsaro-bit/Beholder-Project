@@ -21,6 +21,8 @@ import { SheetView } from '../sheets/SheetView.tsx'
 import { CharacterWizard } from '../sheets/CharacterWizard.tsx'
 import { AdventureLog } from '../dice/AdventureLog.tsx'
 import { HandoutInbox, HandoutsPanel, HandoutViewer } from '../handouts/Handouts.tsx'
+import { EncounterPanel } from '../encounters/EncounterPanel.tsx'
+import type { EncounterPlacement } from '../encounters/EncounterPanel.tsx'
 import type { Handout } from '../../../shared/handouts.ts'
 import { DiceReveal } from '../dice/DiceReveal.tsx'
 import { DiceRoller } from '../dice/DiceRoller.tsx'
@@ -130,6 +132,8 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [objectPlacement, setObjectPlacement] = useState<{ sceneId: string; definition: ObjectDefinition }>()
   /** A catalog item waiting for a click on the map (anyone; it lands as a temp item). */
   const [itemPlacement, setItemPlacement] = useState<{ sceneId: string; item: Omit<InventoryItem, 'id'> }>()
+  /** A group from the Encounter builder (0.15) waiting for a click on the map. */
+  const [encounterPlacement, setEncounterPlacement] = useState<EncounterPlacement & { sceneId: string }>()
   const [combatTarget, setCombatTarget] = useState('')
   const [cameraFocus, setCameraFocus] = useState<{ actorId: string; sequence: number }>()
   const [areaKind, setAreaKind] = useState<AreaKind>()
@@ -153,6 +157,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   const placingObject = objectPlacement?.sceneId === scene?.id ? objectPlacement?.definition : undefined
   const placing = tokenPlacement?.sceneId === scene?.id ? tokenPlacement : undefined
   const placingItem = itemPlacement && itemPlacement.sceneId === scene?.id ? itemPlacement.item : undefined
+  const placingEncounter = encounterPlacement?.sceneId === scene?.id ? encounterPlacement : undefined
   const mainToken = !dm ? scene?.tokens.find(token => token.role === 'character' && room.actors.some(actor => actor.id === token.actorId)) : undefined
   const editingScene = typeof modal === 'object' ? room.scenes.find(item => item.id === modal.sceneId) : undefined
   const actor = room.actors.find(item => item.id === selected)
@@ -547,6 +552,12 @@ export function Table({ account, changeAccount }: AccountProps) {
       send={send} /> : <EmptyState title="ยังไม่ได้เลือกตัวละคร" hint="เลือกจากชีตในห้อง (T) หรือคลิก Token บนกระดาน" />,
     log: () => <AdventureLog room={room} send={send} />,
     handouts: () => <HandoutsPanel room={room} send={send} open={handout => setReading(handout.id)} />,
+    encounters: () => <EncounterPanel room={room} sceneId={scene?.id} send={send} place={placement => {
+      if (!scene) return
+      setPlacing(undefined); setObjectPlacement(undefined); setItemPlacement(undefined)
+      setEncounterPlacement({ ...placement, sceneId: scene.id })
+      closePanels()
+    }} />,
     dice: () => <>
       <div className="section-head"><h2>ผลทอย</h2></div>
       {dm && <div className="dice-settings">
@@ -657,12 +668,16 @@ export function Table({ account, changeAccount }: AccountProps) {
         copy={copyBoard} paste={position => void pasteBoard(position)}
         drop={dropToken}
         moveObject={(objectId, position) => void commandHere({ type: 'moveObject', objectId, ...position })}
-        place={placingItem ? point => void commandHere({ type: 'placeItem', item: placingItem, ...point })
+        place={placingEncounter ? point => {
+          const { label: _label, sceneId: _scene, ...placement } = placingEncounter
+          void commandHere({ type: 'placeEncounter', ...placement, x: Math.floor(point.x), y: Math.floor(point.y) })
+            .then(ok => { if (ok) setEncounterPlacement(undefined) })
+        } : placingItem ? point => void commandHere({ type: 'placeItem', item: placingItem, ...point })
           .then(ok => { if (ok) setItemPlacement(undefined) })
           : placingObject ? point => void commandHere({ type: 'importObject', definition: placingObject, ...point })
           .then(ok => { if (ok) setObjectPlacement(undefined) })
           : placing && (point => void placeToken(placing, point).then(ok => { if (ok) setPlacing(undefined) }))}
-        placementLabel={placingItem ? 'คลิกช่องเพื่อวาง ' + placingItem.name : placingObject && 'คลิกช่องเพื่อวาง ' + placingObject.name}
+        placementLabel={placingEncounter ? 'คลิกช่องเพื่อวาง ' + placingEncounter.label + (placingEncounter.start ? ' แล้วเริ่มต่อสู้' : '') : placingItem ? 'คลิกช่องเพื่อวาง ' + placingItem.name : placingObject && 'คลิกช่องเพื่อวาง ' + placingObject.name}
         actions={(token, point, object) => {
           if (object) return [
             { label: 'โต้ตอบกับ Object', run: () => setObjectTarget(object.id) },
@@ -720,8 +735,8 @@ export function Table({ account, changeAccount }: AccountProps) {
           : <EmptyState title="รอ DM เปิดฉาก" hint="ระหว่างนี้สร้างตัวละครไว้ก่อนได้ พอ DM เปิดฉากแล้วค่อยลากลงกระดาน">
               <button className="primary" onClick={() => setWizard(true)}>สร้างตัวละคร</button>
             </EmptyState>}</div>}
-      {(placing || placingObject || placingItem) && <button className="cancel-placement" onClick={() => { setPlacing(undefined); setObjectPlacement(undefined); setItemPlacement(undefined) }}>ยกเลิกการวาง</button>}
-      {!placing && !placingObject && !placingItem && <div className="board-status">
+      {(placing || placingObject || placingItem || placingEncounter) && <button className="cancel-placement" onClick={() => { setPlacing(undefined); setObjectPlacement(undefined); setItemPlacement(undefined); setEncounterPlacement(undefined) }}>ยกเลิกการวาง</button>}
+      {!placing && !placingObject && !placingItem && !placingEncounter && <div className="board-status">
         {mainToken && <button className="main-token-control" title="คลิกเพื่อไปที่ตัวละครหลัก" onClick={focusMain}>
           <kbd>↑ ↓ ← →</kbd><span>{actorName(mainToken.actorId)}</span>
         </button>}
@@ -789,7 +804,8 @@ export function Table({ account, changeAccount }: AccountProps) {
       save={(definition, position) => send({ type: 'importObject', sceneId: objectImport.sceneId, definition, ...position })}
       close={() => setObjectImport(undefined)} />}
     {sceneObject && <ObjectActions key={sceneObject.id} item={sceneObject} selected={selected} dm={dm}
-      actors={room.actors.filter(actor => scene?.tokens.some(token => token.actorId === actor.id))}
+      actors={sceneObject.kind === 'shop' ? room.actors.filter(actor => actor.kind === 'pc' || scene?.tokens.some(token => token.actorId === actor.id))
+        : room.actors.filter(actor => scene?.tokens.some(token => token.actorId === actor.id))}
       send={commandHere} close={() => setObjectTarget(undefined)} copy={dm ? () => {
         setObjectDraft(objectDefinition(sceneObject))
         setObjectTarget(undefined)

@@ -41,7 +41,10 @@ test('since 0.07 players get the Monster Manual and the SRD item panel too, with
     assert.equal(panelForShortcut('i', role)?.id, 'items')
   }
   assert.equal(panelForShortcut('t', 'player')?.id, 'sheets')
-  assert.deepEqual(panelsFor('player').map(panel => panel.id), panelsFor('dm').map(panel => panel.id))
+  // Every panel is shared except the Encounter builder (0.15), which is the DM's.
+  assert.deepEqual(panelsFor('player').map(panel => panel.id), panelsFor('dm').map(panel => panel.id).filter(id => id !== 'encounters'))
+  assert.equal(panelForShortcut('e', 'dm')?.id, 'encounters')
+  assert.equal(panelForShortcut('e', 'player'), undefined)
 })
 
 test('shortcuts are unique and never take the board keys R, V and G or the DM storeroom key M', () => {
