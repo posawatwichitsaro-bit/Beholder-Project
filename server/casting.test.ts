@@ -163,7 +163,7 @@ test('0.14: a failed save’s condition waits on the DM’s card until applied o
   for (let tries = 0; tries < 40 && !queued().length; tries++) {
     run(mira, { type: 'cast', actorId: 'wiz', spellId: spell('hold-person'), slotLevel: 2, targetIds: ['g1'] })
     run(dm, { type: 'spellSave', rollId: room.rolls.findLast(roll => roll.cast)!.id })
-    for (const actor of room.actors) actor.spellSlots = '2:3/3'
+    room.actors.find(item => item.id === 'wiz')!.slots = 'L1 4/4, L2 3/3'
   }
   const [card] = queued()
   assert.ok(card, 'the failed save is on the card')
