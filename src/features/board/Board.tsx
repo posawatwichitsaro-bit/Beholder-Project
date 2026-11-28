@@ -157,14 +157,27 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       clearTimeout(longPress.current)
     }
   }, [])
+  // 0.14: on a vision scene a player's map comes back with unseen squares painted black by the server,
+  // so it is fetched again as they explore: at most every 2 seconds, keeping the old picture until the new one loads.
+  const maskedMap = room.me.role !== 'dm' && scene.vision?.enabled === true
+  const known = maskedMap ? (scene.view?.explored.length ?? 0) + ':' + (scene.view?.visible.length ?? 0) : ''
+  const [mapVersion, setMapVersion] = useState(known)
+  const lastMapLoad = useRef(0)
   useEffect(() => {
-    setMap(undefined)
+    if (known === mapVersion) return
+    const wait = Math.max(0, lastMapLoad.current + 2000 - Date.now())
+    const timer = setTimeout(() => setMapVersion(known), wait)
+    return () => clearTimeout(timer)
+  }, [known, mapVersion])
+  useEffect(() => { setMap(undefined) }, [room.id, scene.map?.id])
+  useEffect(() => {
     if (!scene.map) return
+    lastMapLoad.current = Date.now()
     const image = new Image()
     image.onload = () => setMap(image)
-    image.src = '/api/rooms/' + room.id + '/maps/' + scene.map.id
+    image.src = '/api/rooms/' + room.id + '/maps/' + scene.map.id + (maskedMap ? '?seen=' + encodeURIComponent(mapVersion) : '')
     return () => { image.onload = null }
-  }, [room.id, scene.map?.id])
+  }, [room.id, scene.map?.id, maskedMap, mapVersion])
   useEffect(() => {
     const sources = new Set([
       ...room.publicActors.map(actor => actor.portrait),

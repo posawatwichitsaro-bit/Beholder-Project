@@ -12,6 +12,8 @@ import { Invalid } from './rules.ts'
 import type { Database, Query } from './store.ts'
 import { libraryRoutes } from './library.ts'
 import { canSee } from '../shared/handouts.ts'
+import { playerView } from '../shared/vision.ts'
+import { maskedMap } from './mapMask.ts'
 import { createAuthThrottle } from './authThrottle.ts'
 import { accountRoutes } from './account.ts'
 import { accountCookie, activeProfile, profileSecret } from './profiles.ts'
@@ -335,8 +337,16 @@ export async function createApp(database: Database, assetDirectory: string) {
     const id = await memberId(database.query, req.params.id, req.headers.cookie)
     const room = await roomBy(database.query, req.params.id)
     const member = memberOf(room, id)
-    const map = room.scenes.find(scene => scene.map?.id === req.params.assetId && (member.role === 'dm' || scene.id === room.activeSceneId))?.map
-    if (!map) throw new Forbidden('ไม่สามารถเปิดภาพนี้ได้')
+    const scene = room.scenes.find(scene => scene.map?.id === req.params.assetId && (member.role === 'dm' || scene.id === room.activeSceneId))
+    const map = scene?.map
+    if (!scene || !map) throw new Forbidden('ไม่สามารถเปิดภาพนี้ได้')
+    // 0.14: on a scene with vision on, a player gets the map with every square they have never seen painted black.
+    if (member.role !== 'dm' && scene.vision?.enabled) {
+      const known = new Set([...(scene.vision.explored?.[member.id] ?? []), ...playerView(scene, room.actors, member.id).visible])
+      const bytes = await maskedMap(assets, map, member.id, { cell: scene.cell, originX: scene.originX, originY: scene.originY }, known)
+      res.type('image/webp').set('Cache-Control', 'private, no-cache').send(bytes)
+      return
+    }
     res.type(map.mime).sendFile(map.id, { root: assets })
   })
   async function checkSocket(ws: WebSocket, seat: { accountSecret?: string; sessionExpires?: number }) {

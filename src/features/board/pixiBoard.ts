@@ -185,10 +185,12 @@ export class PixiBoard {
 
   setMap(image?: HTMLImageElement) {
     this.dirty = true
-    this.mapSprite?.destroy()
+    // The map has a texture of its own (not the shared cache): a player's masked map is replaced as they
+    // explore, and each old copy is freed here instead of piling up in GPU memory.
+    this.mapSprite?.destroy({ texture: true, textureSource: true })
     this.mapSprite = undefined
     if (!image) return
-    this.mapSprite = new Sprite(this.texture(image))
+    this.mapSprite = new Sprite(Texture.from(image, true))
     this.mapLayer.addChild(this.mapSprite)
   }
 
