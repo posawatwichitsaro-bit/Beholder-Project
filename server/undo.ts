@@ -25,7 +25,7 @@ const skip = new Set(['undo', 'chat'])
 export const undoLabels: Record<string, string> = {
   move: 'การเดิน', moveTokens: 'การเดิน', stepCharacter: 'การเดิน', standUp: 'การลุกขึ้น',
   damage: 'การหัก HP', areaDamage: 'ความเสียหายแบบพื้นที่', heal: 'การรักษา', adjustHp: 'การปรับ HP',
-  sheetRoll: 'การทอยจากชีต', roll: 'การทอย', castSave: 'การร่ายเวท', spellSave: 'การทอยเซฟ', effectSave: 'การทอยเซฟ',
+  sheetRoll: 'การทอยจากชีต', roll: 'การทอย', castSave: 'การร่ายเวท', cast: 'การร่ายเวท', spellbook: 'การแก้รายการเวท', spellSave: 'การทอยเซฟ', effectSave: 'การทอยเซฟ',
   conditions: 'การเปลี่ยน Condition', addEffect: 'การเพิ่ม effect', removeEffect: 'การลบ effect',
   slots: 'การใช้ช่องเวท', useResource: 'การใช้ทรัพยากร', spendHitDie: 'การใช้ Hit Die', rest: 'การพัก', magicalCunning: 'Magical Cunning',
   turnAction: 'การใช้ Action', sheet: 'การแก้ชีต', inventoryAdd: 'การเพิ่มไอเทม', inventoryRemove: 'การนำไอเทมออก', inventoryBonus: 'การตั้งโบนัสเวท',
@@ -116,7 +116,7 @@ export function beforeCommand(room: Room): Before {
  * After a command: keep what it changed as this member's newest undo step.
  * Moving the table to another scene or starting a new round of a fight clears everyone's steps.
  */
-export function afterCommand(room: Room, member: Member, type: string, before: Before) {
+export function afterCommand(room: Room, member: Member, type: string, before: Before, alsoOwn: string[] = []) {
   const roundUp = room.scenes.some(scene => scene.combat && (before.rounds.get(scene.id) ?? scene.combat.round) < scene.combat.round)
   if (room.activeSceneId !== before.active || roundUp) {
     delete room.undoSteps
@@ -134,8 +134,9 @@ export function afterCommand(room: Room, member: Member, type: string, before: B
   const rollIds = room.rolls.slice(before.rolls).map(roll => roll.id)
   // A player's dice stand: from a step that rolled, keep only changes to their own creatures.
   if (member.role !== 'dm' && rollIds.length) {
-    const own = new Set(room.actors.filter(actor => actor.ownerId === member.id).map(actor => 'actor:' + actor.id))
-    changed = changed.filter(unit => own.has(unit.key))
+    const own = new Set([...room.actors.filter(actor => actor.ownerId === member.id).map(actor => actor.id), ...alsoOwn].map(id => 'actor:' + id))
+    // …and that creature's Action use in a fight (scene:<id>:use:<actor>).
+    changed = changed.filter(unit => own.has(unit.key) || own.has('actor:' + (/:use:(.+)$/.exec(unit.key)?.[1] ?? '')))
   }
   if (!changed.length && !(member.role === 'dm' && rollIds.length)) return
   const step: UndoStep = { at: Date.now(), label: undoLabels[type] ?? 'การกระทำ', units: changed, ...(member.role === 'dm' && rollIds.length ? { rollIds } : {}) }

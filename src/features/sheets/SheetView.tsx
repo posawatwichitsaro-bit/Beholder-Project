@@ -19,6 +19,8 @@ import { readyToLevel, srdLink, srdFeats, xpForLevel, characterLevel } from '../
 import { GiveXp } from '../combat/XpAward.tsx'
 import { VisionFields } from './VisionFields.tsx'
 import { RestPanel } from './RestPanel.tsx'
+import { Spellbook } from '../spells/Spellbook.tsx'
+import type { DrawArea } from '../spells/Spellbook.tsx'
 
 type Tab = 'overview' | 'actions' | 'spells' | 'rest' | 'inventory' | 'notes'
 type Mode = 'normal' | 'advantage' | 'disadvantage'
@@ -30,11 +32,13 @@ const signed = (value: number) => (value >= 0 ? '+' : '') + value
  * a weapon to attack with it. The roll options (advantage, proficiency, target,
  * cover) sit above and apply to the next roll. Editing opens SheetEditor.
  */
-export function SheetView({ actor, scene, room, send, edit, copy, preferredTarget, chooseTarget }: {
+export function SheetView({ actor, scene, room, send, edit, copy, preferredTarget, chooseTarget, drawArea }: {
   actor: Actor; scene?: Scene; room: Snapshot; send: Send; edit: () => void; copy: () => void
   /** The creature picked on the board; it becomes this sheet's target when it is in the scene. */
   preferredTarget?: string
   chooseTarget?: (id: string) => void
+  /** Place a spell's template on the board (area spells). */
+  drawArea?: DrawArea
 }) {
   const dm = room.me.role === 'dm'
   const xpRoom = room.settings?.advancement === 'xp'
@@ -227,6 +231,9 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
           <div className="sheet-stat"><b>{actor.spellDC}</b><span>Spell DC</span></div>
         </div>
         {targeting}
+        <Spellbook actor={actor} room={room} scene={scene} send={send} targets={targets} targetId={targetId} drawArea={drawArea} />
+        <details className="sheet-manual-cast">
+          <summary>เวทนอกคลัง (กรอกเอง)</summary>
         <label className="sheet-slot-pick">ใช้ช่องเวท<select aria-label="ใช้ช่องเวท" value={(usePact ? 'p' : '') + castLevel} onChange={event => {
           const value = event.target.value
           setUsePact(value.startsWith('p'))
@@ -251,7 +258,8 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
           <label className="sheet-toggle"><input type="checkbox" checked={half} onChange={event => setHalf(event.target.checked)} />ผ่านแล้วรับความเสียหายครึ่งหนึ่ง</label>
           <button disabled={!targetId || !spellName.trim()}>ขอ {saveAbility} Save · DC {actor.spellDC}</button>
         </form>
-        {actor.spells && <p className="sheet-note">เวท / ความสามารถ · {actor.spells}</p>}
+        </details>
+        {actor.spells && <p className="sheet-note">โน้ตเวท / ความสามารถ · {actor.spells}</p>}
         <SlotTracker key={actor.slots} actor={actor} send={send} />
         {actor.pactSlots && <SlotTracker key={'pact' + actor.pactSlots} actor={actor} send={send} pact />}
       </>}

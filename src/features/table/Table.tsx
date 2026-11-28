@@ -132,6 +132,8 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [cameraFocus, setCameraFocus] = useState<{ actorId: string; sequence: number }>()
   const [areaKind, setAreaKind] = useState<AreaKind>()
   const [areaPreview, setAreaPreview] = useState<Area>()
+  /** A spell's template being placed from a sheet (0.13); its cast goes out once placed. */
+  const [spellArea, setSpellArea] = useState<{ kind: AreaKind; squares: number; label: string; done: (area: Area) => void }>()
   const [amounts, setAmounts] = useState<Record<string, number>>({})
   const [older, setOlder] = useState<Roll[]>([])
   const [historyEnded, setHistoryEnded] = useState(false)
@@ -293,7 +295,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     setFocusScene(id); setPlacing(undefined); setPlacementPoint(undefined); setCombatTarget('')
     setObjectTarget(undefined); setLootTarget(undefined); setObjectImport(undefined); setObjectPlacement(undefined); setItemPlacement(undefined)
   }
-  function clearArea() { setAreaKind(undefined); setAreaPreview(undefined) }
+  function clearArea() { setAreaKind(undefined); setAreaPreview(undefined); setSpellArea(undefined) }
   useEffect(() => { setOlder([]); setHistoryEnded(false) }, [room.activeSceneId])
   useEffect(() => { setCombatTarget(nearestFoe(room, scene) ?? ''); clearArea() }, [scene?.id, combat?.round, combat?.turn])
   useEffect(() => { if (!combatOpen) clearArea() }, [combatOpen])
@@ -530,6 +532,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     </>,
     actor: () => actor ? <SheetView key={actor.id} actor={actor} scene={scene} room={room} preferredTarget={attackTarget} chooseTarget={setAttackTarget}
       edit={() => setSheet({ initial: actor, actor })} copy={() => saveToLibrary(actor)}
+      drawArea={(shape, done) => setSpellArea({ ...shape, done })}
       send={send} /> : <EmptyState title="ยังไม่ได้เลือกตัวละคร" hint="เลือกจากชีตในห้อง (T) หรือคลิก Token บนกระดาน" />,
     log: () => <AdventureLog room={room} send={send} />,
     dice: () => <>
@@ -547,6 +550,9 @@ export function Table({ account, changeAccount }: AccountProps) {
             onChange={event => setSaveProficiency({ ...saveProficiency, [roll.id]: event.target.checked })} />Proficient</label>
           <button onClick={() => void commandHere({ type: 'spellSave', rollId: roll.id, proficient: saveProficiency[roll.id] })}>ทอยให้ {actorName(roll.cast.targetId)}</button>
         </div>}
+        {roll.offer && (dm || room.actors.some(item => item.id === roll.offer!.sourceId)) && !room.publicActors.find(item => item.id === roll.offer!.targetId)?.effects?.some(effect => effect.condition === roll.offer!.condition && effect.sourceId === roll.offer!.sourceId)
+          && <div className="inline damage"><button onClick={() => void commandHere({ type: 'addEffect', sourceId: roll.offer!.sourceId, targetIds: [roll.offer!.targetId],
+            condition: roll.offer!.condition, sourceLabel: roll.offer!.label, ...(roll.offer!.concentration ? { concentration: true } : {}) })}>ใส่ {roll.offer.condition} ให้ {actorName(roll.offer.targetId)}</button></div>}
         {dm && roll.targetId && roll.applied === false && <small className="pending-note">รอยืนยันในคิว “รอการตัดสิน”</small>}
       </li>)}</ol>
       {!historyEnded && history.length >= 40 && <button onClick={async () => {
@@ -618,8 +624,12 @@ export function Table({ account, changeAccount }: AccountProps) {
         } : undefined}
         calibrate={calibratingScene ? rect => setCalibrating({ sceneId: calibratingScene.id, rect }) : undefined}
         gridOverride={calibratingScene ? gridPreview : undefined}
-        focus={cameraFocus} areaKind={combatOpen ? areaKind : undefined} preview={combatOpen ? areaPreview : undefined}
-        onArea={area => { setAreaPreview(area); setAreaKind(undefined) }}
+        focus={cameraFocus} areaKind={spellArea?.kind ?? (combatOpen ? areaKind : undefined)} preview={!spellArea && combatOpen ? areaPreview : undefined}
+        areaSize={spellArea?.squares} areaLabel={spellArea && 'ลากเพื่อวาง ' + spellArea.label + ' · Esc ยกเลิก'}
+        onArea={area => {
+          if (spellArea) { setSpellArea(undefined); spellArea.done(area); return }
+          setAreaPreview(area); setAreaKind(undefined)
+        }}
         select={value => {
           if (combatOpen && combat) {
             setCombatTarget(value === combat.order[combat.turn].actorId ? '' : value)

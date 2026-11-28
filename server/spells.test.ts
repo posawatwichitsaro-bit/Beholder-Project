@@ -65,3 +65,13 @@ test('damage and healing scale with the slot, cantrips with the character level'
   assert.equal(scaledDice(bolt, bolt.damage, 0, 17), '4d10')
   assert.equal(addDice('1d4+1', '1d6'), '1d4+1+1d6')
 })
+
+test('limits from the class tables, and old spell notes turned into catalog spells', async () => {
+  const { spellLimits, spellsInText } = await import('../shared/spells.ts')
+  assert.deepEqual(spellLimits('Wizard 5'), { prepared: 9, cantrips: 4 })
+  assert.deepEqual(spellLimits('Paladin 5'), { prepared: 6, cantrips: 0 })
+  assert.deepEqual(spellLimits('Cleric 3 / Wizard 1'), { prepared: 10, cantrips: 6 })
+  assert.equal(spellLimits('Fighter 5'), undefined)
+  const ids = spellsInText('Cantrips: Fire Bolt, light. 1st: Mass Cure Wounds; shield, Magic Missile (x2)', spells)
+  assert.deepEqual(ids.map(id => spells.find(item => item.id === id)!.name).sort(), ['Fire Bolt', 'Light', 'Magic Missile', 'Mass Cure Wounds', 'Shield'])
+})

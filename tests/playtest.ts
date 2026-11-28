@@ -208,6 +208,7 @@ async function clericSpell(page: Page) {
   await page.getByRole('button', exact('Mira')).click()
   const sheet = page.getByRole('article', { name: 'ชีต Mira' })
   await sheet.getByRole('tab', exact('Spells')).click()
+  await sheet.getByText('เวทนอกคลัง (กรอกเอง)').click()
   await sheet.getByLabel('ชื่อเวท').fill('Command')
   await sheet.getByLabel('ใช้ช่องเวท').selectOption('1')
   await sheet.getByRole('button', { name: /^ขอ DEX Save/ }).click()

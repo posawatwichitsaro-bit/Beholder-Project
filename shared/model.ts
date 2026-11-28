@@ -66,7 +66,11 @@ export type Sheet = {
   attacksPerAction?: number
   /** Vision range, Darkvision and a carried light (the DM sets these; players can light or put out their own light). */
   vision?: ActorVision
+  /** SRD spells on this sheet (0.13): cantrips, and leveled spells marked prepared or always prepared. `spells` stays as free notes. */
+  spellbook?: KnownSpell[]
 }
+/** One spell on a sheet, by catalog id (public/data/srd-spells.json). */
+export type KnownSpell = { id: string; prepared?: boolean; always?: boolean }
 /**
  * One condition from one source. Poisoned from two sources is two effects shown as one mark;
  * ending one leaves the other. `concentration` ties it to the source's Concentration.
@@ -189,7 +193,11 @@ export type Scene = {
 export type Roll = {
   id: string; name: string; label: string; formula: string; faces: number[]
   total: number; modifier: number; outcome?: string; targetId?: string; applied?: boolean
-  cast?: { ability: Ability; dc: number; targetId: string; damage?: string; half: boolean; resolved?: boolean }
+  cast?: { ability: Ability; dc: number; targetId: string; damage?: string; half: boolean; resolved?: boolean
+    /** The condition a failed save gives (0.13): the save result offers a button to apply it. */
+    condition?: string; spell?: string; concentration?: boolean; damageKind?: DamageKind }
+  /** On a failed spell save: the condition its caster's side may apply with one click. */
+  offer?: { condition: string; targetId: string; sourceId: string; label: string; concentration?: boolean }
   critical?: boolean; privateTo?: string; sceneId?: string; sourceId?: string; damageKind?: DamageKind
   /** When the roll happened (ms). Older rolls have none. */
   at?: number
