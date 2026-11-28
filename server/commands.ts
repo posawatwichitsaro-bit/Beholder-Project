@@ -18,7 +18,7 @@ import { characterLevel, criticalFrom, magicalCunning, monsterXp, srdFeats, srdS
 import { key, lightsOf, playerView, seenBy, tokenCenter, tokenSeen, visionOf, wallsForPlayer } from '../shared/vision.ts'
 import type { ActorVision, Ambient, Door, LightSource, SceneVision, Wall } from '../shared/vision.ts'
 import { gridFeet, moveCost, speedNow } from '../shared/movement.ts'
-import { afterCommand, beforeCommand, isUndoable, undoLast } from './undo.ts'
+import { afterCommand, beforeCommand, isUndoable, redoLast, undoLast } from './undo.ts'
 import { freshUse, gapBetween, reachOf } from '../shared/economy.ts'
 import type { TurnUse } from '../shared/economy.ts'
 import { itemLights } from '../shared/vision.ts'
@@ -433,8 +433,9 @@ const visibleEffects = (effects: Effect[] | undefined, dm: boolean) => dm ? effe
 export function snapshot(room: Room, me: Member): Snapshot {
   const publicMember = ({ id, name, role }: Member): Member => ({ id, name, role })
   const dm = me.role === 'dm'
-  const scenes = (dm ? room.scenes : room.scenes.filter(scene => scene.id === room.activeSceneId)).map(scene => ({
-    ...scene, tokens: withTokenRoles(scene, room.actors), objects: dm ? scene.objects : scene.objects?.map(object => object.kind === 'container' ? {
+  // DM notes (0.13) never leave the server for players.
+  const scenes = (dm ? room.scenes : room.scenes.filter(scene => scene.id === room.activeSceneId)).map(({ dmNotes, ...scene }) => ({
+    ...scene, ...(dm && dmNotes ? { dmNotes } : {}), tokens: withTokenRoles(scene, room.actors), objects: dm ? scene.objects : scene.objects?.map(object => object.kind === 'container' ? {
       ...object, items: !object.open || object.lock?.locked ? [] : object.items,
       lock: object.lock && { ...object.lock, tried: object.lock.tried.filter(id => room.actors.some(actor => actor.id === id && actor.ownerId === me.id)) }
     } : object)
@@ -478,7 +479,7 @@ export function snapshot(room: Room, me: Member): Snapshot {
     id: room.id, name: room.name, revision: room.revision, me: publicMember(me), members: room.members.map(publicMember),
     activeSceneId: room.activeSceneId, scenes, invite: dm ? room.invite : undefined, dmInvite: dm ? room.dmInvite : undefined,
     actors: room.actors.filter(actor => dm || actor.ownerId === me.id || (actor.temp && visible.has(actor.id)))
-      .map(actor => ({ ...actor, portrait: actor.portrait ?? monsterPortrait(actor.monsterReference?.id), effects: visibleEffects(actor.effects, dm) })),
+      .map(({ dmNotes, ...actor }) => ({ ...actor, ...(dm && dmNotes ? { dmNotes } : {}), portrait: actor.portrait ?? monsterPortrait(actor.monsterReference?.id), effects: visibleEffects(actor.effects, dm) })),
     publicActors: room.actors.filter(actor => dm || visible.has(actor.id)).map(({ id, name, kind, size, portrait, monsterReference, hp, maxHp, tempHp, life, lootResult, conditions, effects }) =>
       ({ id, name, kind, size, portrait: portrait ?? monsterPortrait(monsterReference?.id), hp, maxHp, tempHp, lootResult, conditions, effects: visibleEffects(effects, dm), lootable: kind === 'monster' && life === 'dead' })),
     templates: dm ? room.templates : [],
@@ -1710,6 +1711,22 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       if (outcome.result === 'empty') throw new Invalid('ไม่มีอะไรให้ย้อนแล้ว')
       if (outcome.result === 'blocked') return { notice: 'ย้อน' + outcome.label + 'ไม่ได้ เพราะมีคนแก้ต่อแล้ว · กด Ctrl+Z อีกครั้งเพื่อย้อนขั้นก่อนหน้า' }
       return { notice: 'ย้อน' + outcome.label + 'แล้ว' }
+    }
+    case 'dmNotes': {
+      // Secret notes on a scene or a sheet: the DM writes them, players never get them.
+      requireDM(member)
+      const notes = command.notes === '' ? undefined : text(command.notes, 5000)
+      const holder: { dmNotes?: string } = command.actorId ? actor() : scene()
+      if (notes) holder.dmNotes = notes
+      else delete holder.dmNotes
+      return {}
+    }
+    case 'redo': {
+      // Ctrl+Y / Ctrl+Shift+Z: put back your own last undo, unless someone has changed it since.
+      const outcome = redoLast(room, member)
+      if (outcome.result === 'empty') throw new Invalid('ไม่มีอะไรให้ทำซ้ำ')
+      if (outcome.result === 'blocked') return { notice: 'ทำซ้ำ' + outcome.label + 'ไม่ได้ เพราะมีคนแก้ต่อแล้ว' }
+      return { notice: 'ทำซ้ำ' + outcome.label + 'แล้ว' }
     }
     case 'opportunity': {
       // The controller of the creature that may strike answers: attack (main attack, uses the Reaction) or pass.

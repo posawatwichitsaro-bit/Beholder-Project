@@ -68,6 +68,8 @@ export type Sheet = {
   vision?: ActorVision
   /** SRD spells on this sheet (0.13): cantrips, and leveled spells marked prepared or always prepared. `spells` stays as free notes. */
   spellbook?: KnownSpell[]
+  /** The DM's secret notes on this sheet (0.13): stripped from every player's snapshot. */
+  dmNotes?: string
 }
 /** One spell on a sheet, by catalog id (public/data/srd-spells.json). */
 export type KnownSpell = { id: string; prepared?: boolean; always?: boolean }
@@ -179,6 +181,8 @@ export type Scene = {
   /** XP from the last fight, until the DM shares it out or skips it. */
   xpAward?: XpAward
   id: string; name: string; cell: number; originX: number; originY: number
+  /** The DM's secret notes on this scene (0.13): stripped from every player's snapshot. */
+  dmNotes?: string
   map?: MapAsset; tokens: Token[]; combat?: Combat; objects?: SceneObject[]
   /** Who fought in this scene's last encounter, pre-selected for the next one. */
   lastParticipants?: string[]
@@ -221,6 +225,8 @@ export type Room = {
   log?: LogEntry[]
   /** Each member's undo steps, newest last (server/undo.ts); never sent in snapshots. */
   undoSteps?: Record<string, UndoStep[]>
+  /** What each member undid and may redo (0.13); never sent in snapshots. */
+  redoSteps?: Record<string, UndoStep[]>
   /** Table rules the DM can switch. autoDamage: a hit applies its damage without waiting for the DM. */
   /**
    * Table rules the DM can switch. autoDamage: a hit applies its damage without waiting for the DM.

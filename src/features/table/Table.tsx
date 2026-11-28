@@ -215,7 +215,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   }
   // Play keys while the board (or nothing) has focus: Enter ends your turn, Tab picks the next target,
   // 1–3 attack the target with your main attack and the next two, Ctrl+Z (DM) undoes the last move or HP change.
-  const playKeys = useRef<{ endTurn?: () => void; nextTarget: (back: boolean) => void; attack: (n: number) => boolean; undo?: () => void }>(undefined)
+  const playKeys = useRef<{ endTurn?: () => void; nextTarget: (back: boolean) => void; attack: (n: number) => boolean; undo?: () => void; redo?: () => void }>(undefined)
   {
     const current = combat?.order[combat.turn]?.actorId
     const mineNow = !dm && current ? ownedHere.find(item => item.id === current) : undefined
@@ -241,7 +241,8 @@ export function Table({ account, changeAccount }: AccountProps) {
         void commandHere({ type: 'sheetRoll', rollType: 'attack', actorId: acting.id, targetId: target, weaponIndex })
         return true
       },
-      undo: () => void send({ type: 'undo' })
+      undo: () => void send({ type: 'undo' }),
+      redo: () => void send({ type: 'redo' })
     }
   }
   useEffect(() => {
@@ -254,6 +255,11 @@ export function Table({ account, changeAccount }: AccountProps) {
       if (!keys) return
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z' && !typingTarget(target)) {
         if (keys.undo) { event.preventDefault(); keys.undo() }
+        return
+      }
+      // Redo: Ctrl+Y or Ctrl+Shift+Z.
+      if ((event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z')) && !typingTarget(target)) {
+        if (keys.redo) { event.preventDefault(); keys.redo() }
         return
       }
       if (!onBoard || event.ctrlKey || event.metaKey) return
@@ -597,6 +603,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     ...(mainToken ? [{ id: 'focus-main', label: 'ไปที่ ' + actorName(mainToken.actorId), group: 'กระดาน', keywords: 'camera center main character ตัวหลัก', run: focusMain }] : []),
     ...(inviteLink ? [{ id: 'invite', label: 'คัดลอกลิงก์เชิญผู้เล่น', group: 'โต๊ะ', keywords: 'invite link share เชิญ', run: () => void copyInvite() }] : []),
     { id: 'undo', label: 'ย้อนสิ่งที่ฉันทำล่าสุด (Ctrl+Z)', group: 'โต๊ะ', keywords: 'undo ย้อน ctrl z', run: () => void send({ type: 'undo' }) },
+    { id: 'redo', label: 'ทำซ้ำสิ่งที่เพิ่งย้อน (Ctrl+Y)', group: 'โต๊ะ', keywords: 'redo ทำซ้ำ ctrl y', run: () => void send({ type: 'redo' }) },
     { id: 'reset-ui', label: 'รีเซ็ตตำแหน่ง UI', group: 'โต๊ะ', keywords: 'reset layout ui move position รีเซ็ต ย้าย', run: () => usePrefs.getState().update({ layout: {} }) },
     { id: 'close-panels', label: 'ปิดแผงทั้งหมด', group: 'โต๊ะ', keywords: 'close hide escape', shortcut: 'Esc', run: () => { dispatchDock({ type: 'closeAll' }); setDmCombat(false) } },
     { id: 'tour', label: 'เริ่มทัวร์แนะนำ', group: 'ช่วยเหลือ', keywords: 'tour help guide ทัวร์ ช่วยเหลือ วิธีใช้', run: () => { closePanels(); setManageOpen(false); setTouring(true) } },

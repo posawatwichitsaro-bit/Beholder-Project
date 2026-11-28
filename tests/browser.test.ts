@@ -1495,6 +1495,25 @@ test('0.13: a wizard turns old spell notes into SRD spells, adds one from the ca
   await sheet.getByRole('button', { name: /^ร่าย Cure Wounds · ช่องระดับ 1/ }).click()
   await waitInPage(mira, async arg => ((await (await fetch(arg.path)).json()).actors.find((actor: { id: string; hp: number }) => actor.id === arg.id)?.hp ?? 0) > 5, { path, id: lyra.id })
   assert.ok((await state()).log!.some(entry => /Lyra ฟื้น \d+ HP จาก Cure Wounds/.test(entry.text)))
+  const healed = (await state()).actors.find(actor => actor.id === lyra.id)!.hp
+
+  // Ctrl+Z takes the healing back (her own cast), Ctrl+Y puts it back.
+  await mira.locator('body').click({ position: { x: 5, y: 400 } }).catch(() => {})
+  await mira.keyboard.press('Control+z')
+  await waitInPage(mira, async arg => (await (await fetch(arg.path)).json()).actors.find((actor: { id: string; hp: number }) => actor.id === arg.id)?.hp === 5, { path, id: lyra.id })
+  await mira.keyboard.press('Control+y')
+  await waitInPage(mira, async arg => (await (await fetch(arg.path)).json()).actors.find((actor: { id: string; hp: number }) => actor.id === arg.id)?.hp === arg.hp, { path, id: lyra.id, hp: healed })
+
+  // The DM's secret note on Lyra's sheet never reaches Mira.
+  await dm.goto(base + '/room/' + room.id)
+  await openPanel(dm, 'ชีตในห้อง')
+  await dm.getByRole('button', exact('Lyra')).click()
+  const dmSheet = dm.getByRole('article', { name: 'ชีต Lyra' })
+  await dmSheet.getByRole('tab', exact('Notes')).click()
+  await dmSheet.getByPlaceholder('เช่น กับดัก ความลับ แผนของศัตรู').fill('ลิชตามล่าเธออยู่')
+  await dmSheet.getByRole('button', exact('บันทึกโน้ต')).click()
+  await waitInPage(dm, async url => (await (await fetch(url)).json()).actors.some((actor: { dmNotes?: string }) => actor.dmNotes === 'ลิชตามล่าเธออยู่'), path)
+  assert.ok(!(await (await mira.request.get(path)).text()).includes('ลิชตามล่า'))
 })
 
 async function startTable(page: Page, name: string) {

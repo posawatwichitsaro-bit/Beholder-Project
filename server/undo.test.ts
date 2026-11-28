@@ -88,3 +88,41 @@ test('a step survives the room being saved and loaded (jsonb reorders keys)', ()
   assert.deepEqual(applyCommand(room, mira, { sceneId: 's', type: 'undo' }), { notice: 'ย้อนการเดินแล้ว' })
   assert.equal(room.scenes[0].tokens.find(token => token.id === 't1')!.y, 0)
 })
+
+test('redo (0.13): puts back your own last undo, step by step; doing something else clears it; DM rolls come back un-struck', async () => {
+  const { snapshot } = await import('./commands.ts')
+  const { dm, mira, goblin, room, run } = table()
+  const at = () => [room.scenes[0].tokens[0].x, room.scenes[0].tokens[0].y]
+  run(mira, { type: 'move', tokenId: 't1', x: 0, y: 3 })
+  run(mira, { type: 'move', tokenId: 't1', x: 0, y: 5 })
+  run(mira, { type: 'undo' })
+  run(mira, { type: 'undo' })
+  assert.deepEqual(at(), [0, 0])
+  assert.equal((snapshot(room, mira) as unknown as { redoSteps?: unknown }).redoSteps, undefined, 'never sent to the table')
+  assert.throws(() => run(dm, { type: 'redo' }), /ไม่มีอะไรให้ทำซ้ำ/, 'each member redoes only their own')
+  assert.match((run(mira, { type: 'redo' }) as { notice: string }).notice, /ทำซ้ำการเดินแล้ว/)
+  assert.deepEqual(at(), [0, 3])
+  run(mira, { type: 'redo' })
+  assert.deepEqual(at(), [0, 5])
+  assert.throws(() => run(mira, { type: 'redo' }), /ไม่มีอะไรให้ทำซ้ำ/)
+  // Redone steps can be undone again.
+  run(mira, { type: 'undo' })
+  assert.deepEqual(at(), [0, 3])
+  // A new action clears the redo list.
+  run(mira, { type: 'move', tokenId: 't1', x: 2, y: 2 })
+  assert.throws(() => run(mira, { type: 'redo' }), /ไม่มีอะไรให้ทำซ้ำ/)
+  // Someone else changed it since: redo is refused, not forced.
+  run(mira, { type: 'undo' })
+  run(dm, { type: 'move', tokenId: 't1', x: 6, y: 6 })
+  assert.match((run(mira, { type: 'redo' }) as { notice: string }).notice, /ไม่ได้/)
+  assert.deepEqual(at(), [6, 6])
+  // The DM's damage roll: undo strikes it and returns the HP; redo takes the HP again and clears the strike.
+  run(dm, { type: 'adjustHp', actorId: 'gob', mode: 'damage', amount: 3 })
+  run(dm, { type: 'sheetRoll', rollType: 'attack', actorId: 'gob', targetId: 'hero' })
+  const hit = room.rolls.at(-1)!
+  run(dm, { type: 'undo' })
+  assert.equal(room.rolls.find(roll => roll.id === hit.id)!.undone, true)
+  run(dm, { type: 'redo' })
+  assert.equal(room.rolls.find(roll => roll.id === hit.id)!.undone, undefined)
+  assert.equal(goblin.hp, 4)
+})

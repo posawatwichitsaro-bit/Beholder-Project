@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { blankSheet } from '../shared/model.ts'
 import type { Actor, Member, Room } from '../shared/model.ts'
 import { actionCount } from '../shared/economy.ts'
-import { applyCommand } from './commands.ts'
+import { applyCommand, snapshot } from './commands.ts'
 
 const spell = (slug: string) => 'srd-5.2.1:spell:' + slug
 const dm: Member = { id: 'dm', name: 'DM', role: 'dm' }
@@ -138,4 +138,20 @@ test('Rage, Second Wind and Bardic Inspiration spend a use and the Bonus Action 
   assert.throws(() => run(mira, { type: 'sheetRoll', rollType: 'check', actorId: 'barb', ability: 'STR', inspiration: true }), /ไม่มี Bardic Inspiration/)
   bard.resources![0].used = 3
   assert.throws(() => run(mira, { type: 'classFeature', actorId: 'bard', feature: 'bardicInspiration', targetId: 'fig' }), /ไม่มี Bardic Inspiration เหลือ/)
+})
+
+test('DM notes on a scene and a sheet reach the DM only, even on the player’s own sheet', () => {
+  const { room, run } = table()
+  run(dm, { type: 'dmNotes', notes: 'กับดักใต้แท่นบูชา' })
+  run(dm, { type: 'dmNotes', actorId: 'wiz', notes: 'ถูกสาปโดยลิช' })
+  assert.throws(() => run(mira, { type: 'dmNotes', notes: 'x' }), /DM/)
+  assert.equal(snapshot(room, dm).scenes[0].dmNotes, 'กับดักใต้แท่นบูชา')
+  assert.equal(snapshot(room, dm).actors.find(item => item.id === 'wiz')!.dmNotes, 'ถูกสาปโดยลิช')
+  const seen = JSON.stringify(snapshot(room, mira))
+  assert.ok(!seen.includes('กับดัก') && !seen.includes('ลิช'), 'nothing of either note goes to the player')
+  // The player saving their own sheet keeps the DM's note.
+  run(mira, { type: 'sheet', actorId: 'wiz', sheet: { ...room.actors[0], name: 'Wizard the Grey' } })
+  assert.equal(room.actors[0].dmNotes, 'ถูกสาปโดยลิช')
+  run(dm, { type: 'dmNotes', notes: '' })
+  assert.equal(room.scenes[0].dmNotes, undefined)
 })

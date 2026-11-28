@@ -210,3 +210,10 @@
 .class-feature-row { display: flex; gap: 6px; }
 .class-feature-row select { flex: 0 1 40%; min-width: 0; }
 .class-feature-row .class-feature { flex: 1; }
+
+/* DM secret notes (0.13) */
+.dm-notes { display: grid; gap: 6px; margin-top: 8px; padding: 8px; border: 1px dashed var(--bh-brass); border-radius: var(--bh-radius-md); }
+.dm-notes label { display: grid; gap: 4px; }
+.dm-notes label > span { display: inline-flex; align-items: center; gap: 4px; font-size: var(--bh-text-xs); }
+.dm-notes textarea { width: 100%; resize: vertical; font: inherit; }
+.dm-notes button { justify-self: end; }

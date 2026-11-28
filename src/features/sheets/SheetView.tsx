@@ -22,6 +22,7 @@ import { RestPanel } from './RestPanel.tsx'
 import { Spellbook } from '../spells/Spellbook.tsx'
 import { inspirationDie } from '../../../shared/classFeatures.ts'
 import { ClassFeatures } from './ClassFeatures.tsx'
+import { DmNotes } from '../table/DmNotes.tsx'
 import type { DrawArea } from '../spells/Spellbook.tsx'
 
 type Tab = 'overview' | 'actions' | 'spells' | 'rest' | 'inventory' | 'notes'
@@ -283,6 +284,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
         {actor.monsterReference && <details open><summary>Stat block{actor.monsterReference.page && ' · SRD หน้า ' + actor.monsterReference.page}</summary>
           <p className="stat-block">{actor.monsterReference.statBlock}</p></details>}
         {!actor.characterDetails && !actor.skills && !actor.saves && !actor.monsterReference && <p className="sheet-note">ยังไม่มีบันทึก · เพิ่มได้จากปุ่มแก้ชีต</p>}
+        {dm && <DmNotes key={actor.id + (actor.dmNotes ?? '')} notes={actor.dmNotes} label="โน้ตลับของ DM" send={send} target={{ actorId: actor.id }} />}
       </div>}
     </div>
     {levelling && <LevelUpDialog actor={actor} send={send} close={() => setLevelling(false)} />}
