@@ -1,6 +1,6 @@
-import { readFile } from 'node:fs/promises'
+import { Worker } from 'node:worker_threads'
 import { resolve } from 'node:path'
-import sharp from 'sharp'
+import type { Grid } from './mapMaskRender.ts'
 import type { MapAsset } from '../shared/model.ts'
 
 /**
@@ -11,13 +11,13 @@ import type { MapAsset } from '../shared/model.ts'
  *   original ──► RGB ──► pixels outside the mask (known squares, row by row) set to the fog colour ──► WebP
  *
  * Renders are cached by map, player and the exact set of known squares, and
- * identical requests in flight share one render.
+ * identical requests in flight share one render. Since 0.17 the pixel work
+ * runs in one worker thread, so a big map no longer stalls other rooms' commands.
  */
-export type Grid = { cell: number; originX: number; originY: number }
+export type { Grid } from './mapMaskRender.ts'
+export { maskPixels } from './mapMaskRender.ts'
 
 const cacheSize = 32
-/** The board's fog colour (#0b0806). */
-const fog = { r: 11, g: 8, b: 6 }
 const cache = new Map<string, Promise<Buffer>>()
 
 /** A short, order-free fingerprint of the known squares (FNV-1a over the sorted keys). */
@@ -30,38 +30,43 @@ function fingerprint(known: Set<string>) {
   return (hash >>> 0).toString(36) + '.' + known.size
 }
 
-/** One byte per pixel: 255 inside a known square, 0 elsewhere. Each square row is built once and copied. */
-export function maskPixels(width: number, height: number, grid: Grid, known: Set<string>) {
-  const mask = Buffer.alloc(width * height)
-  const column = new Int32Array(width)
-  for (let x = 0; x < width; x++) column[x] = Math.floor((x + .5 - grid.originX) / grid.cell)
-  let row = -Infinity
-  let template = Buffer.alloc(width)
-  for (let y = 0; y < height; y++) {
-    const cellY = Math.floor((y + .5 - grid.originY) / grid.cell)
-    if (cellY !== row) {
-      row = cellY
-      template = Buffer.alloc(width)
-      for (let x = 0; x < width; x++) if (known.has(column[x] + ',' + cellY)) template[x] = 255
+/** One long-lived worker; jobs are matched to replies by number. If it dies, waiting jobs fail and the next one starts a new worker. */
+let worker: Worker | undefined
+let next = 0
+/** An idle worker is stopped after a few seconds (sharp inside it would otherwise keep the process alive). */
+let idle: ReturnType<typeof setTimeout> | undefined
+const idleMs = 5000
+const waiting = new Map<number, { done: (bytes: Buffer) => void; fail: (error: Error) => void }>()
+function renderInWorker(path: string, grid: Grid, known: Set<string>) {
+  if (!worker) {
+    const started = new Worker(new URL('./mapMaskWorker.ts', import.meta.url))
+    started.unref()
+    started.on('message', (reply: { job: number; bytes?: Uint8Array; error?: string }) => {
+      const entry = waiting.get(reply.job)
+      waiting.delete(reply.job)
+      if (reply.bytes) entry?.done(Buffer.from(reply.bytes.buffer, reply.bytes.byteOffset, reply.bytes.byteLength))
+      else entry?.fail(new Error(reply.error ?? 'ตัดภาพแผนที่ไม่สำเร็จ'))
+      if (!waiting.size) {
+        idle = setTimeout(() => { if (worker === started && !waiting.size) { worker = undefined; void started.terminate() } }, idleMs)
+        idle.unref()
+      }
+    })
+    const lost = (error: Error) => {
+      if (worker === started) worker = undefined
+      for (const entry of waiting.values()) entry.fail(error)
+      waiting.clear()
     }
-    template.copy(mask, y * width)
+    started.on('error', lost)
+    started.on('exit', () => lost(new Error('ตัวตัดภาพแผนที่หยุดทำงาน')))
+    worker = started
   }
-  return mask
-}
-
-async function render(path: string, grid: Grid, known: Set<string>) {
-  const source = await readFile(path)
-  const { width, height } = await sharp(source).metadata()
-  if (!width || !height) throw new Error('อ่านขนาดภาพแผนที่ไม่ได้')
-  const mask = maskPixels(width, height, grid, known)
-  // Decode to RGB (a transparent map sits on the fog colour), paint unknown pixels, encode once.
-  const rgb = await sharp(source).flatten({ background: fog }).removeAlpha().raw().toBuffer()
-  for (let index = 0; index < mask.length; index++) {
-    if (mask[index]) continue
-    const at = index * 3
-    rgb[at] = fog.r; rgb[at + 1] = fog.g; rgb[at + 2] = fog.b
-  }
-  return sharp(rgb, { raw: { width, height, channels: 3 } }).webp({ quality: 82 }).toBuffer()
+  clearTimeout(idle)
+  const job = ++next
+  const running = worker
+  return new Promise<Buffer>((done, fail) => {
+    waiting.set(job, { done, fail })
+    running.postMessage({ job, path, grid, known: [...known] })
+  })
 }
 
 /** The masked map for one player, as WebP bytes. */
@@ -73,7 +78,7 @@ export function maskedMap(assets: string, map: MapAsset, memberId: string, grid:
     cache.set(key, job)
     return job
   }
-  job = render(resolve(assets, map.id), grid, known)
+  job = renderInWorker(resolve(assets, map.id), grid, known)
   job.catch(() => cache.delete(key))
   cache.set(key, job)
   while (cache.size > cacheSize) cache.delete(cache.keys().next().value!)
