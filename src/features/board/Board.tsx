@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent } from 'react'
 import { Crosshair, Grid3x3, Maximize, Minus, MousePointer2, MoreHorizontal, Plus, Ruler } from 'lucide-react'
 import { damageKinds, sizes } from '../../../shared/model.ts'
-import { areaContains, areaOutline, validArea } from '../../../shared/area.ts'
+import { areaContains, areaOutline, sizedArea, validArea } from '../../../shared/area.ts'
 import type { Area, AreaKind, AreaOutline } from '../../../shared/area.ts'
 import { tokenColor, tokenInitials } from './tokenAppearance.ts'
 import { newStrikes } from './strikes.ts'
@@ -43,6 +43,10 @@ type Props = {
   mainTokenId?: string
   actions: (token: Token | undefined, position: Point, object?: SceneObject) => Action[]
   focus?: { actorId: string; sequence: number }; areaKind?: AreaKind; preview?: Area; onArea?: (area: Area) => void
+  /** A spell's fixed template size in squares: the drag only aims it. */
+  areaSize?: number
+  /** Shown at the top while a spell's template is being placed. */
+  areaLabel?: string
   /** A sheet or monster card dropped on a cell. */
   drop?: (payload: TokenDragPayload, cell: Point) => void
   /** DM dragged an object to a new cell. */
@@ -67,7 +71,7 @@ type Gesture = {
 const editableTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && Boolean(target.closest('input,select,textarea,[contenteditable]'))
 
-export function Board({ room, scene, selected, targetId, select, move, copy, paste, place, placementLabel, mainTokenId, actions, focus, areaKind, preview, onArea, drop, moveObject, calibrate, gridOverride, quickHp, command, attackDrop }: Props) {
+export function Board({ room, scene, selected, targetId, select, move, copy, paste, place, placementLabel, mainTokenId, actions, focus, areaKind, areaSize, areaLabel, preview, onArea, drop, moveObject, calibrate, gridOverride, quickHp, command, attackDrop }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ x: 640, y: 480 })
   const [camera, setCamera] = useState({ x: 36, y: 36 })
@@ -411,6 +415,7 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
     }
     setMenu({ pixel: point, cell: cell(point), token, object })
   }
+  const sized = (area: Area) => areaSize ? sizedArea(area, areaSize) : area
   function cancelGesture() {
     clearTimeout(longPress.current)
     gesture.current = null
@@ -437,7 +442,7 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
     if (pan) event.preventDefault()
     if (areaKind && !pan && !place) {
       gesture.current = { from: point, camera, mode: 'area', tokens: [], moved: false }
-      setAreaDraft({ kind: areaKind, from: areaPoint(point), to: areaPoint(point) })
+      setAreaDraft(sized({ kind: areaKind, from: areaPoint(point), to: areaPoint(point) }))
       return
     }
     if (calibrate && !pan) {
@@ -550,7 +555,7 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
       action.moved = true
       clearTimeout(longPress.current)
     }
-    if (action.mode === 'area' && areaKind) setAreaDraft({ kind: areaKind, from: areaPoint(action.from), to: areaPoint(point) })
+    if (action.mode === 'area' && areaKind) setAreaDraft(sized({ kind: areaKind, from: areaPoint(action.from), to: areaPoint(point) }))
     else if (action.mode === 'measure') setRuler({ from: cell(action.from), to: cell(point) })
     else if (action.mode === 'select') setSelection({ from: action.from, to: point })
     else if (action.mode === 'calibrate') setCalibration({ from: action.from, to: point })
@@ -581,7 +586,7 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         : { type: 'darkness', cells: [...painting], mode: visionTool === 'magic' ? 'magic' : visionTool === 'dark' ? 'dark' : 'clear' })
       setPainting(undefined)
     } else if (action?.mode === 'area' && areaKind) {
-      const area = { kind: areaKind, from: areaPoint(action.from), to: areaPoint(pointer(event)) }
+      const area = sized({ kind: areaKind, from: areaPoint(action.from), to: areaPoint(pointer(event)) })
       if (validArea(area)) onArea?.(area)
       setAreaDraft(undefined)
     } else if (action?.mode === 'move' && action.delta && (action.delta.x || action.delta.y)) {
@@ -804,6 +809,7 @@ export function Board({ room, scene, selected, targetId, select, move, copy, pas
         {...(action.roll ? rollMenuProps(action.roll, { odds: action.odds, title: action.label }) : {})} onClick={action.run}>{action.label}</button>)}
     </div>}
     {place && <div className="placing">{placementLabel ?? 'คลิกช่องเพื่อวาง Token'}</div>}
+    {areaKind && areaLabel && !place && <div className="placing">{areaLabel}</div>}
     {dragBudget && <div className={'move-budget' + (dragBudget.used > dragBudget.speed ? ' over' : '')} role="status">
       เดิน {dragBudget.used}/{dragBudget.speed} ฟุต{dragBudget.used > dragBudget.speed ? ' · เกิน Speed' : ''}</div>}
     {selectionCount > 1 && <div className="selection-count" role="status">เลือก {selectionCount} {objectGroup.length ? 'ชิ้น' : 'Token'}</div>}

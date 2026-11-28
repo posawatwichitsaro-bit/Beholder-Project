@@ -3,6 +3,7 @@ import type { CSSProperties, DragEvent } from 'react'
 import { Copy, Crosshair, Eye, GripVertical, Grid3x3, ImageUp, Plus, Trash2 } from 'lucide-react'
 import type { Scene, Snapshot } from '../../../shared/model.ts'
 import type { Command, Send } from '../../state/useCommand.ts'
+import { DmNotes } from '../table/DmNotes.tsx'
 
 const dragType = 'application/x-beholder-scene'
 
@@ -85,6 +86,7 @@ export function ScenePanel({ room, scene, send, commandHere, switchView, createS
       }}><option value="">ใช้ภาพจากฉากอื่น</option>
         {room.scenes.filter(item => item.id !== scene.id && item.map).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select>}
+      <DmNotes key={scene.id + (scene.dmNotes ?? '')} notes={scene.dmNotes} label="โน้ตลับของฉาก" send={send} target={{ sceneId: scene.id }} />
     </section>}
 
     {inviteLink && <details className="invite"><summary>เชิญผู้เล่น</summary><input aria-label="ลิงก์เชิญ" readOnly value={inviteLink} onFocus={event => event.target.select()} />

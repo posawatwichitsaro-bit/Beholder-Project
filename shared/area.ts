@@ -38,3 +38,18 @@ export function areaContains(outline: AreaOutline, point: GridPoint) {
 export function validArea({ kind, from, to }: Area) {
   return kind === 'rectangle' ? from.x !== to.x && from.y !== to.y : from.x !== to.x || from.y !== to.y
 }
+
+/**
+ * A spell's template at its own size (0.13): the drag only aims it. Circles get the radius, cones and
+ * lines the length (pointing at the drag, else to the right), cubes a square of that side toward the drag.
+ */
+export function sizedArea(area: Area, squares: number): Area {
+  const dx = area.to.x - area.from.x
+  const dy = area.to.y - area.from.y
+  if (area.kind === 'rectangle') {
+    return { ...area, to: { x: area.from.x + (dx < 0 ? -squares : squares), y: area.from.y + (dy < 0 ? -squares : squares) } }
+  }
+  const length = Math.hypot(dx, dy)
+  const [ux, uy] = length ? [dx / length, dy / length] : [1, 0]
+  return { ...area, to: { x: area.from.x + ux * squares, y: area.from.y + uy * squares } }
+}

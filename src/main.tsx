@@ -13,6 +13,7 @@ import './features/manage/manage.css'
 import './features/help/help.css'
 import './features/manual/manual.css'
 import './features/items/items.css'
+import './features/spells/spells.css'
 import { createRoot } from 'react-dom/client'
 import { App } from './app/App.tsx'
 

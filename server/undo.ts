@@ -16,16 +16,19 @@ import type { Member, Room, Scene, UndoStep } from '../shared/model.ts'
  * rolled dice a player gets back only changes to their own creatures (a spent
  * slot, an Action), not the damage the roll did. The DM may undo their own
  * rolls: the roll stays in the log marked undone, and the HP it took comes back.
+ *
+ * Redo (0.13, Ctrl+Y / Ctrl+Shift+Z) puts back what this member last undid,
+ * under the same rule; doing anything else clears it.
  */
 type UndoUnit = UndoStep['units'][number]
 export const undoDepth = 20
 
 /** Commands that are never undone: undo itself, chat, and moving between scenes is a reset. */
-const skip = new Set(['undo', 'chat'])
+const skip = new Set(['undo', 'redo', 'chat'])
 export const undoLabels: Record<string, string> = {
   move: 'การเดิน', moveTokens: 'การเดิน', stepCharacter: 'การเดิน', standUp: 'การลุกขึ้น',
   damage: 'การหัก HP', areaDamage: 'ความเสียหายแบบพื้นที่', heal: 'การรักษา', adjustHp: 'การปรับ HP',
-  sheetRoll: 'การทอยจากชีต', roll: 'การทอย', castSave: 'การร่ายเวท', spellSave: 'การทอยเซฟ', effectSave: 'การทอยเซฟ',
+  sheetRoll: 'การทอยจากชีต', roll: 'การทอย', castSave: 'การร่ายเวท', cast: 'การร่ายเวท', classFeature: 'การใช้ความสามารถของคลาส', dmNotes: 'การแก้โน้ตของ DM', spellbook: 'การแก้รายการเวท', spellSave: 'การทอยเซฟ', effectSave: 'การทอยเซฟ',
   conditions: 'การเปลี่ยน Condition', addEffect: 'การเพิ่ม effect', removeEffect: 'การลบ effect',
   slots: 'การใช้ช่องเวท', useResource: 'การใช้ทรัพยากร', spendHitDie: 'การใช้ Hit Die', rest: 'การพัก', magicalCunning: 'Magical Cunning',
   turnAction: 'การใช้ Action', sheet: 'การแก้ชีต', inventoryAdd: 'การเพิ่มไอเทม', inventoryRemove: 'การนำไอเทมออก', inventoryBonus: 'การตั้งโบนัสเวท',
@@ -116,11 +119,17 @@ export function beforeCommand(room: Room): Before {
  * After a command: keep what it changed as this member's newest undo step.
  * Moving the table to another scene or starting a new round of a fight clears everyone's steps.
  */
-export function afterCommand(room: Room, member: Member, type: string, before: Before) {
+export function afterCommand(room: Room, member: Member, type: string, before: Before, alsoOwn: string[] = []) {
   const roundUp = room.scenes.some(scene => scene.combat && (before.rounds.get(scene.id) ?? scene.combat.round) < scene.combat.round)
   if (room.activeSceneId !== before.active || roundUp) {
     delete room.undoSteps
+    delete room.redoSteps
     return
+  }
+  // Something new was done: what this member undid can no longer be redone.
+  if (room.redoSteps?.[member.id]) {
+    const { [member.id]: _gone, ...rest } = room.redoSteps
+    room.redoSteps = rest
   }
   const now = units(room)
   const keys = new Set([...before.prints.keys(), ...now.keys()])
@@ -134,8 +143,9 @@ export function afterCommand(room: Room, member: Member, type: string, before: B
   const rollIds = room.rolls.slice(before.rolls).map(roll => roll.id)
   // A player's dice stand: from a step that rolled, keep only changes to their own creatures.
   if (member.role !== 'dm' && rollIds.length) {
-    const own = new Set(room.actors.filter(actor => actor.ownerId === member.id).map(actor => 'actor:' + actor.id))
-    changed = changed.filter(unit => own.has(unit.key))
+    const own = new Set([...room.actors.filter(actor => actor.ownerId === member.id).map(actor => actor.id), ...alsoOwn].map(id => 'actor:' + id))
+    // …and that creature's Action use in a fight (scene:<id>:use:<actor>).
+    changed = changed.filter(unit => own.has(unit.key) || own.has('actor:' + (/:use:(.+)$/.exec(unit.key)?.[1] ?? '')))
   }
   if (!changed.length && !(member.role === 'dm' && rollIds.length)) return
   const step: UndoStep = { at: Date.now(), label: undoLabels[type] ?? 'การกระทำ', units: changed, ...(member.role === 'dm' && rollIds.length ? { rollIds } : {}) }
@@ -203,21 +213,41 @@ function restore(room: Room, key: string, value: unknown) {
 }
 
 /**
+ * Apply a step's old values if nobody changed its units since, and return the step that reverses it
+ * (each unit's value now and the fingerprint it is left at). Rolls are marked undone, or back.
+ */
+function swap(room: Room, step: UndoStep, undone: boolean): UndoStep | undefined {
+  const now = units(room)
+  if (step.units.some(unit => fingerprint(now.get(unit.key)) !== unit.after)) return undefined
+  const current = new Map(step.units.map(unit => [unit.key, now.get(unit.key) === undefined ? undefined : JSON.parse(textOf(now.get(unit.key)))]))
+  for (const unit of step.units) restore(room, unit.key, unit.before)
+  const after = units(room)
+  for (const id of step.rollIds ?? []) {
+    const roll = room.rolls.find(item => item.id === id)
+    if (roll) roll.undone = undone || undefined
+  }
+  return { ...step, at: Date.now(), units: step.units.map(unit => ({ key: unit.key, before: current.get(unit.key), after: fingerprint(after.get(unit.key)) })) }
+}
+
+type Outcome = { result: 'done' | 'blocked' | 'empty'; label?: string }
+/** Move this member's newest step from one list to the other, applying it on the way. */
+function move(room: Room, member: Member, from: 'undoSteps' | 'redoSteps', undone: boolean): Outcome {
+  const to = from === 'undoSteps' ? 'redoSteps' : 'undoSteps'
+  const steps = room[from]?.[member.id] ?? []
+  const step = steps.at(-1)
+  if (!step) return { result: 'empty' }
+  room[from] = { ...room[from], [member.id]: steps.slice(0, -1) }
+  const reverse = swap(room, step, undone)
+  if (!reverse) return { result: 'blocked', label: step.label }
+  room[to] = { ...room[to], [member.id]: [...(room[to]?.[member.id] ?? []), reverse].slice(-undoDepth) }
+  return { result: 'done', label: step.label }
+}
+
+/**
  * Take back this member's newest step. Returns what happened: undone, or
  * dropped because someone else changed it since (then the next Ctrl+Z goes
  * one step further back), or nothing left.
  */
-export function undoLast(room: Room, member: Member): { result: 'undone' | 'blocked' | 'empty'; label?: string } {
-  const steps = room.undoSteps?.[member.id] ?? []
-  const step = steps.at(-1)
-  if (!step) return { result: 'empty' }
-  room.undoSteps = { ...room.undoSteps, [member.id]: steps.slice(0, -1) }
-  const now = units(room)
-  if (step.units.some(unit => fingerprint(now.get(unit.key)) !== unit.after)) return { result: 'blocked', label: step.label }
-  for (const unit of step.units) restore(room, unit.key, unit.before)
-  for (const id of step.rollIds ?? []) {
-    const roll = room.rolls.find(item => item.id === id)
-    if (roll) roll.undone = true
-  }
-  return { result: 'undone', label: step.label }
-}
+export const undoLast = (room: Room, member: Member) => move(room, member, 'undoSteps', true)
+/** Put back what this member last undid (same rules as undo). */
+export const redoLast = (room: Room, member: Member) => move(room, member, 'redoSteps', false)

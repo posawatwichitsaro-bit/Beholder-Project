@@ -1432,6 +1432,90 @@ test('0.12: action chips, an Opportunity Attack card, Difficult Terrain, a whisp
 })
 
 /** From the lobby, open a new table as DM. With tables already on the shelf the form sits behind "เขียนเรื่องใหม่". */
+test('0.13: a wizard turns old spell notes into SRD spells, adds one from the catalog, casts Fireball on the board and heals', { timeout: 90000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const mira = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const room: Snapshot = await (await dm.request.post(base + '/api/rooms', { data: { name: 'Release 0.13 spells', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const state = async () => (await (await dm.request.get(path)).json()) as Snapshot
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: (await state()).revision } })
+    assert.equal(response.status(), 200, await response.text())
+  }
+  await command(dm, { type: 'scene', name: 'Crypt', cell: 48, originX: 0, originY: 0 })
+  const sceneId = (await state()).scenes[0].id
+  await command(dm, { type: 'place', sceneId, kind: 'monster', sheet: { ...blankSheet('monster'), name: 'Ghoul A', hp: 30, maxHp: 30 }, x: 6, y: 2 })
+  await command(dm, { type: 'place', sceneId, kind: 'monster', sheet: { ...blankSheet('monster'), name: 'Ghoul B', hp: 30, maxHp: 30 }, x: 7, y: 3 })
+  assert.equal((await mira.request.post(base + '/api/join', { data: { invite: room.invite, name: 'Mira', role: 'player' } })).status(), 200)
+  await command(mira, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Lyra', classLevel: 'Wizard 5', hp: 5, maxHp: 30, spellDC: 15, spellAttack: 7,
+    slots: 'L1 4/4, L2 3/3, L3 2/2', spells: 'Cantrips: Fire Bolt. Prepared: Fireball, Cure Wounds' } })
+  const lyra = (await state()).actors.find(actor => actor.name === 'Lyra')!
+  await command(mira, { type: 'place', sceneId, actorId: lyra.id, role: 'character', x: 0, y: 2 })
+  await mira.goto(base + '/room/' + room.id)
+  await openPanel(mira, 'ชีตในห้อง')
+  await mira.getByRole('button', exact('Lyra')).click()
+  const sheet = mira.getByRole('article', { name: 'ชีต Lyra' })
+  await sheet.getByRole('tab', exact('Spells')).click()
+
+  // The old free text becomes catalog spells; one more comes from the SRD catalog, filtered to Wizard spells.
+  await sheet.getByRole('button', exact('แปลงจากข้อความเดิม')).click()
+  await sheet.getByRole('button', exact('ร่าย Fireball')).waitFor()
+  await sheet.getByRole('button', exact('เพิ่มเวท')).click()
+  const picker = sheet.getByRole('region', exact('คลังเวท SRD'))
+  await picker.getByText('เฉพาะเวทของ Wizard').waitFor()
+  await picker.getByLabel('ค้นหาเวท').fill('Shield')
+  await picker.getByRole('button', exact('ดูเวท Shield')).click()
+  await picker.getByRole('button', exact('เพิ่มเวทลงชีต')).click()
+  await sheet.getByRole('button', exact('ร่าย Shield')).waitFor()
+  await picker.getByRole('button', exact('ปิดคลังเวท')).click()
+  assert.deepEqual((await state()).actors.find(actor => actor.id === lyra.id)!.spellbook!.map(entry => entry.id.split(':').pop()).sort(),
+    ['cure-wounds', 'fire-bolt', 'fireball', 'shield'])
+
+  // Fireball: place the 20-ft sphere on the board; both ghouls are asked for a DEX save against 8d6, one level 3 slot gone.
+  await sheet.getByRole('button', exact('ร่าย Fireball')).click()
+  await sheet.getByRole('button', exact('วางพื้นที่บนกระดาน')).click()
+  await mira.getByText(/ลากเพื่อวาง Fireball/).waitFor()
+  const frame = (await mira.locator(boardCanvas).boundingBox())!
+  const cellAt = (x: number, y: number) => ({ x: frame.x + 36 + x * 48, y: frame.y + 36 + y * 48 })
+  const from = cellAt(7, 3)
+  const to = cellAt(8, 3)
+  await mira.mouse.move(from.x, from.y)
+  await mira.mouse.down()
+  await mira.mouse.move(to.x, to.y, { steps: 5 })
+  await mira.mouse.up()
+  await waitInPage(mira, async url => (await (await fetch(url)).json()).rolls.filter((roll: { cast?: unknown }) => roll.cast).length === 2, path)
+  const after = await state()
+  assert.deepEqual(after.rolls.filter(roll => roll.cast).map(roll => [roll.cast!.ability, roll.cast!.dc, roll.cast!.damage]), [['DEX', 15, '8d6'], ['DEX', 15, '8d6']])
+  assert.match(after.actors.find(actor => actor.id === lyra.id)!.slots, /L3 1\/2/)
+
+  // Cure Wounds on herself heals at once.
+  await sheet.getByRole('button', exact('ร่าย Cure Wounds')).click()
+  await sheet.getByRole('button', { name: /^ร่าย Cure Wounds · ช่องระดับ 1/ }).click()
+  await waitInPage(mira, async arg => ((await (await fetch(arg.path)).json()).actors.find((actor: { id: string; hp: number }) => actor.id === arg.id)?.hp ?? 0) > 5, { path, id: lyra.id })
+  assert.ok((await state()).log!.some(entry => /Lyra ฟื้น \d+ HP จาก Cure Wounds/.test(entry.text)))
+  const healed = (await state()).actors.find(actor => actor.id === lyra.id)!.hp
+
+  // Ctrl+Z takes the healing back (her own cast), Ctrl+Y puts it back.
+  await mira.locator('body').click({ position: { x: 5, y: 400 } }).catch(() => {})
+  await mira.keyboard.press('Control+z')
+  await waitInPage(mira, async arg => (await (await fetch(arg.path)).json()).actors.find((actor: { id: string; hp: number }) => actor.id === arg.id)?.hp === 5, { path, id: lyra.id })
+  await mira.keyboard.press('Control+y')
+  await waitInPage(mira, async arg => (await (await fetch(arg.path)).json()).actors.find((actor: { id: string; hp: number }) => actor.id === arg.id)?.hp === arg.hp, { path, id: lyra.id, hp: healed })
+
+  // The DM's secret note on Lyra's sheet never reaches Mira.
+  await dm.goto(base + '/room/' + room.id)
+  await openPanel(dm, 'ชีตในห้อง')
+  await dm.getByRole('button', exact('Lyra')).click()
+  const dmSheet = dm.getByRole('article', { name: 'ชีต Lyra' })
+  await dmSheet.getByRole('tab', exact('Notes')).click()
+  await dmSheet.getByPlaceholder('เช่น กับดัก ความลับ แผนของศัตรู').fill('ลิชตามล่าเธออยู่')
+  await dmSheet.getByRole('button', exact('บันทึกโน้ต')).click()
+  await waitInPage(dm, async url => (await (await fetch(url)).json()).actors.some((actor: { dmNotes?: string }) => actor.dmNotes === 'ลิชตามล่าเธออยู่'), path)
+  assert.ok(!(await (await mira.request.get(path)).text()).includes('ลิชตามล่า'))
+})
+
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')
   const write = page.getByRole('button', exact('เขียนเรื่องใหม่'))

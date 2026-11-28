@@ -132,6 +132,8 @@ export function Table({ account, changeAccount }: AccountProps) {
   const [cameraFocus, setCameraFocus] = useState<{ actorId: string; sequence: number }>()
   const [areaKind, setAreaKind] = useState<AreaKind>()
   const [areaPreview, setAreaPreview] = useState<Area>()
+  /** A spell's template being placed from a sheet (0.13); its cast goes out once placed. */
+  const [spellArea, setSpellArea] = useState<{ kind: AreaKind; squares: number; label: string; done: (area: Area) => void }>()
   const [amounts, setAmounts] = useState<Record<string, number>>({})
   const [older, setOlder] = useState<Roll[]>([])
   const [historyEnded, setHistoryEnded] = useState(false)
@@ -213,7 +215,7 @@ export function Table({ account, changeAccount }: AccountProps) {
   }
   // Play keys while the board (or nothing) has focus: Enter ends your turn, Tab picks the next target,
   // 1–3 attack the target with your main attack and the next two, Ctrl+Z (DM) undoes the last move or HP change.
-  const playKeys = useRef<{ endTurn?: () => void; nextTarget: (back: boolean) => void; attack: (n: number) => boolean; undo?: () => void }>(undefined)
+  const playKeys = useRef<{ endTurn?: () => void; nextTarget: (back: boolean) => void; attack: (n: number) => boolean; undo?: () => void; redo?: () => void }>(undefined)
   {
     const current = combat?.order[combat.turn]?.actorId
     const mineNow = !dm && current ? ownedHere.find(item => item.id === current) : undefined
@@ -239,7 +241,8 @@ export function Table({ account, changeAccount }: AccountProps) {
         void commandHere({ type: 'sheetRoll', rollType: 'attack', actorId: acting.id, targetId: target, weaponIndex })
         return true
       },
-      undo: () => void send({ type: 'undo' })
+      undo: () => void send({ type: 'undo' }),
+      redo: () => void send({ type: 'redo' })
     }
   }
   useEffect(() => {
@@ -252,6 +255,11 @@ export function Table({ account, changeAccount }: AccountProps) {
       if (!keys) return
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z' && !typingTarget(target)) {
         if (keys.undo) { event.preventDefault(); keys.undo() }
+        return
+      }
+      // Redo: Ctrl+Y or Ctrl+Shift+Z.
+      if ((event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z')) && !typingTarget(target)) {
+        if (keys.redo) { event.preventDefault(); keys.redo() }
         return
       }
       if (!onBoard || event.ctrlKey || event.metaKey) return
@@ -293,7 +301,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     setFocusScene(id); setPlacing(undefined); setPlacementPoint(undefined); setCombatTarget('')
     setObjectTarget(undefined); setLootTarget(undefined); setObjectImport(undefined); setObjectPlacement(undefined); setItemPlacement(undefined)
   }
-  function clearArea() { setAreaKind(undefined); setAreaPreview(undefined) }
+  function clearArea() { setAreaKind(undefined); setAreaPreview(undefined); setSpellArea(undefined) }
   useEffect(() => { setOlder([]); setHistoryEnded(false) }, [room.activeSceneId])
   useEffect(() => { setCombatTarget(nearestFoe(room, scene) ?? ''); clearArea() }, [scene?.id, combat?.round, combat?.turn])
   useEffect(() => { if (!combatOpen) clearArea() }, [combatOpen])
@@ -530,6 +538,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     </>,
     actor: () => actor ? <SheetView key={actor.id} actor={actor} scene={scene} room={room} preferredTarget={attackTarget} chooseTarget={setAttackTarget}
       edit={() => setSheet({ initial: actor, actor })} copy={() => saveToLibrary(actor)}
+      drawArea={(shape, done) => setSpellArea({ ...shape, done })}
       send={send} /> : <EmptyState title="ยังไม่ได้เลือกตัวละคร" hint="เลือกจากชีตในห้อง (T) หรือคลิก Token บนกระดาน" />,
     log: () => <AdventureLog room={room} send={send} />,
     dice: () => <>
@@ -547,6 +556,9 @@ export function Table({ account, changeAccount }: AccountProps) {
             onChange={event => setSaveProficiency({ ...saveProficiency, [roll.id]: event.target.checked })} />Proficient</label>
           <button onClick={() => void commandHere({ type: 'spellSave', rollId: roll.id, proficient: saveProficiency[roll.id] })}>ทอยให้ {actorName(roll.cast.targetId)}</button>
         </div>}
+        {roll.offer && (dm || room.actors.some(item => item.id === roll.offer!.sourceId)) && !room.publicActors.find(item => item.id === roll.offer!.targetId)?.effects?.some(effect => effect.condition === roll.offer!.condition && effect.sourceId === roll.offer!.sourceId)
+          && <div className="inline damage"><button onClick={() => void commandHere({ type: 'addEffect', sourceId: roll.offer!.sourceId, targetIds: [roll.offer!.targetId],
+            condition: roll.offer!.condition, sourceLabel: roll.offer!.label, ...(roll.offer!.concentration ? { concentration: true } : {}) })}>ใส่ {roll.offer.condition} ให้ {actorName(roll.offer.targetId)}</button></div>}
         {dm && roll.targetId && roll.applied === false && <small className="pending-note">รอยืนยันในคิว “รอการตัดสิน”</small>}
       </li>)}</ol>
       {!historyEnded && history.length >= 40 && <button onClick={async () => {
@@ -591,6 +603,7 @@ export function Table({ account, changeAccount }: AccountProps) {
     ...(mainToken ? [{ id: 'focus-main', label: 'ไปที่ ' + actorName(mainToken.actorId), group: 'กระดาน', keywords: 'camera center main character ตัวหลัก', run: focusMain }] : []),
     ...(inviteLink ? [{ id: 'invite', label: 'คัดลอกลิงก์เชิญผู้เล่น', group: 'โต๊ะ', keywords: 'invite link share เชิญ', run: () => void copyInvite() }] : []),
     { id: 'undo', label: 'ย้อนสิ่งที่ฉันทำล่าสุด (Ctrl+Z)', group: 'โต๊ะ', keywords: 'undo ย้อน ctrl z', run: () => void send({ type: 'undo' }) },
+    { id: 'redo', label: 'ทำซ้ำสิ่งที่เพิ่งย้อน (Ctrl+Y)', group: 'โต๊ะ', keywords: 'redo ทำซ้ำ ctrl y', run: () => void send({ type: 'redo' }) },
     { id: 'reset-ui', label: 'รีเซ็ตตำแหน่ง UI', group: 'โต๊ะ', keywords: 'reset layout ui move position รีเซ็ต ย้าย', run: () => usePrefs.getState().update({ layout: {} }) },
     { id: 'close-panels', label: 'ปิดแผงทั้งหมด', group: 'โต๊ะ', keywords: 'close hide escape', shortcut: 'Esc', run: () => { dispatchDock({ type: 'closeAll' }); setDmCombat(false) } },
     { id: 'tour', label: 'เริ่มทัวร์แนะนำ', group: 'ช่วยเหลือ', keywords: 'tour help guide ทัวร์ ช่วยเหลือ วิธีใช้', run: () => { closePanels(); setManageOpen(false); setTouring(true) } },
@@ -618,8 +631,12 @@ export function Table({ account, changeAccount }: AccountProps) {
         } : undefined}
         calibrate={calibratingScene ? rect => setCalibrating({ sceneId: calibratingScene.id, rect }) : undefined}
         gridOverride={calibratingScene ? gridPreview : undefined}
-        focus={cameraFocus} areaKind={combatOpen ? areaKind : undefined} preview={combatOpen ? areaPreview : undefined}
-        onArea={area => { setAreaPreview(area); setAreaKind(undefined) }}
+        focus={cameraFocus} areaKind={spellArea?.kind ?? (combatOpen ? areaKind : undefined)} preview={!spellArea && combatOpen ? areaPreview : undefined}
+        areaSize={spellArea?.squares} areaLabel={spellArea && 'ลากเพื่อวาง ' + spellArea.label + ' · Esc ยกเลิก'}
+        onArea={area => {
+          if (spellArea) { setSpellArea(undefined); spellArea.done(area); return }
+          setAreaPreview(area); setAreaKind(undefined)
+        }}
         select={value => {
           if (combatOpen && combat) {
             setCombatTarget(value === combat.order[combat.turn].actorId ? '' : value)

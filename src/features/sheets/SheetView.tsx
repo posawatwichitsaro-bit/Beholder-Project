@@ -19,6 +19,11 @@ import { readyToLevel, srdLink, srdFeats, xpForLevel, characterLevel } from '../
 import { GiveXp } from '../combat/XpAward.tsx'
 import { VisionFields } from './VisionFields.tsx'
 import { RestPanel } from './RestPanel.tsx'
+import { Spellbook } from '../spells/Spellbook.tsx'
+import { inspirationDie } from '../../../shared/classFeatures.ts'
+import { ClassFeatures } from './ClassFeatures.tsx'
+import { DmNotes } from '../table/DmNotes.tsx'
+import type { DrawArea } from '../spells/Spellbook.tsx'
 
 type Tab = 'overview' | 'actions' | 'spells' | 'rest' | 'inventory' | 'notes'
 type Mode = 'normal' | 'advantage' | 'disadvantage'
@@ -30,11 +35,13 @@ const signed = (value: number) => (value >= 0 ? '+' : '') + value
  * a weapon to attack with it. The roll options (advantage, proficiency, target,
  * cover) sit above and apply to the next roll. Editing opens SheetEditor.
  */
-export function SheetView({ actor, scene, room, send, edit, copy, preferredTarget, chooseTarget }: {
+export function SheetView({ actor, scene, room, send, edit, copy, preferredTarget, chooseTarget, drawArea }: {
   actor: Actor; scene?: Scene; room: Snapshot; send: Send; edit: () => void; copy: () => void
   /** The creature picked on the board; it becomes this sheet's target when it is in the scene. */
   preferredTarget?: string
   chooseTarget?: (id: string) => void
+  /** Place a spell's template on the board (area spells). */
+  drawArea?: DrawArea
 }) {
   const dm = room.me.role === 'dm'
   const xpRoom = room.settings?.advancement === 'xp'
@@ -66,8 +73,9 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
   const castLevel = slotLevel !== undefined && (slotLevel === 0 || (usePact ? pactLevels : slotLevels).some(slot => slot.level === slotLevel && slot.left > 0)) ? slotLevel : lowest
   type RollExtra = { ability?: Ability; skill?: Skill; weaponIndex?: number; slotLevel?: number }
   /** A sheet roll. `chosen` comes from the right-click menu; otherwise the Mode toggle, else the conditions decide. */
-  function roll(rollType: string, extra: RollExtra = {}, chosen?: RollMode) {
+  function roll(rollType: string, extra: RollExtra = {}, chosen?: RollMode, inspiration = false) {
     void send({
+      ...(inspiration ? { inspiration: true } : {}),
       type: 'sheetRoll', rollType, actorId: actor.id, sceneId: scene?.id, targetId,
       ability: extra.ability ?? 'STR', skill: extra.skill, weaponIndex: extra.weaponIndex, slotLevel: extra.slotLevel || undefined,
       ...(chosen ? { rollMode: chosen } : { advantage: mode === 'advantage', disadvantage: mode === 'disadvantage' }),
@@ -87,7 +95,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
     return rollOdds(actor, rollType === 'initiative' ? 'initiative' : rollType === 'save' ? 'save' : 'check', ability)
   }
   const menu = (rollType: string, extra: RollExtra = {}) =>
-    rollMenuProps(chosen => roll(rollType, extra, chosen), { odds: () => oddsFor(rollType, extra.ability), title: actor.name })
+    rollMenuProps((chosen, inspiration) => roll(rollType, extra, chosen, inspiration), { odds: () => oddsFor(rollType, extra.ability), title: actor.name, inspiration: () => inspirationDie(actor) })
   const saveBonus = (key: Ability) => {
     const saved = actor.savingThrows?.[key]
     return saved ? bonusForCheck(actor, saved) : abilityModifier(actor.abilities[key])
@@ -218,6 +226,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
           </div>)}
         </div>
         {!onBoard && <p className="sheet-note">วาง Token ของตัวละครนี้ในฉากก่อนจึงจะโจมตีได้</p>}
+        <ClassFeatures actor={actor} send={send} friends={targets.filter(item => !item.foe)} />
         <button type="button" className="sheet-wide" {...menu('initiative')} onClick={() => roll('initiative')}>ทอย Initiative {signed(actor.initiative)}</button>
       </>}
 
@@ -227,6 +236,9 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
           <div className="sheet-stat"><b>{actor.spellDC}</b><span>Spell DC</span></div>
         </div>
         {targeting}
+        <Spellbook actor={actor} room={room} scene={scene} send={send} targets={targets} targetId={targetId} drawArea={drawArea} />
+        <details className="sheet-manual-cast">
+          <summary>เวทนอกคลัง (กรอกเอง)</summary>
         <label className="sheet-slot-pick">ใช้ช่องเวท<select aria-label="ใช้ช่องเวท" value={(usePact ? 'p' : '') + castLevel} onChange={event => {
           const value = event.target.value
           setUsePact(value.startsWith('p'))
@@ -251,7 +263,8 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
           <label className="sheet-toggle"><input type="checkbox" checked={half} onChange={event => setHalf(event.target.checked)} />ผ่านแล้วรับความเสียหายครึ่งหนึ่ง</label>
           <button disabled={!targetId || !spellName.trim()}>ขอ {saveAbility} Save · DC {actor.spellDC}</button>
         </form>
-        {actor.spells && <p className="sheet-note">เวท / ความสามารถ · {actor.spells}</p>}
+        </details>
+        {actor.spells && <p className="sheet-note">โน้ตเวท / ความสามารถ · {actor.spells}</p>}
         <SlotTracker key={actor.slots} actor={actor} send={send} />
         {actor.pactSlots && <SlotTracker key={'pact' + actor.pactSlots} actor={actor} send={send} pact />}
       </>}
@@ -271,6 +284,7 @@ export function SheetView({ actor, scene, room, send, edit, copy, preferredTarge
         {actor.monsterReference && <details open><summary>Stat block{actor.monsterReference.page && ' · SRD หน้า ' + actor.monsterReference.page}</summary>
           <p className="stat-block">{actor.monsterReference.statBlock}</p></details>}
         {!actor.characterDetails && !actor.skills && !actor.saves && !actor.monsterReference && <p className="sheet-note">ยังไม่มีบันทึก · เพิ่มได้จากปุ่มแก้ชีต</p>}
+        {dm && <DmNotes key={actor.id + (actor.dmNotes ?? '')} notes={actor.dmNotes} label="โน้ตลับของ DM" send={send} target={{ actorId: actor.id }} />}
       </div>}
     </div>
     {levelling && <LevelUpDialog actor={actor} send={send} close={() => setLevelling(false)} />}

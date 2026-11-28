@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { abilities, blankSheet, damageKinds, nextLivingTurn, objectOwner, sizes } from '../shared/model.ts'
-import type { Actor, Combat, DamageKind, InventoryItem, LogEntry, LootSkill, Member, ObjectDefinition, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token, TokenRole } from '../shared/model.ts'
+import type { Actor, Combat, DamageKind, InventoryItem, KnownSpell, LogEntry, LootSkill, Member, ObjectDefinition, Roll, Room, Scene, SceneObject, Sheet, Snapshot, Token, TokenRole } from '../shared/model.ts'
 import { areaContains, areaLabels, areaOutline, validArea } from '../shared/area.ts'
 import type { Area } from '../shared/area.ts'
 import { d20, deathSave, die, harm, heal, Invalid, parseDice, rollDice, rollPool } from './rules.ts'
@@ -14,14 +14,17 @@ import type { ClassResource, Effect, HitDie as RestDie } from '../shared/model.t
 import type { CharacterCalculations, CheckBonus, HitDie, Skill } from '../shared/characterStats.ts'
 import { attackOdds, chooseMode, chosenMode, rollOdds } from '../shared/advantage.ts'
 import type { Odds } from '../shared/advantage.ts'
-import { criticalFrom, magicalCunning, monsterXp, srdFeats, srdSubclasses } from '../shared/progression.ts'
+import { characterLevel, criticalFrom, magicalCunning, monsterXp, srdFeats, srdSubclasses } from '../shared/progression.ts'
 import { key, lightsOf, playerView, seenBy, tokenCenter, tokenSeen, visionOf, wallsForPlayer } from '../shared/vision.ts'
 import type { ActorVision, Ambient, Door, LightSource, SceneVision, Wall } from '../shared/vision.ts'
 import { gridFeet, moveCost, speedNow } from '../shared/movement.ts'
-import { afterCommand, beforeCommand, isUndoable, undoLast } from './undo.ts'
+import { afterCommand, beforeCommand, isUndoable, redoLast, undoLast } from './undo.ts'
 import { freshUse, gapBetween, reachOf } from '../shared/economy.ts'
 import type { TurnUse } from '../shared/economy.ts'
 import { itemLights } from '../shared/vision.ts'
+import { serverSpell } from './spellCatalog.ts'
+import { scaledDice } from '../shared/spells.ts'
+import { bardicDie, featureResource, inspirationDie, isRaging, levelIn, plusModifier, rageDamage, resists } from '../shared/classFeatures.ts'
 import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
 
 export class Forbidden extends Error {}
@@ -251,6 +254,19 @@ function spendSlot(caster: Actor, level: unknown, pact = false) {
   if (!slots || !slot || slot.left < 1) throw new Invalid('ไม่มีช่องเวท' + (field === 'pactSlots' ? ' Pact ' : '') + 'ระดับ ' + wanted + ' เหลือ')
   caster[field] = formatSlots(slots.map(entry => entry === slot ? { ...entry, left: entry.left - 1 } : entry))
 }
+/** A sheet's SRD spells: catalog ids only, at most 150, each once. */
+export function parseSpellbook(value: unknown): KnownSpell[] {
+  if (!Array.isArray(value) || value.length > 150) throw new Invalid('เวทบนชีตได้สูงสุด 150 บท')
+  const seen = new Set<string>()
+  return value.map(entry => {
+    const item = record(entry)
+    const spell = serverSpell(item.id)
+    if (!spell) throw new Invalid('ไม่พบเวทนี้ในคลัง SRD')
+    if (seen.has(spell.id)) throw new Invalid(spell.name + ' อยู่ในชีตแล้ว')
+    seen.add(spell.id)
+    return { id: spell.id, ...(item.always === true ? { always: true } : item.prepared === true ? { prepared: true } : {}) }
+  })
+}
 function parseChecks<K extends string>(value: unknown, keys: readonly K[]) {
   const source = record(value)
   const result: Partial<Record<K, CheckBonus>> = {}
@@ -268,7 +284,8 @@ function damageKind(value: unknown): DamageKind {
 }
 function applyDamage(scene: Scene, actor: Actor, amount: number, kind: DamageKind, critical = false, room?: Room) {
   const before = actor.hp + actor.tempHp
-  harm(actor, amount, critical)
+  // Resistance (Rage: Bludgeoning, Piercing, Slashing) halves the damage, rounded down.
+  harm(actor, resists(actor, kind) ? Math.floor(amount / 2) : amount, critical)
   const lost = before - actor.hp - actor.tempHp
   if (lost > 0 && room) {
     // Concentration: a CON save after taking damage, or lost outright at 0 HP.
@@ -352,6 +369,7 @@ export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory
     sheet.subclass = input.subclass as string
   }
   if (input.vision !== undefined) sheet.vision = parseActorVision(input.vision)
+  if (input.spellbook !== undefined) sheet.spellbook = parseSpellbook(input.spellbook)
   if (input.attacksPerAction !== undefined && input.attacksPerAction !== null && input.attacksPerAction !== '') sheet.attacksPerAction = number(input.attacksPerAction, 1, 10)
   if (input.feats !== undefined) {
     if (!Array.isArray(input.feats) || input.feats.length > 20) throw new Invalid('Feat ได้สูงสุด 20 รายการ')
@@ -415,8 +433,9 @@ const visibleEffects = (effects: Effect[] | undefined, dm: boolean) => dm ? effe
 export function snapshot(room: Room, me: Member): Snapshot {
   const publicMember = ({ id, name, role }: Member): Member => ({ id, name, role })
   const dm = me.role === 'dm'
-  const scenes = (dm ? room.scenes : room.scenes.filter(scene => scene.id === room.activeSceneId)).map(scene => ({
-    ...scene, tokens: withTokenRoles(scene, room.actors), objects: dm ? scene.objects : scene.objects?.map(object => object.kind === 'container' ? {
+  // DM notes (0.13) never leave the server for players.
+  const scenes = (dm ? room.scenes : room.scenes.filter(scene => scene.id === room.activeSceneId)).map(({ dmNotes, ...scene }) => ({
+    ...scene, ...(dm && dmNotes ? { dmNotes } : {}), tokens: withTokenRoles(scene, room.actors), objects: dm ? scene.objects : scene.objects?.map(object => object.kind === 'container' ? {
       ...object, items: !object.open || object.lock?.locked ? [] : object.items,
       lock: object.lock && { ...object.lock, tried: object.lock.tried.filter(id => room.actors.some(actor => actor.id === id && actor.ownerId === me.id)) }
     } : object)
@@ -460,7 +479,7 @@ export function snapshot(room: Room, me: Member): Snapshot {
     id: room.id, name: room.name, revision: room.revision, me: publicMember(me), members: room.members.map(publicMember),
     activeSceneId: room.activeSceneId, scenes, invite: dm ? room.invite : undefined, dmInvite: dm ? room.dmInvite : undefined,
     actors: room.actors.filter(actor => dm || actor.ownerId === me.id || (actor.temp && visible.has(actor.id)))
-      .map(actor => ({ ...actor, portrait: actor.portrait ?? monsterPortrait(actor.monsterReference?.id), effects: visibleEffects(actor.effects, dm) })),
+      .map(({ dmNotes, ...actor }) => ({ ...actor, ...(dm && dmNotes ? { dmNotes } : {}), portrait: actor.portrait ?? monsterPortrait(actor.monsterReference?.id), effects: visibleEffects(actor.effects, dm) })),
     publicActors: room.actors.filter(actor => dm || visible.has(actor.id)).map(({ id, name, kind, size, portrait, monsterReference, hp, maxHp, tempHp, life, lootResult, conditions, effects }) =>
       ({ id, name, kind, size, portrait: portrait ?? monsterPortrait(monsterReference?.id), hp, maxHp, tempHp, lootResult, conditions, effects: visibleEffects(effects, dm), lootable: kind === 'monster' && life === 'dead' })),
     templates: dm ? room.templates : [],
@@ -553,8 +572,10 @@ export function applyCommand(room: Room, member: Member, command: Command, clipb
   const type = String(command.type)
   const before = isUndoable(type) ? beforeCommand(room) : undefined
   delete (room as { undo?: unknown }).undo // 0.11's DM-only list; 0.12 keeps steps per member
-  const output = runCommand(room, member, command, clipboard)
-  if (before) afterCommand(room, member, type, before)
+  const output = runCommand(room, member, command, clipboard) as { healed?: string[] }
+  // A healing spell's player may take back the HP it gave, not only their own creature's slot (Q5).
+  if (before) afterCommand(room, member, type, before, output.healed)
+  delete output.healed
   rememberSeen(room)
   return output
 }
@@ -664,6 +685,71 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
     if (creature.life !== 'active') throw new Invalid('ตัวละครนี้ยังโต้ตอบไม่ได้')
     const token = target.tokens.find(entry => entry.actorId === creature.id)
     if (!token || !isNear(token, creature, item)) throw new Invalid('ให้ Token เข้าใกล้เป้าหมายก่อน')
+  }
+  /** Left click lets the conditions decide; the right-click menu (or the old toggles) is the roller's own choice. */
+  const decide = (odds: Odds) => {
+    const { mode, note } = chooseMode(odds, chosenMode(command))
+    return { advantage: mode === 'advantage', disadvantage: mode === 'disadvantage', note: note ? ' · ' + note : '' }
+  }
+  /**
+   * "เพิ่ม Inspiration" from the roll menu: roll the Bardic Inspiration die the creature holds,
+   * add it to this d20 roll, and the die is spent.
+   */
+  function inspired<T extends { total: number; modifier: number; formula: string }>(creature: Actor, result: T): T {
+    if (command.inspiration !== true) return result
+    const sides = inspirationDie(creature)
+    if (!sides) throw new Invalid(creature.name + ' ไม่มี Bardic Inspiration')
+    const face = die(sides)
+    creature.effects = (creature.effects ?? []).filter(effect => effect.condition !== 'Inspired')
+    addLog(room, { kind: 'combat', sceneId: sceneOf(room, creature.id), text: creature.name + ' ใช้ Bardic Inspiration d' + sides + ' ได้ +' + face })
+    return { ...result, total: result.total + face, modifier: result.modifier + face, formula: result.formula + '+1d' + sides + '(' + face + ')' }
+  }
+  /**
+   * One attack roll from `creature` at `victim` in `target`, with cover worked out, then the damage
+   * (applied at once when the table's autoDamage rule is on). `before` runs once the attack is valid.
+   */
+  function attackRoll(target: Scene, creature: Actor, victim: Actor, how: {
+    spell: boolean; weapon?: NonNullable<Actor['attacks']>[number]; formula: string; damageKind?: DamageKind; label: string; before?: () => void
+  }) {
+    if (![creature.id, victim.id].every(key => target.tokens.some(token => token.actorId === key))) {
+      throw new Invalid('ผู้โจมตีและเป้าหมายต้องอยู่ในฉากเดียวกัน')
+    }
+    const manualCover = number(command.cover ?? 0, 0, 5)
+    if (![0, 2, 5].includes(manualCover)) throw new Invalid('ค่าที่กำบังไม่ถูกต้อง')
+    const tokenOf = (key: string) => target.tokens.find(token => token.actorId === key) as Token
+    const cover = Math.max(manualCover, structureCover(target.objects ?? [], center(tokenOf(creature.id), creature), center(tokenOf(victim.id), victim)))
+    if (cover === 99) throw new Invalid('เป้าหมายอยู่หลังที่กำบังเต็ม')
+    how.before?.()
+    const adjacent = isNear(tokenOf(creature.id), creature, { ...tokenOf(victim.id), width: sizes[victim.size], height: sizes[victim.size] })
+    const odds = decide(attackOdds(creature, victim, adjacent))
+    // Archery: +2 with weapons that fire ammunition.
+    const archery = !how.spell && creature.feats?.includes('Archery') && /Ammunition/.test(how.weapon?.notes ?? '') ? 2 : 0
+    const hitRoll = inspired(creature, d20((how.spell ? creature.spellAttack : how.weapon?.bonus ?? creature.attack) + archery + d20Penalty(creature), odds.advantage, odds.disadvantage))
+    const critical = hitRoll.natural >= (how.spell ? 20 : criticalFrom(creature))
+    const hit = critical || (hitRoll.natural !== 1 && hitRoll.total >= victim.ac + cover)
+    const context = { sceneId: target.id, sourceId: creature.id, targetId: victim.id }
+    saveRoll(how.label + ' · ' + creature.name + odds.note, hitRoll, { ...context, outcome: critical ? 'คริติคัล' : hit ? 'โดน' : 'พลาด' })
+    if (!hit) return {}
+    // Rage Damage on a Barbarian's weapon hits while Raging.
+    const rage = !how.spell && isRaging(creature) && levelIn(creature, 'Barbarian') ? rageDamage(levelIn(creature, 'Barbarian')) : 0
+    const receipt = saveRoll('Damage · ' + victim.name + (rage ? ' · Rage +' + rage : ''), rollDice(rage ? plusModifier(how.formula, rage) : how.formula, die, critical), { ...context, applied: false, critical, damageKind: how.damageKind })
+    if (room.settings?.autoDamage) {
+      // Table rule: hits apply at once; the DM can still adjust HP afterwards.
+      const damageRoll = room.rolls[room.rolls.length - 1]
+      const kind = damageRoll.damageKind ?? 'untyped'
+      const lost = applyDamage(target, victim, Math.max(0, damageRoll.total), kind, critical, room)
+      damageRoll.applied = true
+      if (lost > 0) addLog(room, { kind: 'hp', text: damageText(victim, lost, kind), sceneId: target.id })
+    }
+    return receipt
+  }
+  /** Start `caster`'s Concentration on `label`; a different spell ends the old one first. */
+  function concentrate(caster: Actor, label: string | undefined, hidden = false) {
+    const current = caster.effects?.find(effect => effect.condition === 'Concentration')
+    if (current && current.sourceLabel !== label) breakConcentration(room, caster, 'เริ่มตั้งสมาธิใหม่')
+    if (!caster.effects?.some(effect => effect.condition === 'Concentration')) {
+      caster.effects = [...(caster.effects ?? []), { id: id(), condition: 'Concentration', sourceId: caster.id, sourceLabel: label, hidden: hidden || undefined }]
+    }
   }
   const saveRoll = (label: string, result: Pick<Roll, 'formula' | 'faces' | 'modifier' | 'total'>, extra: Partial<Roll> = {}) => {
     const privateTo = member.role === 'dm' && command.privateRoll === true ? member.id : undefined
@@ -1376,12 +1462,6 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
     case 'sheetRoll': {
       const creature = actor()
       owns(member, creature)
-      // Left click lets the conditions decide; the right-click menu (or the old toggles) is the roller's own choice.
-      const chosen = chosenMode(command)
-      const decide = (odds: Odds) => {
-        const { mode, note } = chooseMode(odds, chosen)
-        return { advantage: mode === 'advantage', disadvantage: mode === 'disadvantage', note: note ? ' · ' + note : '' }
-      }
       const rollType = command.rollType
       const weapon = command.weaponIndex === undefined ? undefined : creature.attacks?.[number(command.weaponIndex, 0, 19)]
       if (command.weaponIndex !== undefined && !weapon) throw new Invalid('รายการโจมตีเปลี่ยนแล้ว')
@@ -1399,45 +1479,22 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       }
       if (rollType === 'attack' || rollType === 'spellAttack') {
         const target = active()
-        if (![command.actorId, command.targetId].every(key => target.tokens.some(token => token.actorId === key))) {
-          throw new Invalid('ผู้โจมตีและเป้าหมายต้องอยู่ในฉากเดียวกัน')
-        }
         const victim = get(room.actors, command.targetId)
-        const manualCover = number(command.cover ?? 0, 0, 5)
-        if (![0, 2, 5].includes(manualCover)) throw new Invalid('ค่าที่กำบังไม่ถูกต้อง')
-        const tokenOf = (key: string) => target.tokens.find(token => token.actorId === key) as Token
-        const cover = Math.max(manualCover, structureCover(target.objects ?? [], center(tokenOf(creature.id), creature), center(tokenOf(victim.id), victim)))
-        if (cover === 99) throw new Invalid('เป้าหมายอยู่หลังที่กำบังเต็ม')
-        // Spend the slot only once the attack is valid (target in scene, not behind full cover).
-        if (rollType === 'spellAttack') spendSlot(creature, command.slotLevel, command.pact === true)
-        noteUse(target, creature.id, rollType === 'attack' ? 'weapon' : 'spell')
-        const adjacent = isNear(tokenOf(creature.id), creature, { ...tokenOf(victim.id), width: sizes[victim.size], height: sizes[victim.size] })
-        const odds = decide(attackOdds(creature, victim, adjacent))
-        // Archery: +2 with weapons that fire ammunition.
-        const archery = rollType === 'attack' && creature.feats?.includes('Archery') && /Ammunition/.test(weapon?.notes ?? '') ? 2 : 0
-        const hitRoll = d20((rollType === 'attack' ? weapon?.bonus ?? creature.attack : creature.spellAttack) + archery + d20Penalty(creature), odds.advantage, odds.disadvantage)
-        const critical = hitRoll.natural >= (rollType === 'attack' ? criticalFrom(creature) : 20)
-        const hit = critical || (hitRoll.natural !== 1 && hitRoll.total >= victim.ac + cover)
-        const context = { sceneId: target.id, sourceId: creature.id, targetId: victim.id }
-        saveRoll((weapon?.name ?? rollType) + ' · ' + creature.name + odds.note, hitRoll, { ...context, outcome: critical ? 'คริติคัล' : hit ? 'โดน' : 'พลาด' })
-        if (!hit) return {}
-        const receipt = saveRoll('Damage · ' + victim.name, rollDice(rollType === 'attack' ? weapon?.damage ?? creature.damage : text(command.formula), die, critical), {
-          ...context, applied: false, critical, damageKind: rollType === 'attack'
-            ? (weapon ?? creature.attacks?.find(attack => attack.bonus === creature.attack && attack.damage === creature.damage))?.damageKind : undefined
+        const spell = rollType === 'spellAttack'
+        return attackRoll(target, creature, victim, {
+          spell, weapon, label: weapon?.name ?? rollType,
+          formula: spell ? text(command.formula) : weapon?.damage ?? creature.damage,
+          damageKind: spell ? undefined : (weapon ?? creature.attacks?.find(attack => attack.bonus === creature.attack && attack.damage === creature.damage))?.damageKind,
+          // Spend the slot only once the attack is valid (target in scene, not behind full cover).
+          before: () => {
+            if (spell) spendSlot(creature, command.slotLevel, command.pact === true)
+            noteUse(target, creature.id, spell ? 'spell' : 'weapon')
+          }
         })
-        if (room.settings?.autoDamage) {
-          // Table rule: hits apply at once; the DM can still adjust HP afterwards.
-          const damageRoll = room.rolls[room.rolls.length - 1]
-          const kind = damageRoll.damageKind ?? 'untyped'
-          const lost = applyDamage(target, victim, Math.max(0, damageRoll.total), kind, critical, room)
-          damageRoll.applied = true
-          if (lost > 0) addLog(room, { kind: 'hp', text: damageText(victim, lost, kind), sceneId: target.id })
-        }
-        return receipt
       }
       if (rollType === 'initiative') {
         const odds = decide(rollOdds(creature, 'initiative'))
-        return saveRoll('Initiative · ' + creature.name + odds.note, d20(creature.initiative + d20Penalty(creature), odds.advantage, odds.disadvantage))
+        return saveRoll('Initiative · ' + creature.name + odds.note, inspired(creature, d20(creature.initiative + d20Penalty(creature), odds.advantage, odds.disadvantage)))
       }
       if (rollType !== 'check' && rollType !== 'save') throw new Invalid('ประเภทการทอยไม่ถูกต้อง')
       if (!abilities.includes(command.ability as typeof abilities[number])) throw new Invalid('เลือกค่าความสามารถ')
@@ -1449,7 +1506,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       const checkOdds = rollOdds(creature, rollType, ability)
       const odds = decide(checkOdds)
       return saveRoll((rollType === 'check' && skill ? skill : ability) + ' ' + rollType + ' · ' + creature.name + odds.note,
-        d20(bonus + d20Penalty(creature), odds.advantage, odds.disadvantage), checkOdds.autoFail ? { outcome: 'ล้มเหลวอัตโนมัติ (' + checkOdds.autoFail + ')' } : {})
+        inspired(creature, d20(bonus + d20Penalty(creature), odds.advantage, odds.disadvantage)), checkOdds.autoFail ? { outcome: 'ล้มเหลวอัตโนมัติ (' + checkOdds.autoFail + ')' } : {})
     }
     case 'castSave': {
       const target = active()
@@ -1468,6 +1525,114 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
         sceneId: target.id, sourceId: caster.id, targetId: victim.id, cast: { ability, dc: caster.spellDC, targetId: victim.id, damage, half: command.half === true }
       })
     }
+    case 'spellbook': {
+      const creature = actor()
+      owns(member, creature)
+      creature.spellbook = parseSpellbook(command.spellbook)
+      return {}
+    }
+    case 'cast': {
+      // 0.13: one cast from the sheet. Spends the slot and the Action (or Bonus Action / Reaction), starts
+      // Concentration, then rolls the attack, asks for saves, or heals; the dice scale with the slot or level.
+      const caster = actor()
+      owns(member, caster)
+      const spell = serverSpell(command.spellId)
+      if (!spell) throw new Invalid('ไม่พบเวทนี้ในคลัง SRD')
+      if (member.role !== 'dm' && !caster.spellbook?.some(entry => entry.id === spell.id)) throw new Invalid('เวทนี้ไม่อยู่ในชีต')
+      const fighting = room.scenes.some(item => item.combat?.order.some(entry => entry.actorId === caster.id))
+      const ritual = command.ritual === true
+      if (ritual && !spell.ritual) throw new Invalid(spell.name + ' ร่ายแบบ Ritual ไม่ได้')
+      if (ritual && fighting) throw new Invalid('ร่ายแบบ Ritual ระหว่างต่อสู้ไม่ได้')
+      const pact = command.pact === true
+      const slotLevel = spell.level === 0 || ritual ? spell.level : number(command.slotLevel ?? spell.level, 1, 9)
+      if (slotLevel < spell.level) throw new Invalid(spell.name + ' ต้องใช้ช่องเวทระดับ ' + spell.level + ' ขึ้นไป')
+      const where = command.sceneId ? active() : undefined
+      const placed = (creature: Actor) => Boolean(where?.tokens.some(token => token.actorId === creature.id))
+      // Targets: picked ones, or everyone in the drawn area (dead ones are left out).
+      let area: Area | undefined
+      let targets: Actor[]
+      if (command.area !== undefined) {
+        if (!where || !spell.area) throw new Invalid('เวทนี้ไม่ใช่เวทพื้นที่')
+        const input = record(command.area)
+        const point = (value: unknown) => { const item = record(value); return { x: number(item.x, -1000, 1000, .5), y: number(item.y, -1000, 1000, .5) } }
+        if (typeof input.kind !== 'string' || !Object.hasOwn(areaLabels, input.kind)) throw new Invalid('เลือกรูปทรงพื้นที่')
+        area = { kind: input.kind as Area['kind'], from: point(input.from), to: point(input.to) }
+        if (!validArea(area) || Math.hypot(area.from.x - area.to.x, area.from.y - area.to.y) > 200) throw new Invalid('ขนาดพื้นที่ไม่ถูกต้อง')
+        const outline = areaOutline(area)
+        targets = where.tokens.flatMap(token => {
+          const creature = get(room.actors, token.actorId)
+          return creature.life !== 'dead' && areaContains(outline, center(token, creature)) ? [creature] : []
+        })
+      } else {
+        const ids = Array.isArray(command.targetIds) ? command.targetIds : []
+        if (ids.length > 12) throw new Invalid('เลือกเป้าหมายได้สูงสุด 12 ตัว')
+        targets = [...new Set(ids)].map(key => get(room.actors, key))
+      }
+      if (spell.healing && !targets.length && !area) targets = [caster]
+      const needsTarget = Boolean(spell.attack || spell.save)
+      if (needsTarget && !area && !targets.length) throw new Invalid('เลือกเป้าหมายของ ' + spell.name)
+      if ((needsTarget || spell.damage) && targets.length) {
+        if (!where || !placed(caster)) throw new Invalid('วาง Token ของผู้ร่ายในฉากก่อน')
+        for (const creature of targets) if (!placed(creature)) throw new Invalid(creature.name + ' ไม่อยู่ในฉากนี้')
+      }
+      // Check the slot before anything happens, then spend it.
+      if (slotLevel > 0 && !ritual) spendSlot(caster, slotLevel, pact)
+      const label = spell.name + (ritual ? ' (Ritual)' : slotLevel > spell.level ? ' (ช่องระดับ ' + slotLevel + ')' : '')
+      const fight = where?.combat?.order.some(entry => entry.actorId === caster.id) ? where : room.scenes.find(item => item.combat?.order.some(entry => entry.actorId === caster.id))
+      if (fight?.combat && !ritual) {
+        if (/Bonus Action/i.test(spell.castingTime)) {
+          const use: TurnUse = { ...freshUse(), ...fight.combat.uses?.[caster.id] }
+          use.bonus++
+          fight.combat.uses = { ...fight.combat.uses, [caster.id]: use }
+        } else if (/Reaction/i.test(spell.castingTime)) {
+          fight.combat.uses = { ...fight.combat.uses, [caster.id]: { ...freshUse(), ...fight.combat.uses?.[caster.id], reaction: true } }
+        } else if (/Action/i.test(spell.castingTime)) noteUse(fight, caster.id, 'spell')
+      }
+      if (spell.concentration) concentrate(caster, spell.name)
+      const level = characterLevel(caster)
+      const damage = scaledDice(spell, spell.damage, slotLevel, level)
+      const damageKind = spell.damageType && Object.hasOwn(damageKinds, spell.damageType) ? spell.damageType as DamageKind : undefined
+      const sceneId = where?.id ?? sceneOf(room, caster.id)
+      addLog(room, { kind: 'combat', sceneId, text: caster.name + ' ร่าย ' + label + (ritual ? ' · ใช้เวลาเพิ่ม 10 นาที' : '') })
+      if (area && where) where.areaEffect = { area, kind: damageKind ?? 'force', at: Date.now() }
+      if (spell.attack && where) {
+        let receipt = {}
+        for (const victim of targets) receipt = attackRoll(where, caster, victim, { spell: true, formula: damage ?? '0', damageKind, label: spell.name })
+        return receipt
+      }
+      if (spell.save && where) {
+        let receipt = {}
+        for (const victim of targets) {
+          receipt = saveRoll('Spell · ' + label, { total: caster.spellDC, faces: [], formula: spell.save + ' Save DC', modifier: 0 }, {
+            sceneId: where.id, sourceId: caster.id, targetId: victim.id,
+            cast: { ability: spell.save, dc: caster.spellDC, targetId: victim.id, damage, half: spell.half === true, spell: spell.name,
+              ...(spell.condition ? { condition: spell.condition } : {}), ...(spell.concentration ? { concentration: true } : {}), ...(damageKind ? { damageKind } : {}) }
+          })
+        }
+        if (!targets.length) addLog(room, { kind: 'combat', sceneId, text: 'ไม่มีใครอยู่ในพื้นที่ของ ' + spell.name })
+        return receipt
+      }
+      if (spell.healing) {
+        // Healing lands at once (Q5); the caster's player may undo it.
+        const dice = scaledDice(spell, spell.healing, slotLevel, level) as string
+        const bonus = spell.healingAddsModifier ? Math.max(0, caster.spellAttack - caster.proficiency) : 0
+        let receipt = {}
+        for (const creature of targets) {
+          const result = rollDice(dice)
+          const amount = Math.max(0, result.total + bonus)
+          const before = creature.hp
+          heal(creature, amount)
+          addLog(room, { kind: 'hp', sceneId, text: creature.name + ' ฟื้น ' + (creature.hp - before) + ' HP จาก ' + spell.name })
+          receipt = saveRoll('Healing · ' + spell.name + ' · ' + creature.name, { ...result, modifier: result.modifier + bonus, total: amount, formula: dice + (bonus ? '+' + bonus : '') }, { sceneId, sourceId: caster.id, targetId: creature.id })
+        }
+        return { ...receipt, healed: targets.map(creature => creature.id) }
+      }
+      if (damage && targets.length) {
+        // Damage without an attack or save (Magic Missile): rolled for the DM to apply.
+        return saveRoll('Damage · ' + spell.name + ' · ' + targets[0].name, rollDice(damage), { sceneId, sourceId: caster.id, targetId: targets[0].id, applied: false, damageKind })
+      }
+      return {}
+    }
     case 'spellSave': {
       const target = active()
       const roll = get(room.rolls, command.rollId)
@@ -1480,19 +1645,23 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       const bonus = saved ? bonusForCheck(victim, saved) : modifier(victim.abilities[roll.cast.ability]) + proficient
       const saveOdds = rollOdds(victim, 'save', roll.cast.ability)
       const decided = chooseMode(saveOdds, chosenMode(command))
-      const result = d20(bonus + d20Penalty(victim), decided.mode === 'advantage', decided.mode === 'disadvantage')
+      const result = inspired(victim, d20(bonus + d20Penalty(victim), decided.mode === 'advantage', decided.mode === 'disadvantage'))
       const passed = !saveOdds.autoFail && result.total >= roll.cast.dc
       roll.cast.resolved = true
       const context = { sceneId: target.id, sourceId: roll.sourceId, targetId: victim.id }
-      saveRoll('Spell Save · ' + victim.name + (decided.note ? ' · ' + decided.note : ''), result,
-        { ...context, outcome: saveOdds.autoFail ? 'พลาดอัตโนมัติ (' + saveOdds.autoFail + ')' : passed ? 'ผ่าน' : 'พลาด' })
+      // A failed save against a spell that gives a condition offers a button to apply it (never automatic, Q6).
+      const offer = !passed && roll.cast.condition && roll.sourceId
+        ? { condition: roll.cast.condition, targetId: victim.id, sourceId: roll.sourceId, label: roll.cast.spell ?? roll.cast.condition, ...(roll.cast.concentration ? { concentration: true } : {}) }
+        : undefined
+      const saveReceipt = saveRoll('Spell Save · ' + victim.name + (decided.note ? ' · ' + decided.note : ''), result,
+        { ...context, outcome: saveOdds.autoFail ? 'พลาดอัตโนมัติ (' + saveOdds.autoFail + ')' : passed ? 'ผ่าน' : 'พลาด', ...(offer ? { offer } : {}) })
       if (roll.cast.damage && (!passed || roll.cast.half)) {
         const damage = rollDice(roll.cast.damage)
         return saveRoll('Spell Damage · ' + victim.name, {
           ...damage, total: passed ? Math.floor(damage.total / 2) : damage.total
-        }, { ...context, applied: false })
+        }, { ...context, applied: false, damageKind: roll.cast.damageKind })
       }
-      return {}
+      return saveReceipt
     }
     case 'combat': {
       requireDM(member)
@@ -1542,6 +1711,22 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       if (outcome.result === 'empty') throw new Invalid('ไม่มีอะไรให้ย้อนแล้ว')
       if (outcome.result === 'blocked') return { notice: 'ย้อน' + outcome.label + 'ไม่ได้ เพราะมีคนแก้ต่อแล้ว · กด Ctrl+Z อีกครั้งเพื่อย้อนขั้นก่อนหน้า' }
       return { notice: 'ย้อน' + outcome.label + 'แล้ว' }
+    }
+    case 'dmNotes': {
+      // Secret notes on a scene or a sheet: the DM writes them, players never get them.
+      requireDM(member)
+      const notes = command.notes === '' ? undefined : text(command.notes, 5000)
+      const holder: { dmNotes?: string } = command.actorId ? actor() : scene()
+      if (notes) holder.dmNotes = notes
+      else delete holder.dmNotes
+      return {}
+    }
+    case 'redo': {
+      // Ctrl+Y / Ctrl+Shift+Z: put back your own last undo, unless someone has changed it since.
+      const outcome = redoLast(room, member)
+      if (outcome.result === 'empty') throw new Invalid('ไม่มีอะไรให้ทำซ้ำ')
+      if (outcome.result === 'blocked') return { notice: 'ทำซ้ำ' + outcome.label + 'ไม่ได้ เพราะมีคนแก้ต่อแล้ว' }
+      return { notice: 'ทำซ้ำ' + outcome.label + 'แล้ว' }
     }
     case 'opportunity': {
       // The controller of the creature that may strike answers: attack (main attack, uses the Reaction) or pass.
@@ -1651,7 +1836,52 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       owns(member, creature)
       const resource = creature.resources?.[number(command.index, 0, 11)]
       if (!resource) throw new Invalid('ทรัพยากรนี้เปลี่ยนแล้ว')
-      resource.used = number(command.used, 0, resource.max)
+      const used = number(command.used, 0, resource.max)
+      if (command.log === true && used > resource.used) {
+        addLog(room, { kind: 'combat', sceneId: sceneOf(room, creature.id), text: creature.name + ' ใช้ ' + resource.name + (used - resource.used > 1 ? ' ' + (used - resource.used) : '') + ' · เหลือ ' + (resource.max - used) + '/' + resource.max })
+      }
+      resource.used = used
+      return {}
+    }
+    case 'classFeature': {
+      // Rage, Second Wind and Bardic Inspiration (0.13): spend the use and the Bonus Action, then do what the class table says.
+      const creature = actor()
+      owns(member, creature)
+      const feature = command.feature as keyof typeof featureResource
+      if (!Object.hasOwn(featureResource, feature)) throw new Invalid('เลือกความสามารถของคลาส')
+      const resource = creature.resources?.find(entry => entry.name === featureResource[feature])
+      if (!resource || resource.used >= resource.max) throw new Invalid('ไม่มี ' + featureResource[feature] + ' เหลือ')
+      const friend = feature === 'bardicInspiration' ? get(room.actors, command.targetId) : undefined
+      if (friend && friend.id === creature.id) throw new Invalid('Bardic Inspiration ให้คนอื่นเท่านั้น')
+      resource.used++
+      const fight = room.scenes.find(item => item.combat?.order.some(entry => entry.actorId === creature.id))
+      if (fight?.combat) {
+        const use: TurnUse = { ...freshUse(), ...fight.combat.uses?.[creature.id] }
+        use.bonus++
+        fight.combat.uses = { ...fight.combat.uses, [creature.id]: use }
+      }
+      const sceneId = sceneOf(room, creature.id)
+      if (feature === 'rage') {
+        // Raging can't keep Concentration; it lasts 10 rounds here (the DM ends it early if the rage stops).
+        if (creature.effects?.some(effect => effect.condition === 'Concentration')) breakConcentration(room, creature, 'เข้าสู่ Rage')
+        creature.effects = [...(creature.effects ?? []).filter(effect => effect.condition !== 'Raging'),
+          { id: id(), condition: 'Raging', sourceId: creature.id, sourceLabel: 'Rage +' + rageDamage(levelIn(creature, 'Barbarian')), ends: { at: 'end', actorId: creature.id, turns: 10 } }]
+        addLog(room, { kind: 'combat', sceneId, text: creature.name + ' เข้าสู่ Rage · ต้านทาน Bludgeoning, Piercing, Slashing · ความเสียหาย +' + rageDamage(levelIn(creature, 'Barbarian')) })
+        return {}
+      }
+      if (feature === 'secondWind') {
+        const level = levelIn(creature, 'Fighter')
+        const face = die(10)
+        const before = creature.hp
+        heal(creature, face + level)
+        addLog(room, { kind: 'hp', sceneId, text: creature.name + ' ใช้ Second Wind ฟื้น ' + (creature.hp - before) + ' HP' })
+        return saveRoll('Second Wind · ' + creature.name, { formula: '1d10+' + level, faces: [face], modifier: level, total: face + level })
+      }
+      const sides = bardicDie(levelIn(creature, 'Bard'))
+      const target = friend as Actor
+      target.effects = [...(target.effects ?? []).filter(effect => effect.condition !== 'Inspired'),
+        { id: id(), condition: 'Inspired', sourceId: creature.id, sourceLabel: 'Bardic Inspiration d' + sides }]
+      addLog(room, { kind: 'combat', sceneId, text: creature.name + ' ให้ Bardic Inspiration d' + sides + ' แก่ ' + target.name })
       return {}
     }
     case 'conditions': {
@@ -1692,14 +1922,8 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       })()
       const concentration = command.concentration === true && Boolean(source)
       const label = command.sourceLabel ? text(command.sourceLabel, 60) : undefined
-      if (concentration && source) {
-        // One Concentration at a time: a new spell ends the old one.
-        const current = source.effects?.find(effect => effect.condition === 'Concentration')
-        if (current && current.sourceLabel !== label) breakConcentration(room, source, 'เริ่มตั้งสมาธิใหม่')
-        if (!source.effects?.some(effect => effect.condition === 'Concentration')) {
-          source.effects = [...(source.effects ?? []), { id: id(), condition: 'Concentration', sourceId: source.id, sourceLabel: label, hidden: command.hidden === true || undefined }]
-        }
-      }
+      // One Concentration at a time: a new spell ends the old one.
+      if (concentration && source) concentrate(source, label, command.hidden === true)
       for (const creature of targets) {
         if ((creature.effects?.length ?? 0) >= 30) throw new Invalid(creature.name + ' มี Condition มากเกินไป')
         const effect: Effect = {
@@ -1739,7 +1963,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       const bonus = (trained ? bonusForCheck(creature, trained) : modifier(creature.abilities[ability])) + d20Penalty(creature)
       const saveOdds = rollOdds(creature, 'save', ability)
       const decided = chooseMode(saveOdds, chosenMode(command))
-      const result = d20(bonus, decided.mode === 'advantage', decided.mode === 'disadvantage')
+      const result = inspired(creature, d20(bonus, decided.mode === 'advantage', decided.mode === 'disadvantage'))
       const passed = !saveOdds.autoFail && result.total >= dc
       effect.pending = undefined
       const label = reason === 'concentration' ? 'Concentration' : effectName(effect)
