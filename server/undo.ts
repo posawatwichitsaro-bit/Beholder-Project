@@ -38,7 +38,8 @@ export const undoLabels: Record<string, string> = {
   visionSettings: 'การตั้งค่าการมองเห็น', actorVision: 'การตั้งค่าการมองเห็น', lightItem: 'การจุดแสง', settings: 'การตั้งค่าห้อง', scene: 'การแก้ฉาก',
   combat: 'การเริ่มต่อสู้', end: 'การจบการต่อสู้', next: 'การไปเทิร์นถัดไป', endTurn: 'การจบเทิร์น', previousTurn: 'การย้อนเทิร์น', tie: 'การสลับลำดับ',
   template: 'การแก้ต้นแบบ', pasteBoard: 'การวาง', opportunity: 'Opportunity Attack',
-  encounter: 'การแก้ Encounter', placeEncounter: 'การวาง Encounter', shop: 'การแก้ร้านค้า', buy: 'การซื้อของ', coins: 'การแก้ถุงเงิน'
+  encounter: 'การแก้ Encounter', placeEncounter: 'การวาง Encounter', shop: 'การแก้ร้านค้า', buy: 'การซื้อของ', coins: 'การแก้ถุงเงิน',
+  worldMap: 'การแก้แผนที่โลก', pin: 'การแก้หมุด', partyMarker: 'การย้ายตำแหน่งปาร์ตี้'
 }
 export const isUndoable = (type: string) => !skip.has(type)
 
@@ -80,6 +81,7 @@ function units(room: Room) {
   for (const template of room.templates) map.set('template:' + template.id, template)
   for (const handout of room.handouts ?? []) map.set('handout:' + handout.id, handout)
   for (const encounter of room.encounters ?? []) map.set('encounter:' + encounter.id, encounter)
+  for (const world of room.worldMaps ?? []) map.set('world:' + world.id, world)
   for (const scene of room.scenes) {
     const { tokens, objects, vision, combat, damageEvents: _damage, areaEffect: _area, view: _view, ...meta } = scene
     map.set('scene:' + scene.id, meta)
@@ -178,6 +180,7 @@ function restore(room: Room, key: string, value: unknown) {
   else if (parts[0] === 'template') replace(room.templates, parts[1])
   else if (parts[0] === 'handout') replace(room.handouts ??= [], parts[1])
   else if (parts[0] === 'encounter') replace(room.encounters ??= [], parts[1])
+  else if (parts[0] === 'world') replace(room.worldMaps ??= [], parts[1])
   else if (parts[0] === 'scene') {
     const sceneId = parts[1]
     let scene = room.scenes.find(item => item.id === sceneId)

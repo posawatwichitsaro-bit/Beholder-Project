@@ -45,6 +45,7 @@ test('since 0.07 players get the Monster Manual and the SRD item panel too, with
   assert.deepEqual(panelsFor('player').map(panel => panel.id), panelsFor('dm').map(panel => panel.id).filter(id => id !== 'encounters'))
   assert.equal(panelForShortcut('e', 'dm')?.id, 'encounters')
   assert.equal(panelForShortcut('e', 'player'), undefined)
+  for (const role of ['dm', 'player'] as const) assert.equal(panelForShortcut('w', role)?.id, 'world')
 })
 
 test('shortcuts are unique and never take the board keys R, V and G or the DM storeroom key M', () => {

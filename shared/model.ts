@@ -1,5 +1,6 @@
 import type { Handout, Presenting } from './handouts.ts'
 import type { Encounter } from './encounters.ts'
+import type { PresentingMap, WorldMap } from './worldMaps.ts'
 import type { Coins, ShopItem } from './shop.ts'
 import type { Area } from './area.ts'
 import type { ActorVision, SceneVision } from './vision.ts'
@@ -248,6 +249,10 @@ export type Room = {
   presenting?: Presenting
   /** Prepared encounters (0.15, shared/encounters.ts): DM only, never sent to players. */
   encounters?: Encounter[]
+  /** World maps (0.16, shared/worldMaps.ts); players get only shared ones and their visible pins. */
+  worldMaps?: WorldMap[]
+  /** A world map the DM has open full screen for everyone. */
+  presentingMap?: PresentingMap
 }
 export type Snapshot = Omit<Room, 'invite' | 'dmInvite' | 'actors' | 'members'> & {
   me: Member; members: Member[]; invite?: string; dmInvite?: string; actors: Actor[]

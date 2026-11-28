@@ -22,6 +22,7 @@ import { CharacterWizard } from '../sheets/CharacterWizard.tsx'
 import { AdventureLog } from '../dice/AdventureLog.tsx'
 import { HandoutInbox, HandoutsPanel, HandoutViewer } from '../handouts/Handouts.tsx'
 import { EncounterPanel } from '../encounters/EncounterPanel.tsx'
+import { WorldMapPanel, WorldMapPresenter, WorldMapViewer } from '../world/WorldMap.tsx'
 import type { EncounterPlacement } from '../encounters/EncounterPanel.tsx'
 import type { Handout } from '../../../shared/handouts.ts'
 import { DiceReveal } from '../dice/DiceReveal.tsx'
@@ -173,6 +174,9 @@ export function Table({ account, changeAccount }: AccountProps) {
   // Handouts (0.14): the one open in the viewer, by id so edits show at once.
   const [reading, setReading] = useState<string>()
   const readingHandout = room.handouts?.find(item => item.id === reading)
+  // World maps (0.16): the one open full screen, by id so new pins show at once.
+  const [viewingMap, setViewingMap] = useState<string>()
+  const viewedMap = room.worldMaps?.find(item => item.id === viewingMap)
   const refresh = () => refreshRoom(room.id)
   const send = sendCommand
 
@@ -552,6 +556,7 @@ export function Table({ account, changeAccount }: AccountProps) {
       send={send} /> : <EmptyState title="ยังไม่ได้เลือกตัวละคร" hint="เลือกจากชีตในห้อง (T) หรือคลิก Token บนกระดาน" />,
     log: () => <AdventureLog room={room} send={send} />,
     handouts: () => <HandoutsPanel room={room} send={send} open={handout => setReading(handout.id)} />,
+    world: () => <WorldMapPanel room={room} send={send} open={setViewingMap} />,
     encounters: () => <EncounterPanel room={room} sceneId={scene?.id} send={send} place={placement => {
       if (!scene) return
       setPlacing(undefined); setObjectPlacement(undefined); setItemPlacement(undefined)
@@ -774,6 +779,8 @@ export function Table({ account, changeAccount }: AccountProps) {
       advanced={(acting, target) => <ActorActions key={acting.id} actor={acting} room={room} scene={scene} send={commandHere} combatTarget={target} />} />}
     <HandoutInbox room={room} open={(handout: Handout) => setReading(handout.id)} />
     {readingHandout && <HandoutViewer room={room} handout={readingHandout} close={() => setReading(undefined)} />}
+    <WorldMapPresenter room={room} send={send} />
+    {viewedMap && <WorldMapViewer room={room} map={viewedMap} send={send} close={() => setViewingMap(undefined)} />}
     <RollMenuHost />
     <XpAward room={room} scene={scene} send={commandHere} />
     {sending && <div className="send-status" aria-live="polite">กำลังส่ง…{sending > 1 ? ` (${sending})` : ''}</div>}

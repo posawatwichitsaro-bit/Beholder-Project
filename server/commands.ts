@@ -34,11 +34,18 @@ import { coinKinds, collectCoins, formatCopper, maxCoins, pay, shopLimits, shopP
 import type { Coins, ShopItem } from '../shared/shop.ts'
 import { monsterSheet } from '../shared/monsterManual.ts'
 import { serverMonster } from './monsterCatalog.ts'
+import { canEditPin, pinKinds, worldLimits, worldMapFor } from '../shared/worldMaps.ts'
+import type { PinKind, WorldPin } from '../shared/worldMaps.ts'
 
 export class Forbidden extends Error {}
 export class Conflict extends Error {}
 export type Command = Record<string, unknown>
 const id = randomUUID
+/** A spot on a world map: a fraction of the picture, 0–1. */
+function fraction(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) throw new Invalid('ตำแหน่งบนแผนที่ไม่ถูกต้อง')
+  return Math.round(value * 10000) / 10000
+}
 /** A fresh name for one more of a monster: the first Goblin becomes "Goblin 1" once a second arrives as "Goblin 2". */
 function monsterName(room: Room, base: string) {
   const same = room.actors.filter(item => item.kind === 'monster' && (item.name === base || new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\d+$').test(item.name)))
@@ -574,6 +581,8 @@ export function snapshot(room: Room, me: Member): Snapshot {
     handouts: room.handouts?.filter(item => canSee(item, me)).map(item => dm ? item : { ...item, recipients: item.recipients === 'all' ? 'all' : [me.id] }),
     presenting: room.presenting && room.handouts?.some(item => item.id === room.presenting!.handoutId && canSee(item, me)) ? room.presenting : undefined,
     encounters: dm ? room.encounters : undefined,
+    worldMaps: room.worldMaps?.flatMap(map => worldMapFor(map, me) ?? []),
+    presentingMap: room.presentingMap && room.worldMaps?.some(map => map.id === room.presentingMap!.mapId && worldMapFor(map, me)) ? room.presentingMap : undefined,
     combatQueue: dm && active ? rolls.filter((roll, index) =>
       (roll.sceneId === active.id || (!roll.sceneId && active.tokens.some(token => token.actorId === roll.targetId))) &&
       (roll.applied === false || (roll.cast && !roll.cast.resolved) || (index >= rolls.length - 40 && openOffer(room, roll)))) : undefined
@@ -1926,6 +1935,85 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       if (!roll.offer) throw new Invalid('ผลทอยนี้ไม่มี Condition ให้ใส่')
       if (member.role !== 'dm') owns(member, get(room.actors, roll.offer.sourceId))
       roll.offer.dismissed = true
+      return {}
+    }
+    case 'worldMap': {
+      // 0.16, DM: add a world map, rename or share it, or remove it. The picture comes by its own upload.
+      requireDM(member)
+      const list = room.worldMaps ??= []
+      if (command.mapId === undefined) {
+        if (list.length >= worldLimits.maps) throw new Invalid('แผนที่โลกได้สูงสุด ' + worldLimits.maps + ' แผ่น')
+        const created = { id: id(), name: text(command.name, worldLimits.name), pins: [] }
+        list.push(created)
+        return { mapId: created.id }
+      }
+      const map = get(list, command.mapId)
+      if (command.remove === true) {
+        room.worldMaps = list.filter(item => item.id !== map.id)
+        if (room.presentingMap?.mapId === map.id) delete room.presentingMap
+        return {}
+      }
+      if (command.name !== undefined) map.name = text(command.name, worldLimits.name)
+      if (typeof command.shared === 'boolean') {
+        if (command.shared) map.shared = true
+        else {
+          delete map.shared
+          if (room.presentingMap?.mapId === map.id) delete room.presentingMap
+        }
+      }
+      return { mapId: map.id }
+    }
+    case 'pin': {
+      // 0.16: pins on a world map. The DM's start hidden; players pin shared maps, always in view, and change only their own.
+      const dm = member.role === 'dm'
+      const map = get(room.worldMaps ?? [], command.mapId)
+      if (!dm && !map.shared) throw new Forbidden('DM ยังไม่ได้แชร์แผนที่นี้')
+      const existing = command.pinId === undefined ? undefined : get(map.pins, command.pinId)
+      if (existing && !canEditPin(existing, member)) throw new Forbidden('แก้ได้เฉพาะหมุดของคุณ')
+      if (command.remove === true) {
+        if (!existing) throw new Invalid('ไม่พบหมุด')
+        map.pins = map.pins.filter(pin => pin.id !== existing.id)
+        return {}
+      }
+      if (!existing && map.pins.length >= worldLimits.pins) throw new Invalid('หมุดบนแผนที่ได้สูงสุด ' + worldLimits.pins + ' อัน')
+      const pin: WorldPin = existing ?? { id: id(), x: 0, y: 0, name: '', kind: 'poi', ownerId: member.id, ...(dm ? { hidden: true } : {}) }
+      if (!existing || command.x !== undefined) { pin.x = fraction(command.x); pin.y = fraction(command.y) }
+      if (!existing || command.name !== undefined) pin.name = text(command.name, worldLimits.name)
+      if (command.kind !== undefined) {
+        if (typeof command.kind !== 'string' || !Object.hasOwn(pinKinds, command.kind)) throw new Invalid('ชนิดหมุดไม่ถูกต้อง')
+        pin.kind = command.kind as PinKind
+      }
+      if (command.note !== undefined) {
+        if (command.note === '' || command.note === null) delete pin.note
+        else pin.note = text(command.note, worldLimits.note)
+      }
+      if (dm && command.sceneId !== undefined) {
+        if (command.sceneId === null) delete pin.sceneId
+        else pin.sceneId = get(room.scenes, command.sceneId).id
+      }
+      if (dm && typeof command.hidden === 'boolean') {
+        if (command.hidden) pin.hidden = true
+        else delete pin.hidden
+      }
+      if (!existing) map.pins.push(pin)
+      return { pinId: pin.id }
+    }
+    case 'partyMarker': {
+      // 0.16: anyone at the table moves the party marker on a shared map (the DM on any), or takes it off.
+      const map = get(room.worldMaps ?? [], command.mapId)
+      if (member.role !== 'dm' && !map.shared) throw new Forbidden('DM ยังไม่ได้แชร์แผนที่นี้')
+      if (command.x === null) delete map.party
+      else map.party = { x: fraction(command.x), y: fraction(command.y) }
+      return {}
+    }
+    case 'presentMap': {
+      // 0.16, DM: open a world map full screen for everyone (sharing it), or stop.
+      requireDM(member)
+      if (command.mapId === null) { delete room.presentingMap; return {} }
+      const map = get(room.worldMaps ?? [], command.mapId)
+      if (!map.image) throw new Invalid('ใส่ภาพแผนที่ก่อนนำเสนอ')
+      map.shared = true
+      room.presentingMap = { mapId: map.id, at: Date.now() }
       return {}
     }
     case 'handout': {
