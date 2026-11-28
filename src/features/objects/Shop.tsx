@@ -4,6 +4,7 @@ import { coinKinds, coinNames, collectCoins, formatCoins, formatCopper, shopPric
 import type { Coins, ShopItem } from '../../../shared/shop.ts'
 import { ItemCatalogPicker, loadItemCatalog } from '../items/ItemCatalogPicker.tsx'
 import { ItemName } from './Inventory.tsx'
+import './shop.css'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
 type Shop = Extract<SceneObject, { kind: 'shop' }>

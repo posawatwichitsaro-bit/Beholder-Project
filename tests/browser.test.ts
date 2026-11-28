@@ -1646,6 +1646,131 @@ async function startTable(page: Page, name: string) {
 }
 
 /** Open a panel from the HUD rail. On narrow screens the rail is folded behind the menu button. */
+test('0.15–0.16: the DM builds and places an encounter, a player buys from a shop and edits their purse, and a world map is pinned, shared and presented', { timeout: 180000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const mira = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const room: Snapshot = await (await dm.request.post(base + '/api/rooms', { data: { name: 'Release 0.17', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const state = async (page: Page) => (await page.request.get(path)).json() as Promise<Snapshot>
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: (await state(page)).revision } })
+    assert.equal(response.status(), 200, await response.text())
+    return response.json()
+  }
+  await command(dm, { type: 'scene', name: 'Market', cell: 48, originX: 0, originY: 0 })
+  const sceneId = (await state(dm)).scenes[0].id
+  await command(dm, { type: 'activate', sceneId })
+  await mira.request.post(base + '/api/join', { data: { invite: room.invite, name: 'Mira', role: 'player' } })
+  await command(mira, { type: 'place', sceneId, sheet: { ...blankSheet(), name: 'Mira Hero', classLevel: 'Fighter 3', inventory: [{ name: '15 gp', description: '' }] }, x: 2, y: 2 })
+  await command(dm, { type: 'importObject', sceneId, x: 5, y: 2, definition: { kind: 'shop', name: 'Ironmonger', description: '', items: [
+    { name: 'Rope', description: '', ref: 'srd-5.2.1:equipment:rope', price: 100 }, { name: 'Odd Idol', description: '' }] } })
+  for (const page of [dm, mira]) {
+    await page.goto(base + '/room/' + room.id)
+    await page.locator(boardCanvas + '[data-renderer=pixi]').waitFor()
+  }
+  const at = async (page: Page, x: number, y: number) => {
+    const frame = (await page.locator(boardCanvas).boundingBox())!
+    return { x: frame.x + 36 + x * 48, y: frame.y + 36 + y * 48 }
+  }
+
+  // Encounter builder: Mira's level 3 sets the budget; two Goblin Warriors are 100 XP, Low.
+  await openPanel(dm, 'Encounter')
+  const builder = dm.locator('.encounters')
+  await builder.getByText('เลเวล 3').waitFor()
+  await builder.getByText('150 XP', { exact: true }).waitFor()
+  await builder.getByLabel('ค้นมอนสเตอร์').fill('Goblin Warrior')
+  await builder.getByRole('button', exact('เพิ่ม Goblin Warrior')).click()
+  await builder.getByRole('button', exact('เพิ่ม Goblin Warrior')).click()
+  assert.equal(await builder.getByLabel('จำนวน Goblin Warrior').inputValue(), '2')
+  await builder.locator('.encounter-total').getByText('100 XP').waitFor()
+  await builder.getByLabel('ชื่อ Encounter').fill('Ambush')
+  await builder.getByRole('button', exact('บันทึกไว้ใช้ทีหลัง')).click()
+  await builder.getByRole('button', exact('วาง Ambush')).click()
+  await dm.getByText('คลิกช่องเพื่อวาง Ambush').waitFor()
+  const spot = await at(dm, 8.5, 5.5)
+  await dm.mouse.click(spot.x, spot.y)
+  await waitInPage(dm, async url => (await (await fetch(url)).json()).actors.filter((actor: { kind: string }) => actor.kind === 'monster').length === 2, path)
+  assert.equal((await state(mira)).encounters, undefined, 'Mira never gets the encounter')
+  await dm.screenshot({ path: '.data/0.17-encounter.png' })
+
+  // Scene tools and an open panel side by side, not on top of each other.
+  await openPanel(dm, 'Encounter')
+  await dm.getByRole('button', exact('เครื่องมือฉาก')).click()
+  const tools = (await dm.getByRole('toolbar', { name: 'เครื่องมือฉาก' }).boundingBox())!
+  const dock = (await dm.locator('.hud-dock').boundingBox())!
+  assert.ok(tools.x + tools.width <= dock.x + 1, 'the scene tools end left of the dock: ' + JSON.stringify({ tools, dock }))
+  await dm.screenshot({ path: '.data/0.17-tools-and-dock.png' })
+  await dm.getByRole('button', exact('เครื่องมือฉาก')).click()
+
+  // Shop: Mira buys a rope with the coins that were an item in her bag, then sets her purse by hand.
+  const shopAt = await at(mira, 5.5, 2.5)
+  await mira.mouse.click(shopAt.x, shopAt.y, { button: 'right' })
+  await mira.getByRole('menuitem', exact('โต้ตอบกับ Object')).or(mira.getByRole('button', exact('โต้ตอบกับ Object'))).first().click()
+  const shop = mira.getByRole('dialog', { name: 'Ironmonger' })
+  await shop.getByText('ถุงเงินของ Mira Hero:').waitFor()
+  await shop.getByText('15 gp', { exact: true }).first().waitFor()
+  assert.equal(await shop.getByRole('button', exact('ซื้อ Odd Idol')).count(), 0, 'no price: agree it with the DM')
+  await shop.getByRole('button', exact('ซื้อ Rope')).click()
+  await waitInPage(mira, async url => (await (await fetch(url)).json()).actors[0].coins?.gp === 14, path)
+  assert.ok((await state(mira)).actors[0].inventory!.some(item => item.name === 'Rope'))
+  await mira.screenshot({ path: '.data/0.17-shop.png' })
+  await shop.getByRole('button', exact('แก้ถุงเงิน')).click()
+  await shop.getByLabel('gp', { exact: true }).fill('20')
+  await shop.getByRole('button', exact('บันทึก')).click()
+  await waitInPage(mira, async url => (await (await fetch(url)).json()).actors[0].coins?.gp === 20, path)
+  await shop.getByRole('button', exact('ปิด')).click()
+
+  // World map: the DM adds one with a picture, pins a hidden town, shares it and reveals the pin.
+  const sharp = (await import('sharp')).default
+  const picture = await sharp({ create: { width: 800, height: 500, channels: 3, background: '#4a6a3a' } }).png().toBuffer()
+  await openPanel(dm, 'แผนที่โลก')
+  const panel = dm.locator('.world-maps')
+  await panel.getByLabel('ชื่อ').fill('Sword Coast')
+  await panel.getByLabel('ภาพแผนที่ (PNG, JPEG, WebP)').setInputFiles({ name: 'coast.png', mimeType: 'image/png', buffer: picture })
+  await panel.getByRole('button', exact('+ แผนที่')).click()
+  await panel.getByRole('button', exact('เปิด Sword Coast')).waitFor()
+  await waitInPage(dm, async url => Boolean((await (await fetch(url)).json()).worldMaps?.[0]?.image), path)
+  await panel.getByRole('button', exact('แชร์ให้ผู้เล่น')).click()
+  await panel.getByRole('button', exact('เปิด Sword Coast')).click()
+  const viewer = dm.getByRole('dialog', { name: 'แผนที่โลก · Sword Coast' })
+  await viewer.locator('.world-layer img').waitFor()
+  await viewer.getByRole('button', exact('ปักหมุด')).click()
+  const frame = (await viewer.locator('.world-frame').boundingBox())!
+  await dm.mouse.click(frame.x + frame.width / 2, frame.y + frame.height / 2)
+  const form = viewer.locator('.world-pin-form')
+  await form.getByLabel('ชื่อ').fill('Phandalin')
+  await form.getByRole('button', exact('ปักหมุด')).click()
+  await viewer.getByRole('button', exact('หมุด Phandalin (ซ่อนจากผู้เล่น)')).waitFor()
+  const placed = (await state(dm)).worldMaps![0].pins[0]
+  assert.ok(Math.abs(placed.x - .5) < .02 && Math.abs(placed.y - .5) < .02, 'the pin lands where it was clicked: ' + JSON.stringify(placed))
+  assert.equal((await state(mira)).worldMaps![0].pins.length, 0, 'hidden from Mira')
+  await viewer.getByRole('button', exact('หมุด Phandalin (ซ่อนจากผู้เล่น)')).click()
+  await viewer.getByRole('button', exact('เปิดเผยให้ผู้เล่น')).click()
+  await viewer.getByRole('button', exact('หมุด Phandalin')).waitFor()
+  await dm.screenshot({ path: '.data/0.17-world-dm.png' })
+  await viewer.locator('.world-tools').getByRole('button', exact('ปิด')).click()
+  await viewer.waitFor({ state: 'detached' })
+
+  // Mira opens it, sees the town and moves the party; then the DM presents it full screen.
+  await openPanel(mira, 'แผนที่โลก')
+  await mira.locator('.world-maps').getByRole('button', exact('เปิด Sword Coast')).click()
+  const hers = mira.getByRole('dialog', { name: 'แผนที่โลก · Sword Coast' })
+  await hers.getByRole('button', exact('หมุด Phandalin')).waitFor()
+  await hers.getByRole('button', exact('ย้ายปาร์ตี้')).click()
+  const herFrame = (await hers.locator('.world-frame').boundingBox())!
+  await mira.mouse.click(herFrame.x + herFrame.width * .4, herFrame.y + herFrame.height / 2)
+  await hers.getByRole('img', exact('ปาร์ตี้อยู่ที่นี่')).waitFor()
+  assert.ok((await state(dm)).worldMaps![0].party)
+  await mira.screenshot({ path: '.data/0.17-world-player.png' })
+  await hers.getByRole('button', exact('ปิด')).click()
+  await panel.getByRole('button', exact('นำเสนอ Sword Coast')).click()
+  await mira.getByRole('dialog', { name: 'DM กำลังนำเสนอ · Sword Coast' }).waitFor()
+  await panel.getByRole('button', exact('หยุดนำเสนอ')).click()
+  await mira.getByRole('dialog', { name: 'DM กำลังนำเสนอ · Sword Coast' }).waitFor({ state: 'detached' })
+})
+
 async function openPanel(page: Page, name: string) {
   const menu = page.getByRole('button', exact('เมนูโต๊ะ'))
   if (await menu.getAttribute('aria-expanded') === 'false') await menu.click()

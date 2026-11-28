@@ -21,7 +21,7 @@
 .world-tools button[aria-pressed='true'] { outline: 2px solid var(--bh-brass-bright); }
 .world-hint { margin: 0; padding: 0 16px 6px; color: var(--bh-brass-bright); }
 .world-frame { position: relative; flex: 1; overflow: hidden; touch-action: none; cursor: grab; }
-.world-frame.world-pin, .world-frame.world-party { cursor: crosshair; }
+.world-frame.mode-pin, .world-frame.mode-party { cursor: crosshair; }
 .world-layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 .world-layer img { display: block; user-select: none; pointer-events: none; }
 .world-pin, .world-party { position: absolute; transform-origin: 50% 100%; white-space: nowrap; }
