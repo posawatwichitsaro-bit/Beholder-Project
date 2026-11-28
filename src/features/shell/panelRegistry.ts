@@ -6,7 +6,7 @@
  * here and its content in Table. `roles` hides panels a seat cannot use, so
  * players never see DM tools.
  */
-export type PanelId = 'scenes' | 'sheets' | 'actor' | 'objects' | 'combat' | 'dice' | 'log' | 'manual' | 'items' | 'library' | 'account' | 'settings'
+export type PanelId = 'scenes' | 'sheets' | 'actor' | 'objects' | 'combat' | 'dice' | 'log' | 'handouts' | 'manual' | 'items' | 'library' | 'account' | 'settings'
 export type PanelGroup = 'board' | 'play' | 'personal'
 export type Role = 'dm' | 'player'
 
@@ -33,6 +33,7 @@ export const panels: readonly PanelDef[] = [
   { id: 'combat', label: 'การต่อสู้', group: 'play', roles: everyone, shortcut: 'F', inRail: true, keywords: 'combat initiative turn fight ต่อสู้ เทิร์น' },
   { id: 'dice', label: 'ลูกเต๋า', group: 'play', roles: everyone, shortcut: 'D', inRail: true, keywords: 'dice roll d20 ทอย ผลทอย' },
   { id: 'log', label: 'บันทึกการผจญภัย', group: 'play', roles: everyone, shortcut: 'L', inRail: true, keywords: 'adventure log chat history message แชท ข้อความ บันทึก ประวัติ' },
+  { id: 'handouts', label: 'เอกสาร', group: 'play', roles: everyone, shortcut: 'H', inRail: true, keywords: 'handout letter document canva presentation slide เอกสาร จดหมาย นำเสนอ ภาพ' },
   { id: 'manual', label: 'Monster Manual', group: 'play', roles: everyone, shortcut: 'N', inRail: true, keywords: 'monster srd bestiary มอนสเตอร์' },
   { id: 'items', label: 'คลังไอเทม SRD', group: 'play', roles: everyone, shortcut: 'I', inRail: true, keywords: 'item catalog equipment loot srd ไอเทม ของ อาวุธ วางบนฉาก' },
   { id: 'library', label: 'คลังส่วนตัว', group: 'personal', roles: everyone, shortcut: 'B', inRail: true, keywords: 'library saved คลัง' },

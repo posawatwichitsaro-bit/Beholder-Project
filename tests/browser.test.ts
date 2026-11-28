@@ -1516,6 +1516,126 @@ test('0.13: a wizard turns old spell notes into SRD spells, adds one from the ca
   assert.ok(!(await (await mira.request.get(path)).text()).includes('ลิชตามล่า'))
 })
 
+test('0.14: the DM drags and deletes walls, sends a handout to one player and presents it; the player\'s map is cut to what they explored', { timeout: 120000 }, async t => {
+  const browser = await chromium.launch(process.env.BEHOLDER_BROWSER ? { executablePath: process.env.BEHOLDER_BROWSER } : { channel: 'msedge' })
+  t.after(() => browser.close())
+  const dm = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const mira = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const oren = await seat(browser, { viewport: { width: 1280, height: 800 } })
+  const room: Snapshot = await (await dm.request.post(base + '/api/rooms', { data: { name: 'Release 0.14', member: 'DM' } })).json()
+  const path = base + '/api/rooms/' + room.id
+  const state = async (page: Page) => (await page.request.get(path)).json() as Promise<Snapshot>
+  const command = async (page: Page, body: Record<string, unknown>) => {
+    const response = await page.request.post(path + '/commands', { data: { ...body, commandId: randomUUID(), revision: (await state(page)).revision } })
+    assert.equal(response.status(), 200, await response.text())
+    return state(page)
+  }
+  const sceneId = (await command(dm, { type: 'scene', name: 'Crypt', cell: 48, originX: 0, originY: 0 })).scenes[0].id
+  // A wall at x = 6 with a door from y = 3 to 4; Mira west of it.
+  await command(dm, { type: 'walls', sceneId, add: [
+    { a: { x: 6, y: 0 }, b: { x: 6, y: 3 } }, { a: { x: 6, y: 3 }, b: { x: 6, y: 4 }, door: true }, { a: { x: 6, y: 4 }, b: { x: 6, y: 9 } }] })
+  await command(dm, { type: 'visionSettings', sceneId, enabled: true, ambient: 'day' })
+  const players: Record<string, string> = {}
+  for (const [page, name] of [[mira, 'Mira'], [oren, 'Oren']] as const) {
+    const joined = await page.request.post(base + '/api/join', { data: { invite: room.invite, name, role: 'player' } })
+    players[name] = ((await joined.json()) as Snapshot).me.id
+  }
+  const hero = (await command(mira, { type: 'sheet', kind: 'pc', sheet: { ...blankSheet(), name: 'Mira Hero' } })).actors[0]
+  await command(mira, { type: 'place', sceneId, actorId: hero.id, role: 'character', x: 2, y: 3 })
+  for (const page of [dm, mira, oren]) {
+    await page.goto(base + '/room/' + room.id)
+    await page.locator(boardCanvas + '[data-renderer=pixi]').waitFor()
+  }
+  const walls = async () => (await state(dm)).scenes[0].vision!.walls!
+  const at = async (page: Page, x: number, y: number) => {
+    const frame = (await page.locator(boardCanvas).boundingBox())!
+    return { x: frame.x + 36 + x * 48, y: frame.y + 36 + y * 48 }
+  }
+
+  // Walls: drag the corner where the upper wall meets the door one square east; both ends go with it.
+  await dm.getByRole('button', exact('เครื่องมือฉาก')).click()
+  const tools = dm.getByRole('toolbar', { name: 'เครื่องมือฉาก' })
+  await tools.getByRole('button', exact('เลือกผนัง')).click()
+  const corner = await at(dm, 6, 3)
+  const east = await at(dm, 7, 3)
+  await dm.mouse.move(corner.x, corner.y)
+  await dm.mouse.down()
+  await dm.mouse.move((corner.x + east.x) / 2, corner.y, { steps: 4 })
+  await dm.mouse.move(east.x, east.y, { steps: 4 })
+  await dm.mouse.up()
+  await waitInPage(dm, async url => (await (await fetch(url)).json()).scenes[0].vision.walls.some((wall: { b: { x: number } }) => wall.b.x === 7), path)
+  const moved = await walls()
+  assert.deepEqual(moved.find(wall => !wall.door && wall.a.y === 0)!.b, { x: 7, y: 3 }, 'the upper wall stretched')
+  assert.deepEqual(moved.find(wall => wall.door)!.a, { x: 7, y: 3 }, 'the door moved with it, so the room stays closed')
+  // A box round the lower wall selects it; Delete removes it; Ctrl+Z puts it back.
+  const from = await at(dm, 5.5, 3.8)
+  const to = await at(dm, 6.5, 9.3)
+  await dm.mouse.move(from.x, from.y)
+  await dm.mouse.down()
+  await dm.mouse.move(to.x, to.y, { steps: 6 })
+  await dm.mouse.up()
+  await tools.getByRole('status').filter({ hasText: 'เลือกผนังแล้ว 1 เส้น' }).waitFor()
+  await dm.screenshot({ path: '.data/0.14-walls-selected.png' })
+  await dm.keyboard.press('Delete')
+  await waitInPage(dm, async url => (await (await fetch(url)).json()).scenes[0].vision.walls.length === 2, path)
+  await dm.keyboard.press('Control+z')
+  await waitInPage(dm, async url => (await (await fetch(url)).json()).scenes[0].vision.walls.length === 3, path)
+  await tools.getByRole('button', exact('เลือกผนัง')).click()
+
+  // Handout: the DM sends a letter with a Canva link to Mira only.
+  await dm.getByRole('button', exact('เครื่องมือฉาก')).click()
+  await tools.waitFor({ state: 'detached' })
+  await openPanel(dm, 'เอกสาร')
+  await dm.getByRole('button', exact('+ เอกสาร')).click()
+  const form = dm.getByRole('dialog', { name: 'เอกสารใหม่' })
+  await form.getByLabel('หัวข้อ').fill('จดหมายจากท่านเคานต์')
+  await form.getByLabel('ข้อความ').fill('พบข้าที่ประตูเมืองตอนรุ่งสาง')
+  await form.getByLabel('ลิงก์ Canva (ไม่บังคับ)').fill('https://www.canva.com/design/DAF1abc/edit')
+  await form.getByText('ลิงก์นี้เป็นลิงก์แก้ไข', { exact: false }).waitFor()
+  await form.getByLabel('ลิงก์ Canva (ไม่บังคับ)').fill('https://www.canva.com/design/DAF1abc/Xy-9/view?utm_source=share')
+  await form.getByLabel('เลือกผู้เล่น').check()
+  await form.getByLabel('Mira').check()
+  await form.getByRole('button', exact('ส่งเอกสาร')).click()
+  await form.waitFor({ state: 'detached' })
+  const card = mira.getByRole('status').filter({ hasText: 'DM ส่งเอกสาร' })
+  await card.waitFor()
+  await card.getByRole('button', exact('เปิดอ่าน')).click()
+  const letter = mira.getByRole('dialog', { name: 'จดหมายจากท่านเคานต์' })
+  await letter.getByText('พบข้าที่ประตูเมืองตอนรุ่งสาง').waitFor()
+  assert.equal(await letter.locator('iframe').getAttribute('src'), 'https://www.canva.com/design/DAF1abc/Xy-9/view?embed')
+  await mira.screenshot({ path: '.data/0.14-handout.png' })
+  await letter.getByRole('button', exact('ปิด')).click()
+  assert.equal((await state(oren)).handouts?.length ?? 0, 0, 'Oren is never sent it')
+  assert.equal(await oren.getByRole('status').filter({ hasText: 'DM ส่งเอกสาร' }).count(), 0)
+  // Presenting opens it full screen for Mira; stopping closes it.
+  await dm.getByRole('button', exact('นำเสนอ จดหมายจากท่านเคานต์')).click()
+  const show = mira.getByRole('dialog', { name: 'DM กำลังนำเสนอ · จดหมายจากท่านเคานต์' })
+  await show.waitFor()
+  await dm.getByRole('button', exact('หยุดนำเสนอ')).click()
+  await show.waitFor({ state: 'detached' })
+
+  // The map: Mira's copy is black beyond the door; the DM's is whole.
+  const sharp = (await import('sharp')).default
+  const map = await sharp({ create: { width: 14 * 48, height: 9 * 48, channels: 3, background: '#ffffff' } }).png().toBuffer()
+  const upload = await dm.request.put(path + '/scenes/' + sceneId + '/map', { headers: { 'Content-Type': 'image/png' }, data: map })
+  assert.equal(upload.status(), 204)
+  const mapId = (await state(dm)).scenes[0].map!.id
+  const pixel = async (bytes: Buffer, x: number, y: number) => {
+    const { data, info } = await sharp(bytes).removeAlpha().raw().toBuffer({ resolveWithObject: true })
+    return data[(Math.round(y) * info.width + Math.round(x)) * info.channels]
+  }
+  const mine = await mira.request.get(path + '/maps/' + mapId)
+  assert.equal(mine.headers()['content-type'], 'image/webp')
+  const bytes = await mine.body()
+  assert.ok(await pixel(bytes, 2.5 * 48, 3.5 * 48) > 240, 'her room is on her map')
+  assert.ok(await pixel(bytes, 11.5 * 48, 3.5 * 48) < 20, 'behind the shut door is black')
+  assert.equal((await dm.request.get(path + '/maps/' + mapId)).headers()['content-type'], 'image/png')
+  // Her board fetched the cut copy too.
+  await waitInPage(mira, async id => performance.getEntriesByType('resource').some(entry => entry.name.includes('/maps/' + id + '?seen=')), mapId, 15000)
+  await mira.waitForTimeout(500)
+  await mira.screenshot({ path: '.data/0.14-mira-map.png' })
+})
+
 async function startTable(page: Page, name: string) {
   const field = page.getByLabel('ชื่อห้อง')
   const write = page.getByRole('button', exact('เขียนเรื่องใหม่'))

@@ -30,7 +30,7 @@ export type SceneVision = {
   explored?: Record<string, string[]>
 }
 /** What a creature sees with: range and Darkvision in feet (undefined range = as far as walls allow), and a carried light. */
-export type ActorVision = { range?: number; darkvision?: number; light?: { bright: number; dim: number; on: boolean } }
+export type ActorVision = { range?: number; darkvision?: number; light?: { bright: number; dim: number; on: boolean; cone?: boolean } }
 export type Level = 'bright' | 'dim' | 'dark'
 
 export const ambientLevel: Record<Ambient, Level> = { day: 'bright', dusk: 'dim', night: 'dark', cave: 'dark' }
@@ -40,17 +40,17 @@ export const feetPerCell = 5
 export const maxSight = 60
 export const key = (x: number, y: number) => x + ',' + y
 
-/** SRD 5.2.1 light sources that can be lit from a bag: bright / dim feet (a Bullseye Lantern's 60-ft cone is drawn as a circle). */
-export const itemLights: Record<string, { bright: number; dim: number }> = {
+/** SRD 5.2.1 light sources that can be lit from a bag: bright / dim feet. A Bullseye Lantern shines in a Cone (0.14) the way its carrier faces. */
+export const itemLights: Record<string, { bright: number; dim: number; cone?: boolean }> = {
   'srd-5.2.1:equipment:candle': { bright: 5, dim: 5 },
   'srd-5.2.1:equipment:lamp': { bright: 15, dim: 30 },
   'srd-5.2.1:equipment:torch': { bright: 20, dim: 20 },
   'srd-5.2.1:equipment:lantern-hooded': { bright: 30, dim: 30 },
-  'srd-5.2.1:equipment:lantern-bullseye': { bright: 60, dim: 60 }
+  'srd-5.2.1:equipment:lantern-bullseye': { bright: 60, dim: 60, cone: true }
 }
 /** The brightest burning item a creature carries, if any. */
 export function litItem(inventory: { ref?: string; lit?: boolean }[] = []) {
-  let best: { bright: number; dim: number } | undefined
+  let best: { bright: number; dim: number; cone?: boolean } | undefined
   for (const item of inventory) {
     const light = item.lit && item.ref ? itemLights[item.ref] : undefined
     if (light && (!best || light.bright + light.dim > best.bright + best.dim)) best = light
@@ -161,23 +161,40 @@ export function inside(polygon: Point[], p: Point) {
   return result
 }
 
-type Lit = { center: Point; bright: number; dim: number; polygon: Star }
+/** A light on the scene; `cone` limits it to directions within `half` radians of `facing` (radians, 0 = east). */
+type Lit = { center: Point; bright: number; dim: number; polygon: Star; cone?: { facing: number; half: number } }
+
+/** An SRD Cone is as wide as it is long at its far end: half its angle is atan(1/2), about 26.6°. */
+export const coneHalfAngle = Math.atan(.5)
+/** Snap a direction (dx, dy in cells) to the nearest of 8 facings, in degrees; undefined for no movement. */
+export function facingOf(dx: number, dy: number) {
+  if (!dx && !dy) return undefined
+  return ((Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * 45) % 360 + 360) % 360
+}
+/** Whether a point is inside a light's cone (always true for a round light). */
+export function inCone(light: Pick<Lit, 'center' | 'cone'>, p: Point) {
+  if (!light.cone) return true
+  const angle = Math.atan2(p.y - light.center.y, p.x - light.center.x)
+  const gap = Math.abs(((angle - light.cone.facing) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI)
+  return gap <= light.cone.half + 1e-9
+}
 
 /** Light sources on the scene: placed lights that are on, and lights carried by tokens. Radii in cells. */
 export function lightsOf(scene: Pick<Scene, 'tokens'> & { vision?: SceneVision }, actors: Pick<Actor, 'id' | 'size'>[], visionById: (id: string) => ActorVision): Lit[] {
   const walls = blockers(scene.vision?.walls)
   const lit: Lit[] = []
-  const add = (center: Point, brightFeet: number, dimFeet: number) => {
+  const add = (center: Point, brightFeet: number, dimFeet: number, cone?: Lit['cone']) => {
     const bright = brightFeet / feetPerCell
     const dim = dimFeet / feetPerCell
     if (bright + dim <= 0) return
-    lit.push({ center, bright, dim, polygon: star(center, bright + dim, walls) })
+    lit.push({ center, bright, dim, polygon: star(center, bright + dim, walls), ...(cone ? { cone } : {}) })
   }
   for (const light of scene.vision?.lights ?? []) if (light.on) add({ x: light.x, y: light.y }, light.bright, light.dim)
   for (const token of scene.tokens) {
     const carried = visionById(token.actorId).light
     const actor = actors.find(item => item.id === token.actorId)
-    if (carried?.on && actor) add(tokenCenter(token, actor), carried.bright, carried.dim)
+    if (carried?.on && actor) add(tokenCenter(token, actor), carried.bright, carried.dim,
+      carried.cone ? { facing: (token.facing ?? 0) * Math.PI / 180, half: coneHalfAngle } : undefined)
   }
   return lit
 }
@@ -209,7 +226,7 @@ export function levelAt(cell: Point, vision: SceneVision, lights: Lit[]): Level 
   for (const light of lights) {
     if (level === 'bright') break
     const distance = Math.hypot(p.x - light.center.x, p.y - light.center.y)
-    if (distance > light.bright + light.dim || !insideStar(light.polygon, p)) continue
+    if (distance > light.bright + light.dim || !inCone(light, p) || !insideStar(light.polygon, p)) continue
     level = distance <= light.bright ? 'bright' : level === 'dark' ? 'dim' : level
   }
   return level

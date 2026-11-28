@@ -9,6 +9,18 @@ function QueueItem({ roll, name, send, sceneId }: { roll: Roll; name: string; se
   const [proficient, setProficient] = useState(false)
   const [damageKind, setDamageKind] = useState<DamageKind>(roll.damageKind ?? 'untyped')
   const apply = (value: number) => send({ type: 'damage', rollId: roll.id, actorId: roll.targetId, amount: value, damageKind, sceneId })
+  // 0.14: a failed save whose spell gives a condition: apply it here, or let it go.
+  if (roll.offer && !roll.cast && roll.applied !== false) {
+    const offer = roll.offer
+    return <article className="queue-item">
+      <p className="queue-line"><b>{name}</b> พลาดเซฟ · {offer.label}<small>{roll.label} · {roll.total}</small></p>
+      <div className="queue-actions">
+        <button className="primary" onClick={() => void send({ type: 'addEffect', sourceId: offer.sourceId, targetIds: [offer.targetId], condition: offer.condition,
+          sourceLabel: offer.label, ...(offer.concentration ? { concentration: true } : {}), sceneId })}>ใส่ {offer.condition} ให้ {name}</button>
+        <button onClick={() => void send({ type: 'dismissOffer', rollId: roll.id, sceneId })}>ไม่ใส่</button>
+      </div>
+    </article>
+  }
   if (roll.cast) return <article className="queue-item">
     <p className="queue-line"><b>{name}</b> ต้องทอย {roll.cast.ability} Save · DC {roll.cast.dc}<small>{roll.label}</small></p>
     <div className="queue-actions">

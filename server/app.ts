@@ -11,6 +11,9 @@ import type { BoardPiece, Command } from './commands.ts'
 import { Invalid } from './rules.ts'
 import type { Database, Query } from './store.ts'
 import { libraryRoutes } from './library.ts'
+import { canSee } from '../shared/handouts.ts'
+import { playerView } from '../shared/vision.ts'
+import { maskedMap } from './mapMask.ts'
 import { createAuthThrottle } from './authThrottle.ts'
 import { accountRoutes } from './account.ts'
 import { accountCookie, activeProfile, profileSecret } from './profiles.ts'
@@ -20,6 +23,13 @@ const hash = (secret: string) => createHash('sha256').update(secret).digest('hex
 const cookieName = 'beholder_seat'
 const clipboardCookie = 'beholder_board_clipboard'
 const secretFrom = (cookie = '') => cookie.split(';').map(value => value.trim()).find(value => value.startsWith(cookieName + '='))?.slice(cookieName.length + 1)
+
+/** PNG, JPEG or WebP by their first bytes, else ''. */
+function imageType(bytes: Buffer) {
+  return bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) ? 'image/png'
+    : bytes.subarray(0, 3).equals(Buffer.from('ffd8ff', 'hex')) ? 'image/jpeg'
+    : bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp' : ''
+}
 
 export async function createApp(database: Database, assetDirectory: string) {
   const assets = resolve(assetDirectory)
@@ -265,9 +275,7 @@ export async function createApp(database: Database, assetDirectory: string) {
     if (memberOf(initial, id).role !== 'dm') throw new Forbidden('สงวนให้ DM')
     if (!Buffer.isBuffer(req.body)) throw new Invalid('ใช้ไฟล์ PNG, JPEG หรือ WebP')
     const bytes = req.body
-    const mime = bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) ? 'image/png'
-      : bytes.subarray(0, 3).equals(Buffer.from('ffd8ff', 'hex')) ? 'image/jpeg'
-      : bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp' : ''
+    const mime = imageType(bytes)
     if (mime !== req.headers['content-type']) throw new Invalid('ชนิดไฟล์ไม่ตรงกับข้อมูลภาพ')
     const map = { id: randomUUID(), mime }
     const path = resolve(assets, map.id)
@@ -289,12 +297,56 @@ export async function createApp(database: Database, assetDirectory: string) {
     publish(room)
     res.status(204).end()
   })
+  // Handout pictures (0.14): the DM uploads one per handout; only the DM and the handout's recipients can open it.
+  app.put('/api/rooms/:id/handouts/:handoutId/image', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp'], limit: '15mb' }), async (req, res) => {
+    const id = await memberId(database.query, req.params.id, req.headers.cookie)
+    const initial = await roomBy(database.query, req.params.id)
+    if (memberOf(initial, id).role !== 'dm') throw new Forbidden('สงวนให้ DM')
+    if (!Buffer.isBuffer(req.body)) throw new Invalid('ใช้ไฟล์ PNG, JPEG หรือ WebP')
+    const mime = imageType(req.body)
+    if (mime !== req.headers['content-type']) throw new Invalid('ชนิดไฟล์ไม่ตรงกับข้อมูลภาพ')
+    const image = { id: randomUUID(), mime }
+    const path = resolve(assets, image.id)
+    await writeFile(path, req.body, { flag: 'wx' })
+    let room: Room
+    try {
+      room = await database.transaction(async query => {
+        const room = await roomBy(query, req.params.id, true)
+        const handout = room.handouts?.find(item => item.id === req.params.handoutId)
+        if (!handout) throw new Invalid('ไม่พบเอกสาร')
+        handout.image = image
+        await save(query, room)
+        return room
+      })
+    } catch (error) {
+      await unlink(path).catch(() => {})
+      throw error
+    }
+    publish(room)
+    res.status(204).end()
+  })
+  app.get('/api/rooms/:id/handouts/:handoutId/image', async (req, res) => {
+    const id = await memberId(database.query, req.params.id, req.headers.cookie)
+    const room = await roomBy(database.query, req.params.id)
+    const member = memberOf(room, id)
+    const handout = room.handouts?.find(item => item.id === req.params.handoutId && canSee(item, member))
+    if (!handout?.image) throw new Forbidden('ไม่สามารถเปิดภาพนี้ได้')
+    res.type(handout.image.mime).set('Cache-Control', 'private, max-age=3600').sendFile(handout.image.id, { root: assets })
+  })
   app.get('/api/rooms/:id/maps/:assetId', async (req, res) => {
     const id = await memberId(database.query, req.params.id, req.headers.cookie)
     const room = await roomBy(database.query, req.params.id)
     const member = memberOf(room, id)
-    const map = room.scenes.find(scene => scene.map?.id === req.params.assetId && (member.role === 'dm' || scene.id === room.activeSceneId))?.map
-    if (!map) throw new Forbidden('ไม่สามารถเปิดภาพนี้ได้')
+    const scene = room.scenes.find(scene => scene.map?.id === req.params.assetId && (member.role === 'dm' || scene.id === room.activeSceneId))
+    const map = scene?.map
+    if (!scene || !map) throw new Forbidden('ไม่สามารถเปิดภาพนี้ได้')
+    // 0.14: on a scene with vision on, a player gets the map with every square they have never seen painted black.
+    if (member.role !== 'dm' && scene.vision?.enabled) {
+      const known = new Set([...(scene.vision.explored?.[member.id] ?? []), ...playerView(scene, room.actors, member.id).visible])
+      const bytes = await maskedMap(assets, map, member.id, { cell: scene.cell, originX: scene.originX, originY: scene.originY }, known)
+      res.type('image/webp').set('Cache-Control', 'private, no-cache').send(bytes)
+      return
+    }
     res.type(map.mime).sendFile(map.id, { root: assets })
   })
   async function checkSocket(ws: WebSocket, seat: { accountSecret?: string; sessionExpires?: number }) {

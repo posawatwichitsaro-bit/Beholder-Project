@@ -1,6 +1,6 @@
 {
   "name": "beholder-table",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.25.0",
@@ -23,6 +23,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router": "^8.5.2",
+    "sharp": "0.35.5",
     "three": "0.187.0",
     "ws": "^8.18.0",
     "zustand": "^5.1.0"

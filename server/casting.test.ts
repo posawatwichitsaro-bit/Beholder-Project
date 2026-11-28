@@ -155,3 +155,25 @@ test('DM notes on a scene and a sheet reach the DM only, even on the player’s 
   run(dm, { type: 'dmNotes', notes: '' })
   assert.equal(room.scenes[0].dmNotes, undefined)
 })
+
+test('0.14: a failed save’s condition waits on the DM’s card until applied or dismissed', () => {
+  const { room, run } = table()
+  const queued = () => (snapshot(room, dm).combatQueue ?? []).filter(roll => roll.offer)
+  // Save until the goblin fails (a natural 20 passes).
+  for (let tries = 0; tries < 40 && !queued().length; tries++) {
+    run(mira, { type: 'cast', actorId: 'wiz', spellId: spell('hold-person'), slotLevel: 2, targetIds: ['g1'] })
+    run(dm, { type: 'spellSave', rollId: room.rolls.findLast(roll => roll.cast)!.id })
+    room.actors.find(item => item.id === 'wiz')!.slots = 'L1 4/4, L2 3/3'
+  }
+  const [card] = queued()
+  assert.ok(card, 'the failed save is on the card')
+  run(dm, { type: 'addEffect', sourceId: 'wiz', targetIds: ['g1'], condition: 'Paralyzed', sourceLabel: 'Hold Person', concentration: true })
+  assert.equal(queued().length, 0, 'applied: gone from the card')
+  assert.equal(snapshot(room, mira).combatQueue, undefined, 'players have no card')
+  // Dismissing: put the offer back by clearing the effect, then the DM says no.
+  room.actors.find(item => item.id === 'g1')!.effects = []
+  assert.equal(queued().length, 1)
+  assert.throws(() => run({ id: 'x', name: 'X', role: 'player' }, { type: 'dismissOffer', rollId: card.id }))
+  run(dm, { type: 'dismissOffer', rollId: card.id })
+  assert.equal(queued().length, 0)
+})

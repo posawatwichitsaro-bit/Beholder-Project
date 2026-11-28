@@ -20,6 +20,8 @@ export type VisionLook = {
   darkness?: { dark: string[]; magic: string[] }
   /** Points of a wall being drawn (cells), and the pointer, while the DM draws. */
   drawing?: Point[]; cursor?: Point
+  /** Editing walls (0.14): selected walls are drawn bright with handles; `box` is a selection box in cells. */
+  selectedWalls?: string[]; box?: { from: Point; to: Point }
 }
 
 /**
@@ -183,10 +185,12 @@ export class PixiBoard {
 
   setMap(image?: HTMLImageElement) {
     this.dirty = true
-    this.mapSprite?.destroy()
+    // The map has a texture of its own (not the shared cache): a player's masked map is replaced as they
+    // explore, and each old copy is freed here instead of piling up in GPU memory.
+    this.mapSprite?.destroy({ texture: true, textureSource: true })
     this.mapSprite = undefined
     if (!image) return
-    this.mapSprite = new Sprite(this.texture(image))
+    this.mapSprite = new Sprite(Texture.from(image, true))
     this.mapLayer.addChild(this.mapSprite)
   }
 
@@ -508,6 +512,19 @@ export class PixiBoard {
       const p = { x: this.grid.originX + light.x * cell, y: this.grid.originY + light.y * cell }
       if (light.on) g.circle(p.x, p.y, (light.bright / 5) * cell).stroke({ width: 1.5 / zoom, color: '#ffd08a', alpha: .5 })
       g.circle(p.x, p.y, 8 / zoom).fill({ color: light.on ? '#ffb347' : '#5a4a3a' }).stroke({ width: 2 / zoom, color: '#2a1f18' })
+    }
+    const picked = look.selectedWalls?.length ? [...look.walls, ...look.doors].filter(wall => look.selectedWalls!.includes(wall.id)) : []
+    for (const wall of picked) {
+      const a = at(wall.a)
+      const b = at(wall.b)
+      g.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 7 / zoom, color: '#7fd0ff', alpha: .9, cap: 'round' })
+      for (const p of [a, b]) g.circle(p.x, p.y, 6 / zoom).fill('#ffffff').stroke({ width: 2 / zoom, color: '#1d6fa0' })
+    }
+    if (look.box) {
+      const a = at(look.box.from)
+      const b = at(look.box.to)
+      g.rect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y))
+        .fill({ color: '#7fd0ff', alpha: .12 }).stroke({ width: 1.5 / zoom, color: '#7fd0ff' })
     }
     if (look.drawing?.length) {
       const points = [...look.drawing, ...(look.cursor ? [look.cursor] : [])].map(at)
