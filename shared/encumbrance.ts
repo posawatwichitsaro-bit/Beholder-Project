@@ -1,4 +1,5 @@
 import type { InventoryItem, Sheet, Size } from './model.ts'
+import { coinCount } from './shop.ts'
 
 /** SRD 5.2.1 carrying capacity scales with size: Tiny ×½, Small and Medium ×1, Large ×2, Huge ×4, Gargantuan ×8. */
 const sizeFactor: Record<Size, number> = { Tiny: .5, Small: 1, Medium: 1, Large: 2, Huge: 4, Gargantuan: 8 }
@@ -21,8 +22,8 @@ export function itemWeight(item: Pick<InventoryItem, 'name' | 'ref' | 'weight' |
 export type Load = { carried: number; capacity: number; over: boolean; speed: number }
 
 /** What a creature carries against STR × 15 lb (by size). Over the limit, Speed drops to 5 feet. */
-export function carryingLoad(sheet: Pick<Sheet, 'abilities' | 'size' | 'speed' | 'inventory'>): Load {
-  const carried = Math.round((sheet.inventory ?? []).reduce((sum, item) => sum + itemWeight(item), 0) * 100) / 100
+export function carryingLoad(sheet: Pick<Sheet, 'abilities' | 'size' | 'speed' | 'inventory' | 'coins'>): Load {
+  const carried = Math.round(((sheet.inventory ?? []).reduce((sum, item) => sum + itemWeight(item), 0) + coinCount(sheet.coins) / coinsPerPound) * 100) / 100
   const capacity = sheet.abilities.STR * 15 * sizeFactor[sheet.size]
   const over = carried > capacity
   return { carried, capacity, over, speed: over ? Math.min(5, sheet.speed) : sheet.speed }

@@ -62,7 +62,7 @@ type Props = {
   /** A token of yours dropped on an enemy: attack it with your main weapon instead of moving there. */
   attackDrop?: (attackerId: string, targetId: string) => void
 }
-const objectColors = { container: '#6e5432', prop: '#4b5e58', structure: '#5c5a66', item: '#6a5470' }
+const objectColors = { container: '#6e5432', prop: '#4b5e58', structure: '#5c5a66', item: '#6a5470', shop: '#7a6a2a' }
 type Mode = 'pan' | 'measure' | 'select' | 'move' | 'area' | 'object' | 'calibrate' | 'paint' | 'wall' | 'wallBox'
 type Gesture = {
   from: Point; camera: Point; mode: Mode; tokens: Token[]; delta?: Point

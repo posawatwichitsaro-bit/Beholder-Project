@@ -7,6 +7,8 @@ import { ItemCatalogPicker, loadItemCatalog } from '../items/ItemCatalogPicker.t
 import { useRoomStore } from '../../state/roomStore.ts'
 import { itemLights } from '../../../shared/vision.ts'
 import { carryingLoad } from '../../../shared/encumbrance.ts'
+import { coinItem } from '../../../shared/shop.ts'
+import { PurseEditor } from './Shop.tsx'
 
 type Send = (command: Record<string, unknown>) => Promise<boolean>
 
@@ -53,7 +55,8 @@ export function InventoryPanel({ actor, send, expanded = false }: { actor: Actor
   const [browsing, setBrowsing] = useState(false)
   const [equipError, setEquipError] = useState('')
   const monster = actor.kind === 'monster'
-  const items = actor.inventory ?? []
+  // Coin items (from before 0.15) show in the purse instead; the next purse change moves them there for good.
+  const items = (actor.inventory ?? []).filter(item => monster || !coinItem(item))
   const dm = useRoomStore(state => state.room?.me.role === 'dm')
   const encumbrance = useRoomStore(state => state.room?.settings?.encumbrance !== false)
   const load = !monster && encumbrance ? carryingLoad(actor) : undefined
@@ -91,6 +94,7 @@ export function InventoryPanel({ actor, send, expanded = false }: { actor: Actor
       <meter min={0} max={load.capacity} high={load.capacity * .99} value={Math.min(load.carried, load.capacity)} aria-label="น้ำหนักที่แบก" />
       {load.over && <small>เกินพิกัดบรรทุก · Speed เหลือ {load.speed} ft</small>}
     </div>}
+    {!monster && <PurseEditor actor={actor} send={send} />}
     {items.length ? <ul>{items.map(item => <li key={item.id}>
       <ItemName item={item} loot={monster} />
       {!monster && (item.base ?? item.ref)?.includes(':equipment:') && item.category === 'weapon' && <button type="button"

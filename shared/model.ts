@@ -1,4 +1,6 @@
 import type { Handout, Presenting } from './handouts.ts'
+import type { Encounter } from './encounters.ts'
+import type { Coins, ShopItem } from './shop.ts'
 import type { Area } from './area.ts'
 import type { ActorVision, SceneVision } from './vision.ts'
 import type { TurnUse } from './economy.ts'
@@ -71,6 +73,8 @@ export type Sheet = {
   spellbook?: KnownSpell[]
   /** The DM's secret notes on this sheet (0.13): stripped from every player's snapshot. */
   dmNotes?: string
+  /** Coin purse (0.15, shared/shop.ts): its owner and the DM may change it by hand. */
+  coins?: Coins
 }
 /** One spell on a sheet, by catalog id (public/data/srd-spells.json). */
 export type KnownSpell = { id: string; prepared?: boolean; always?: boolean }
@@ -120,9 +124,9 @@ export type InventoryItem = {
   /** A light source in a bag (Torch, Lamp, Lantern, Candle) that is burning: the carrier sheds its light. */
   lit?: boolean
 }
-export type ObjectKind = 'container' | 'prop' | 'structure' | 'item'
+export type ObjectKind = 'container' | 'prop' | 'structure' | 'item' | 'shop'
 export const objectLabels: Record<ObjectKind, string> = {
-  container: 'กล่อง', prop: 'ของประกอบฉาก', structure: 'สิ่งก่อสร้าง', item: 'ไอเทม'
+  container: 'กล่อง', prop: 'ของประกอบฉาก', structure: 'สิ่งก่อสร้าง', item: 'ไอเทม', shop: 'ร้านค้า'
 }
 export type SceneObject = {
   id: string; name: string; description: string; image?: string
@@ -135,11 +139,14 @@ export type SceneObject = {
 } & (
   { kind: 'container'; open: boolean; items: InventoryItem[]; lock?: { dc: number; locked: boolean; tried: string[]; last?: { total: number; passed: boolean } } }
   | { kind: 'structure'; hp: number; maxHp: number; ac: number; cover: 0 | 2 | 5 | 99 }
+  /** A shop (0.15): wares with prices; `markup` is a percent on every price. Players buy only while it is open. */
+  | { kind: 'shop'; open: boolean; items: ShopItem[]; markup?: number }
   | { kind: 'item' | 'prop' }
 )
 export type ObjectDefinition = Pick<SceneObject, 'name' | 'description' | 'image' | 'width' | 'height'> & (
   { kind: 'container'; items: Omit<InventoryItem, 'id'>[]; lockDc?: number }
   | { kind: 'structure'; hp: number; ac: number; cover: 0 | 2 | 5 | 99 }
+  | { kind: 'shop'; items: Omit<ShopItem, 'id'>[]; markup?: number }
   | { kind: 'item' | 'prop' }
 )
 export type SavedObject = { id: string; definition: ObjectDefinition }
@@ -155,6 +162,7 @@ export function objectDefinition(object: SceneObject): ObjectDefinition {
     ...fields, kind, items: object.items.map(({ id: _id, ...item }) => item), lockDc: object.lock?.locked ? object.lock.dc : undefined
   }
   if (kind === 'structure') return { ...fields, kind, hp: object.maxHp, ac: object.ac, cover: object.cover }
+  if (kind === 'shop') return { ...fields, kind, items: object.items.map(({ id: _id, ...item }) => item), markup: object.markup }
   return { ...fields, kind }
 }
 
@@ -238,6 +246,8 @@ export type Room = {
   /** Handouts (0.14, shared/handouts.ts); players are sent only their own. */
   handouts?: Handout[]
   presenting?: Presenting
+  /** Prepared encounters (0.15, shared/encounters.ts): DM only, never sent to players. */
+  encounters?: Encounter[]
 }
 export type Snapshot = Omit<Room, 'invite' | 'dmInvite' | 'actors' | 'members'> & {
   me: Member; members: Member[]; invite?: string; dmInvite?: string; actors: Actor[]

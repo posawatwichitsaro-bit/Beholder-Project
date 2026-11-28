@@ -28,11 +28,61 @@ import type { Handout } from '../shared/handouts.ts'
 import { scaledDice } from '../shared/spells.ts'
 import { bardicDie, featureResource, inspirationDie, isRaging, levelIn, plusModifier, rageDamage, resists } from '../shared/classFeatures.ts'
 import { boardArt, isCatalogArt, itemIcon, monsterPortrait, sceneArtByImage } from '../shared/catalogArt.ts'
+import { encounterLimits, spreadAround, xpForCr } from '../shared/encounters.ts'
+import type { Encounter } from '../shared/encounters.ts'
+import { coinKinds, collectCoins, formatCopper, maxCoins, pay, shopLimits, shopPrice } from '../shared/shop.ts'
+import type { Coins, ShopItem } from '../shared/shop.ts'
+import { monsterSheet } from '../shared/monsterManual.ts'
+import { serverMonster } from './monsterCatalog.ts'
 
 export class Forbidden extends Error {}
 export class Conflict extends Error {}
 export type Command = Record<string, unknown>
 const id = randomUUID
+/** A fresh name for one more of a monster: the first Goblin becomes "Goblin 1" once a second arrives as "Goblin 2". */
+function monsterName(room: Room, base: string) {
+  const same = room.actors.filter(item => item.kind === 'monster' && (item.name === base || new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\d+$').test(item.name)))
+  if (!same.length) return base
+  const first = same.find(item => item.name === base)
+  if (first) first.name = base + ' 1'
+  const used = new Set(room.actors.map(item => item.name))
+  let ordinal = same.length + 1
+  while (used.has(base + ' ' + ordinal)) ordinal += 1
+  return base + ' ' + ordinal
+}
+/** Roll initiative for everyone named and start the fight on this scene (shared by `combat` and `placeEncounter`). */
+function startCombat(room: Room, target: Scene, list: unknown[], surprisedIds: unknown) {
+  if (target.combat) throw new Conflict('กำลังต่อสู้อยู่')
+  if (!list.length) throw new Invalid('เลือกผู้ร่วมต่อสู้')
+  const participants = [...new Set(list)]
+  const initiativeByGroup = new Map<string, number>()
+  const order = participants.map(key => {
+    const creature = get(room.actors, key)
+    if (!target.tokens.some(token => token.actorId === key)) throw new Invalid('ผู้ร่วมต่อสู้ต้องอยู่ในฉาก')
+    const surprised = Array.isArray(surprisedIds) && surprisedIds.includes(creature.id)
+    const group = creature.templateId && [creature.templateId, creature.initiative, surprised].join(':')
+    const grouped = group ? initiativeByGroup.get(group) : undefined
+    const initiative = grouped ?? d20(creature.initiative, false, surprised).total
+    if (group) initiativeByGroup.set(group, initiative)
+    return { actorId: creature.id, initiative }
+  })
+  target.combat = { order: order.sort((a, b) => b.initiative - a.initiative), round: 1, turn: 0 }
+  target.lastParticipants = participants as string[]
+  addLog(room, { kind: 'combat', sceneId: target.id, text: 'เริ่มการต่อสู้ · ' + target.combat.order.map(entry =>
+    get(room.actors, entry.actorId).name + ' ' + entry.initiative).join(', ') })
+}
+/** Encounter groups from a command: catalog monsters only, names and CR taken from the catalog. */
+function parseEncounterGroups(value: unknown) {
+  if (!Array.isArray(value) || !value.length || value.length > encounterLimits.groups) throw new Invalid('Encounter มีมอนสเตอร์ได้ 1–' + encounterLimits.groups + ' ชนิด')
+  const groups = value.map(entry => {
+    const input = record(entry)
+    const monster = serverMonster(input.monsterId)
+    if (!monster) throw new Invalid('ไม่พบมอนสเตอร์นี้ใน Monster Manual')
+    return { monsterId: monster.id, name: monster.name, cr: monster.cr, count: number(input.count, 1, encounterLimits.count) }
+  })
+  if (groups.reduce((sum, group) => sum + group.count, 0) > encounterLimits.placed) throw new Invalid('Encounter หนึ่งมีมอนสเตอร์ได้สูงสุด ' + encounterLimits.placed + ' ตัว')
+  return groups
+}
 /** A moved token turns the way it went (0.14), so a carried Bullseye Lantern points ahead. East is left unset. */
 function turnToward(token: Token, dx: number, dy: number) {
   const facing = facingOf(dx, dy)
@@ -159,8 +209,31 @@ export function parseObjectDefinition(value: unknown): ObjectDefinition {
     if (cover !== 0 && cover !== 2 && cover !== 5 && cover !== 99) throw new Invalid('เลือกประเภทที่กำบัง')
     return { ...fields, kind, hp: number(input.hp, 1, 9999), ac: number(input.ac, 1, 99), cover }
   }
+  if (kind === 'shop') {
+    const items = input.items ?? []
+    if (!Array.isArray(items) || items.length > shopLimits.items) throw new Invalid('ร้านมีสินค้าได้สูงสุด ' + shopLimits.items + ' รายการ')
+    return { ...fields, kind, markup: parseMarkup(input.markup), items: items.map(entry => {
+      const { id: _id, ...item } = parseShopItem(typeof entry === 'string' ? { name: entry } : entry)
+      return item
+    }) }
+  }
   if (kind === 'prop' || kind === 'item') return { ...fields, kind }
   throw new Invalid('ประเภท Object ไม่ถูกต้อง')
+}
+
+/** A shop ware (0.15): an item and its price in copper; no price means the table agrees one. */
+function parseShopItem(value: unknown): ShopItem {
+  const input = record(value)
+  const { lootTier: _tier, ...item } = parseItem(input, false)
+  return { ...item, ...(input.price === undefined || input.price === null ? {} : { price: number(input.price, 0, maxCoins * 1000) }) }
+}
+const parseMarkup = (value: unknown) => value === undefined || value === null || value === 100 ? undefined : number(value, shopLimits.markup[0], shopLimits.markup[1])
+export function parseCoins(value: unknown): Coins {
+  const input = record(value)
+  return Object.fromEntries(coinKinds.flatMap(kind => {
+    const count = input[kind] === undefined || input[kind] === '' ? 0 : number(input[kind], 0, maxCoins)
+    return count ? [[kind, count]] : []
+  }))
 }
 
 function placeObject(definition: ObjectDefinition, position: Command): SceneObject {
@@ -170,6 +243,8 @@ function placeObject(definition: ObjectDefinition, position: Command): SceneObje
   if (kind === 'container') return { ...fields, kind, open: false, items: definition.items.map(item => ({ ...item, id: id() })),
     lock: definition.lockDc === undefined ? undefined : { dc: definition.lockDc, locked: true, tried: [] } }
   if (kind === 'structure') return { ...fields, kind, hp: definition.hp, maxHp: definition.hp, ac: definition.ac, cover: definition.cover }
+  if (kind === 'shop') return { ...fields, kind, open: true, items: definition.items.map(item => ({ ...item, id: id() })),
+    ...(definition.markup ? { markup: definition.markup } : {}) }
   return { ...fields, kind }
 }
 
@@ -373,6 +448,7 @@ export function parseSheet(value: unknown, kind: Sheet['kind'], includeInventory
   if (input.pactSlots !== undefined && input.pactSlots !== '') sheet.pactSlots = text(input.pactSlots, 200)
   if (input.cunningUsed === true) sheet.cunningUsed = true
   if (input.xp !== undefined) sheet.xp = number(input.xp, 0, 1000000)
+  if (input.coins !== undefined) sheet.coins = parseCoins(input.coins)
   if (input.subclass !== undefined && input.subclass !== '') {
     if (!Object.values(srdSubclasses).some(entry => entry.name === input.subclass)) throw new Invalid('Subclass นี้ไม่มีใน SRD 5.2.1')
     sheet.subclass = input.subclass as string
@@ -447,7 +523,7 @@ export function snapshot(room: Room, me: Member): Snapshot {
     ...scene, ...(dm && dmNotes ? { dmNotes } : {}), tokens: withTokenRoles(scene, room.actors), objects: dm ? scene.objects : scene.objects?.map(object => object.kind === 'container' ? {
       ...object, items: !object.open || object.lock?.locked ? [] : object.items,
       lock: object.lock && { ...object.lock, tried: object.lock.tried.filter(id => room.actors.some(actor => actor.id === id && actor.ownerId === me.id)) }
-    } : object)
+    } : object.kind === 'shop' && !object.open ? { ...object, items: [] } : object)
   }))
   // Vision on: a player gets the tokens and objects their own tokens can see, their explored squares,
   // walls with secret doors shown as plain wall, and no darkness or other players' memories.
@@ -497,6 +573,7 @@ export function snapshot(room: Room, me: Member): Snapshot {
     settings: room.settings,
     handouts: room.handouts?.filter(item => canSee(item, me)).map(item => dm ? item : { ...item, recipients: item.recipients === 'all' ? 'all' : [me.id] }),
     presenting: room.presenting && room.handouts?.some(item => item.id === room.presenting!.handoutId && canSee(item, me)) ? room.presenting : undefined,
+    encounters: dm ? room.encounters : undefined,
     combatQueue: dm && active ? rolls.filter((roll, index) =>
       (roll.sceneId === active.id || (!roll.sceneId && active.tokens.some(token => token.actorId === roll.targetId))) &&
       (roll.applied === false || (roll.cast && !roll.cast.resolved) || (index >= rolls.length - 40 && openOffer(room, roll)))) : undefined
@@ -1072,18 +1149,7 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       if (template) {
         const ordinal = room.actors.filter(item => item.templateId === template.id).length + 1
         creature.name = template.sheet.name + ' ' + ordinal
-      } else if (sheet && creature.kind === 'monster') {
-        const base = creature.name
-        const same = room.actors.filter(item => item.kind === 'monster' && (item.name === base || new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\d+$').test(item.name)))
-        if (same.length) {
-          const first = same.find(item => item.name === base)
-          if (first) first.name = base + ' 1'
-          const used = new Set(room.actors.map(item => item.name))
-          let ordinal = same.length + 1
-          while (used.has(base + ' ' + ordinal)) ordinal += 1
-          creature.name = base + ' ' + ordinal
-        }
-      }
+      } else if (sheet && creature.kind === 'monster') creature.name = monsterName(room, creature.name)
       if (template || sheet) room.actors.push(creature)
       target.tokens = [...tokens, token]
       if (playerMonster) addLog(room, { kind: 'scene', sceneId: target.id, name: member.name, text: member.name + ' วาง ' + creature.name })
@@ -1460,6 +1526,65 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       }
       return {}
     }
+    case 'shop': {
+      // 0.15: the DM opens or closes a shop, changes its markup, adds wares, or sets or clears a price.
+      requireDM(member)
+      const target = scene()
+      const current = object(target.objects ?? [])
+      if (current.kind !== 'shop') throw new Invalid('เป้าหมายต้องเป็นร้านค้า')
+      if (typeof command.open === 'boolean') current.open = command.open
+      if (command.markup !== undefined) {
+        const markup = parseMarkup(command.markup)
+        if (markup) current.markup = markup
+        else delete current.markup
+      }
+      if (command.add !== undefined) {
+        if (current.items.length >= shopLimits.items) throw new Invalid('ร้านมีสินค้าได้สูงสุด ' + shopLimits.items + ' รายการ')
+        current.items.push(parseShopItem(command.add))
+      }
+      if (command.removeItem !== undefined) {
+        const item = get(current.items, command.removeItem)
+        current.items = current.items.filter(entry => entry.id !== item.id)
+      }
+      if (command.itemId !== undefined) {
+        const item = get(current.items, command.itemId)
+        if (command.price === null) delete item.price
+        else item.price = number(command.price, 0, maxCoins * 1000)
+      }
+      return {}
+    }
+    case 'buy': {
+      // 0.15: buy at the listed price, paid from the purse with change. Selling and bargaining are up to the table.
+      const target = board()
+      const shop = object(target.objects ?? [])
+      if (shop.kind !== 'shop') throw new Invalid('เป้าหมายต้องเป็นร้านค้า')
+      if (!shop.open && member.role !== 'dm') throw new Invalid('ร้านปิดอยู่')
+      const creature = actor()
+      owns(member, creature)
+      const ware = get(shop.items, command.itemId)
+      const quantity = number(command.quantity ?? 1, 1, 999)
+      const each = shopPrice(ware, shop.markup)
+      if (each === undefined) throw new Invalid('ของชิ้นนี้ยังไม่มีราคา ตกลงกับ DM ก่อน')
+      const collected = collectCoins(creature.inventory, creature.coins)
+      if (collected.inventory.length >= 100) throw new Invalid('Inventory เต็ม')
+      const left = pay(collected.coins, each * quantity)
+      if (!left) throw new Invalid('เงินไม่พอ · ต้องใช้ ' + formatCopper(each * quantity))
+      const { price: _price, ...item } = ware
+      creature.inventory = [...collected.inventory, { ...structuredClone(item), id: id(), quantity: Math.min(999, (item.quantity ?? 1) * quantity) }]
+      creature.coins = left
+      addLog(room, { kind: 'scene', sceneId: target.id, name: member.name, text: creature.name + ' ซื้อ ' + item.name +
+        (quantity > 1 ? ' ×' + quantity : '') + ' จาก ' + shop.name + ' · ' + formatCopper(each * quantity) })
+      return {}
+    }
+    case 'coins': {
+      // 0.15: the purse's owner or the DM sets the coins by hand (sold something, found a hoard, paid a bribe...).
+      const creature = actor()
+      owns(member, creature)
+      const collected = collectCoins(creature.inventory, creature.coins)
+      creature.inventory = collected.inventory
+      creature.coins = command.coins === undefined ? collected.coins : parseCoins(command.coins)
+      return {}
+    }
     case 'attackObject': {
       const target = active()
       const creature = actor()
@@ -1711,23 +1836,63 @@ function runCommand(room: Room, member: Member, command: Command, clipboard: Boa
       const target = active()
       if (target.combat) throw new Conflict('กำลังต่อสู้อยู่')
       if (!Array.isArray(command.participants) || !command.participants.length) throw new Invalid('เลือกผู้ร่วมต่อสู้')
-      const participants = [...new Set(command.participants)]
-      const initiativeByGroup = new Map<string, number>()
-      const order = participants.map(key => {
-        const creature = get(room.actors, key)
-        if (!target.tokens.some(token => token.actorId === key)) throw new Invalid('ผู้ร่วมต่อสู้ต้องอยู่ในฉาก')
-        const surprised = Array.isArray(command.surprised) && command.surprised.includes(creature.id)
-        const group = creature.templateId && [creature.templateId, creature.initiative, surprised].join(':')
-        const grouped = group ? initiativeByGroup.get(group) : undefined
-        const initiative = grouped ?? d20(creature.initiative, false, surprised).total
-        if (group) initiativeByGroup.set(group, initiative)
-        return { actorId: creature.id, initiative }
-      })
-      target.combat = { order: order.sort((a, b) => b.initiative - a.initiative), round: 1, turn: 0 }
-      target.lastParticipants = participants as string[]
-      addLog(room, { kind: 'combat', sceneId: target.id, text: 'เริ่มการต่อสู้ · ' + target.combat.order.map(entry =>
-        get(room.actors, entry.actorId).name + ' ' + entry.initiative).join(', ') })
+      startCombat(room, target, command.participants, command.surprised)
       return {}
+    }
+    case 'encounter': {
+      // 0.15: the DM prepares an encounter (create, edit by encounterId, or remove). Players never see these.
+      requireDM(member)
+      const list = room.encounters ??= []
+      if (command.remove === true) {
+        const existing = get(list, command.encounterId)
+        room.encounters = list.filter(entry => entry.id !== existing.id)
+        return {}
+      }
+      const sceneId = command.sceneId === undefined || command.sceneId === null ? undefined : get(room.scenes, command.sceneId).id
+      const fields: Omit<Encounter, 'id'> = { name: text(command.name), groups: parseEncounterGroups(command.groups), ...(sceneId ? { sceneId } : {}) }
+      if (command.encounterId !== undefined) {
+        const existing = get(list, command.encounterId)
+        delete existing.sceneId
+        Object.assign(existing, fields)
+        return { encounterId: existing.id }
+      }
+      if (list.length >= encounterLimits.encounters) throw new Invalid('เก็บ Encounter ได้สูงสุด ' + encounterLimits.encounters + ' ชุด')
+      const created = { id: id(), ...fields }
+      list.push(created)
+      return { encounterId: created.id }
+    }
+    case 'placeEncounter': {
+      // 0.15: put a whole group of Manual monsters around one square, optionally starting the fight with the party there.
+      requireDM(member)
+      const target = scene()
+      const groups = command.encounterId !== undefined ? get(room.encounters ?? [], command.encounterId).groups : parseEncounterGroups(command.groups)
+      const sheets = groups.flatMap(group => {
+        const monster = serverMonster(group.monsterId)
+        if (!monster) throw new Invalid('ไม่พบ ' + group.name + ' ใน Monster Manual')
+        return Array.from({ length: group.count }, () => monsterSheet(monster))
+      })
+      if (target.tokens.length + sheets.length > 500) throw new Invalid('ฉากนี้มี Token มากเกินไป')
+      const taken = new Set<string>()
+      for (const token of target.tokens) {
+        const creature = room.actors.find(item => item.id === token.actorId)
+        const size = Math.max(1, Math.ceil(creature ? sizes[creature.size] : 1))
+        for (let dx = 0; dx < size; dx++) for (let dy = 0; dy < size; dy++) taken.add((Math.floor(token.x) + dx) + ',' + (Math.floor(token.y) + dy))
+      }
+      const spots = spreadAround({ x: number(command.x, -1000, 1000, .5), y: number(command.y, -1000, 1000, .5) }, sheets.map(sheet => sizes[sheet.size]), taken)
+      const placed = sheets.map((sheet, index) => {
+        const creature: Actor = { ...sheet, id: id(), ownerId: member.id, name: monsterName(room, sheet.name) }
+        room.actors.push(creature)
+        target.tokens = [...target.tokens, { id: id(), actorId: creature.id, x: spots[index].x, y: spots[index].y }]
+        return creature
+      })
+      const xp = groups.reduce((sum, group) => sum + xpForCr(group.cr) * group.count, 0)
+      addLog(room, { kind: 'scene', sceneId: target.id, text: 'DM วาง Encounter · ' + groups.map(group => group.name + ' ×' + group.count).join(', ') + ' (' + xp.toLocaleString('en-US') + ' XP)' })
+      if (command.start === true) {
+        if (target.id !== room.activeSceneId) throw new Conflict('เริ่มต่อสู้ได้เฉพาะฉากที่กำลังเล่น')
+        const party = target.tokens.filter(token => room.actors.find(item => item.id === token.actorId)?.kind === 'pc').map(token => token.actorId)
+        startCombat(room, target, [...party, ...placed.map(creature => creature.id)], [])
+      }
+      return { actorIds: placed.map(creature => creature.id) }
     }
     case 'endTurn': {
       // A player ends their own character's turn; the DM can end anyone's.
